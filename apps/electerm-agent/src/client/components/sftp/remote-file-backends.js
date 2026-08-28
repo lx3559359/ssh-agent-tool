@@ -1987,6 +1987,235 @@ export async function createPrivilegedFileBackend ({
     return primaryError
   }
 
+  function transferProgressBytes (value) {
+    const transferred = value && typeof value === 'object'
+      ? value.transferred
+      : value
+    return Number.isSafeInteger(transferred) && transferred >= 0
+      ? transferred
+      : null
+  }
+
+  function attachTransferCleanupError (error, cleanupError) {
+    if (error && Object.isExtensible(error)) {
+      error.cleanupError ||= cleanupError
+      return error
+    }
+    const wrapped = new Error(String(error?.message || error || '远程文件传输失败'))
+    wrapped.cause = error
+    wrapped.cleanupError = cleanupError
+    return wrapped
+  }
+
+  function createOwnedTransferStage (direction) {
+    const stage = staging.allocate(direction)
+    let proof
+    let cleaned = false
+    let cleanupPromise
+    let preserved = false
+
+    async function prove () {
+      if (proof) return proof
+      let metadata
+      try {
+        metadata = await boundLstat(stage.path, {
+          device: staging.rootBinding.rootDevice,
+          inode: staging.rootBinding.rootInode
+        })
+      } catch (error) {
+        if (error?.code === 'ENOENT') {
+          staging.abandon(stage.path)
+          cleaned = true
+        }
+        throw error
+      }
+      if (metadata.type !== 'file' ||
+        metadata.size > copyLimits.maxTotalBytes ||
+        normalizeMode(metadata.mode & 0o7777) !== 0o600 ||
+        String(metadata.parentDevice) !== staging.rootBinding.rootDevice ||
+        String(metadata.parentInode) !== staging.rootBinding.rootInode ||
+        String(metadata.uid) !== staging.rootBinding.rootUid ||
+        String(metadata.gid) !== staging.rootBinding.rootGid) {
+        throw new Error('root 文件后端 transfer stage 绑定或 metadata 无效')
+      }
+      const digested = await boundDigest({
+        path: stage.path,
+        metadata,
+        maxSize: copyLimits.maxTotalBytes
+      }, 'sha256-bound', 0, readChunkBytes)
+      if (digested.size !== metadata.size) {
+        throw new Error('root 文件后端 transfer stage 大小证明不一致')
+      }
+      staging.remember(stage.path, {
+        sha256: digested.sha256,
+        size: String(digested.size)
+      })
+      proof = Object.freeze({ metadata, ...digested })
+      return proof
+    }
+
+    function remember (value, kind) {
+      const digested = digestResult(value, kind)
+      staging.remember(stage.path, {
+        sha256: digested.sha256,
+        size: String(digested.size)
+      })
+      proof = Object.freeze({ metadata: null, ...digested })
+      return proof
+    }
+
+    function preserve () {
+      if (cleaned || preserved) return
+      staging.preserve(stage.path)
+      preserved = true
+    }
+
+    function cleanup () {
+      if (cleaned) return Promise.resolve(true)
+      if (cleanupPromise) return cleanupPromise
+      cleanupPromise = (async () => {
+        try {
+          if (!proof) {
+            try {
+              await prove()
+            } catch (error) {
+              if (cleaned) return true
+              preserve()
+              throw error
+            }
+          }
+          await staging.cleanup(stage.path)
+          cleaned = true
+          return true
+        } catch (error) {
+          cleanupPromise = undefined
+          throw error
+        }
+      })()
+      return cleanupPromise
+    }
+
+    return Object.freeze({
+      stage,
+      prove,
+      remember,
+      cleanup,
+      preserve,
+      get proof () { return proof }
+    })
+  }
+
+  function createPrivilegedTransferProxy ({
+    onData,
+    onPaused,
+    onEnd,
+    onError,
+    finalize,
+    cleanup
+  }) {
+    let inner
+    let terminalPromise
+    let terminalKind
+
+    function claimTerminal (kind, work) {
+      if (terminalPromise) return terminalPromise
+      terminalKind = kind
+      terminalPromise = (async () => work())()
+      terminalPromise.catch(() => {})
+      return terminalPromise
+    }
+
+    async function finishWithCleanup (work) {
+      let primaryError
+      let result
+      try {
+        result = await work()
+      } catch (error) {
+        primaryError = error
+      }
+      try {
+        await cleanup()
+      } catch (cleanupError) {
+        primaryError = primaryError
+          ? attachTransferCleanupError(primaryError, cleanupError)
+          : cleanupError
+      }
+      if (primaryError) throw primaryError
+      return result
+    }
+
+    async function control (name) {
+      if (terminalPromise) return terminalPromise
+      return claimTerminal(name, () => finishWithCleanup(async () => {
+        const operation = Object.getOwnPropertyDescriptor(inner, name)?.value
+        if (typeof operation === 'function') {
+          await Reflect.apply(operation, inner, [])
+        }
+        return true
+      }))
+    }
+
+    const callbacks = Object.freeze({
+      onData: value => {
+        if (terminalPromise) return
+        return onData?.(value)
+      },
+      onPaused: value => {
+        if (terminalPromise) return
+        return onPaused?.(value)
+      },
+      onEnd: value => claimTerminal('end', async () => {
+        try {
+          await finishWithCleanup(() => finalize(value))
+        } catch (error) {
+          return onError?.(error)
+        }
+        return onEnd?.(value)
+      }),
+      onError: error => claimTerminal('error', async () => {
+        let failure = error instanceof Error
+          ? error
+          : new Error(String(error || '远程文件传输失败'))
+        try {
+          await cleanup()
+        } catch (cleanupError) {
+          failure = attachTransferCleanupError(failure, cleanupError)
+        }
+        return onError?.(failure)
+      })
+    })
+
+    const handle = Object.assign(Object.create(null), {
+      pause: async () => {
+        if (terminalPromise) return terminalPromise
+        const operation = Object.getOwnPropertyDescriptor(inner, 'pause')?.value
+        if (typeof operation === 'function') {
+          await Reflect.apply(operation, inner, [])
+        }
+        return true
+      },
+      resume: async () => {
+        if (terminalPromise) return terminalPromise
+        const operation = Object.getOwnPropertyDescriptor(inner, 'resume')?.value
+        if (typeof operation === 'function') {
+          await Reflect.apply(operation, inner, [])
+        }
+        return true
+      },
+      cancel: () => control('cancel'),
+      interrupt: () => control('interrupt'),
+      destroy: () => terminalKind === 'end'
+        ? terminalPromise
+        : control('destroy')
+    })
+
+    return Object.freeze({
+      callbacks,
+      handle: Object.freeze(handle),
+      setInner: value => { inner = value }
+    })
+  }
+
   const rawFacade = {
     async list (path, options = {}) {
       const result = await executeRequest('list', {
@@ -2094,6 +2323,163 @@ export async function createPrivilegedFileBackend ({
         Math.min(requestedMaxBytes, readChunkBytes),
         signal
       )
+    },
+    async upload ({
+      localPath,
+      remotePath,
+      options = {},
+      signal,
+      onData,
+      onPaused,
+      onEnd,
+      onError
+    } = {}) {
+      const targetPath = canonicalFilePath(remotePath, 'upload targetPath')
+      throwIfAborted(signal)
+      const ownedStage = createOwnedTransferStage('upload')
+      let transferred = 0
+      const proxy = createPrivilegedTransferProxy({
+        onData: value => {
+          const current = transferProgressBytes(value)
+          if (current !== null) transferred = current
+          return onData?.(value)
+        },
+        onPaused,
+        onEnd,
+        onError,
+        cleanup: ownedStage.cleanup,
+        finalize: async value => {
+          throwIfAborted(signal)
+          const proof = await ownedStage.prove()
+          const completed = transferProgressBytes(value) ?? transferred
+          if (proof.size !== completed) {
+            throw new Error('root 文件后端 upload 已传输大小与 stage 证明不一致')
+          }
+          const { parent, parentPath } = await boundAbsentParent(
+            targetPath,
+            'upload',
+            signal
+          )
+          const imported = digestResult(await executeStageImport(
+            ownedStage.stage,
+            targetPath,
+            parent,
+            {
+              ...staging.rootBinding,
+              objectName: ownedStage.stage.objectName,
+              targetPath,
+              sha256: proof.sha256,
+              size: String(proof.size),
+              targetMode: normalizeMode(options.mode, 0o600).toString(8),
+              targetUid: '0',
+              targetGid: '0',
+              mustBeAbsent: '1',
+              ...targetParentBindingArgs(parentPath, parent),
+              targetDevice: '0',
+              targetInode: '0'
+            },
+            signal
+          ), 'stage-import')
+          if (imported.sha256 !== proof.sha256 || imported.size !== proof.size) {
+            throw new Error('root 文件后端 upload import 摘要或大小不匹配')
+          }
+        }
+      })
+      try {
+        const inner = await sftp.upload({
+          localPath,
+          remotePath: ownedStage.stage.path,
+          isDirectory: false,
+          options: {
+            mode: 0o600,
+            atomicUpload: false,
+            atomicOverwrite: false,
+            keepPartial: false
+          },
+          ...proxy.callbacks
+        })
+        proxy.setInner(inner)
+        return proxy.handle
+      } catch (error) {
+        try {
+          await ownedStage.cleanup()
+        } catch (cleanupError) {
+          throw attachTransferCleanupError(error, cleanupError)
+        }
+        throw error
+      }
+    },
+    async download ({
+      localPath,
+      remotePath,
+      options = {},
+      signal,
+      onData,
+      onPaused,
+      onEnd,
+      onError
+    } = {}) {
+      const sourcePath = canonicalFilePath(remotePath, 'download sourcePath')
+      throwIfAborted(signal)
+      const source = requireBoundMetadata(
+        await rawFacade.lstat(sourcePath, { signal }),
+        sourcePath,
+        'download source'
+      )
+      if (source.type !== 'file' || source.size > copyLimits.maxTotalBytes) {
+        throw new Error('root 文件后端 download source 必须为有界普通文件')
+      }
+      const ownedStage = createOwnedTransferStage('download')
+      try {
+        const exported = ownedStage.remember(await executeRequest('stage-export', {
+          ...staging.rootBinding,
+          objectName: ownedStage.stage.objectName,
+          sourcePath,
+          ...sourceBindingArgs(source),
+          expectedSize: String(source.size),
+          maxSize: String(copyLimits.maxTotalBytes)
+        }, { signal }), 'stage-export')
+        if (exported.size !== source.size) {
+          throw new Error('root 文件后端 download export 大小不匹配')
+        }
+        let transferred = 0
+        const proxy = createPrivilegedTransferProxy({
+          onData: value => {
+            const current = transferProgressBytes(value)
+            if (current !== null) transferred = current
+            return onData?.(value)
+          },
+          onPaused,
+          onEnd,
+          onError,
+          cleanup: ownedStage.cleanup,
+          finalize: async value => {
+            throwIfAborted(signal)
+            const completed = transferProgressBytes(value) ?? transferred
+            if (completed !== exported.size) {
+              throw new Error(
+                'root 文件后端 download 已传输大小与 snapshot 证明不一致'
+              )
+            }
+          }
+        })
+        const inner = await sftp.download({
+          localPath,
+          remotePath: ownedStage.stage.path,
+          isDirectory: false,
+          options,
+          ...proxy.callbacks
+        })
+        proxy.setInner(inner)
+        return proxy.handle
+      } catch (error) {
+        try {
+          await ownedStage.cleanup()
+        } catch (cleanupError) {
+          throw attachTransferCleanupError(error, cleanupError)
+        }
+        throw error
+      }
     },
     async writeFile (path, value, requestedMode) {
       const targetPath = canonicalFilePath(path, 'targetPath')

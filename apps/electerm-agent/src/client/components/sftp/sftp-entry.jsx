@@ -112,7 +112,10 @@ import {
   updateSafetyOperationRecord,
   writeSafetyOperationRecords
 } from '../../common/safety-operation-records'
-import { acquireRemoteFileCapability } from './remote-file-capability.js'
+import {
+  acquireRemoteFileCapability,
+  createRemoteFileTransferCapability
+} from './remote-file-capability.js'
 import {
   AI_FILE_PREVIEW_MAX_BYTES,
   readSftpFileContext
@@ -2380,6 +2383,80 @@ export default class Sftp extends Component {
       this.setState({ remoteFileIdentity })
     }
     return capability
+  }
+
+  acquireTransferFileCapability = async ({ transferId, signal } = {}) => {
+    const generation = this.remoteFileGeneration ||
+      initializeRemoteFileGeneration(this)
+    if (!generation.accepting || this.remoteFileUnmounted) {
+      throw remoteFileOperationStale()
+    }
+    let settleOperation
+    const operationSettled = new Promise(resolve => {
+      settleOperation = resolve
+    })
+    generation.settlements.add(operationSettled)
+    let capability
+    let session
+    try {
+      abortRemoteFileOperation(signal)
+      capability = await this.acquireRemoteFileOperation({
+        id: `transfer:${String(transferId || ++this.remoteFileOperationSequence)}`,
+        signal
+      })
+      abortRemoteFileOperation(signal)
+      if (this.remoteFileUnmounted || !generation.accepting ||
+        !isCurrentRemoteFileGeneration(this, generation)) {
+        const staleError = this.remoteFileUnmounted
+          ? remoteFileOperationUnmounted()
+          : remoteFileOperationStale()
+        try {
+          await capability.release()
+        } catch (releaseError) {
+          staleError.releaseError = releaseError
+        }
+        capability = null
+        throw staleError
+      }
+      const transfer = createRemoteFileTransferCapability(capability)
+      let releasePromise
+      session = Object.assign(Object.create(null), {
+        channel: transfer.channel,
+        runtimeIdentity: transfer.runtimeIdentity,
+        sftp: transfer.backend,
+        backend: transfer.backend,
+        release: () => {
+          if (releasePromise) return releasePromise
+          releasePromise = (async () => {
+            try {
+              return await transfer.release()
+            } finally {
+              generation.capabilities.delete(session)
+              generation.settlements.delete(operationSettled)
+              settleOperation()
+            }
+          })()
+          return releasePromise
+        }
+      })
+      if (Object.hasOwn(transfer, 'capabilities')) {
+        session.capabilities = transfer.capabilities
+      }
+      Object.freeze(session)
+      generation.capabilities.add(session)
+      return session
+    } catch (error) {
+      if (capability) {
+        try {
+          await capability.release()
+        } catch (releaseError) {
+          error.releaseError ||= releaseError
+        }
+      }
+      generation.settlements.delete(operationSettled)
+      settleOperation()
+      throw error
+    }
   }
 
   withRemoteFileOperation = async (options, work) => {

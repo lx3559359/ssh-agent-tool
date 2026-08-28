@@ -24,6 +24,7 @@ import {
 import {
   captureLocalTransferPlan,
   createTransferAttemptGuard,
+  createTransferFileSessionController,
   createTransferSafetyController,
   getTransferSafetyCompletionFailure,
   resetCrossHostSourceAttemptForRetry,
@@ -89,9 +90,38 @@ export default class TransportAction extends Component {
     this.transferTaskAdapter = createTransferTaskAdapter()
     this.transferTaskStarted = false
     this.batchResultRecorded = false
+    this.remoteFileSessionController = createTransferFileSessionController({
+      acquire: async ({ transferId }) => {
+        const capability = refs.get('sftp-' + this.tabId)
+        if (!capability) {
+          throw new Error('传输端点的远程文件 capability 不可用')
+        }
+        if (this.isFtp) {
+          if (!capability.sftp) throw new Error('FTP 传输后端不可用')
+          return Object.freeze({
+            capability,
+            backend: capability.sftp,
+            runtimeIdentity: null,
+            release: async () => true
+          })
+        }
+        if (typeof capability.acquireTransferFileCapability !== 'function') {
+          throw new Error('当前 SFTP 会话不支持受控文件传输')
+        }
+        const session = await capability.acquireTransferFileCapability({
+          transferId
+        })
+        return Object.freeze({
+          capability,
+          backend: session.backend,
+          runtimeIdentity: session.runtimeIdentity,
+          release: () => session.release()
+        })
+      }
+    })
     this.transferSafety = createTransferSafetyController({
       getTransfer: this.getTransferSafetyInput,
-      getCapability: () => refs.get('sftp-' + this.tabId),
+      getCapability: () => this.remoteFileSessionController.current?.capability,
       cancelTransport: this.cancelProtectedTransport
     })
   }
@@ -123,6 +153,23 @@ export default class TransportAction extends Component {
     }
   }
 
+  ensureRemoteFileSession = async () => {
+    const session = await this.remoteFileSessionController.ensure({
+      transferId: this.props.transfer.id
+    })
+    this.remoteFileSession = session
+    return session
+  }
+
+  releaseRemoteFileSession = () => {
+    if (this.remoteFileSessionReleasePromise) {
+      return this.remoteFileSessionReleasePromise
+    }
+    this.remoteFileSessionReleasePromise =
+      this.remoteFileSessionController.release()
+    return this.remoteFileSessionReleasePromise
+  }
+
   componentWillUnmount () {
     this.onCancel = true
     this.transferAttempts.invalidate(this.activeAttemptToken)
@@ -136,23 +183,52 @@ export default class TransportAction extends Component {
       !this.userCancelling &&
       !this.finishing &&
       transferStillQueued === false
-    if (!this.queueRemoved && !this.userCancelling && !this.finishing) {
-      if (externallyRemoved) {
-        this.recordTransferBatchResult(this.props.transfer, {
-          status: 'cancelled'
-        })
-        this.transport?.cancel()
-        this.runTransferTask('onCancelled')
-      } else {
-        this.transport?.interrupt()
-        this.runTransferTask('onInterrupted', 'client-unmounted')
-      }
-    } else {
-      this.transport?.destroy()
-    }
+    const transport = this.transport
     this.transport = null
-    this.destroySubTransports()
-    Promise.resolve(this.transferSafety.dispose()).catch(error => {
+    this.unmountPromise = (async () => {
+      let primaryError
+      try {
+        try {
+          if (this.finishing) {
+            await this.queueRemovalPromise
+          } else if (this.userCancelling && this.cancellationPromise) {
+            await this.cancellationPromise
+          } else if (!this.queueRemoved) {
+            if (externallyRemoved) {
+              this.recordTransferBatchResult(this.props.transfer, {
+                status: 'cancelled'
+              })
+              await transport?.cancel()
+              await this.runTransferTask('onCancelled')
+            } else {
+              await transport?.interrupt()
+              await this.runTransferTask('onInterrupted', 'client-unmounted')
+            }
+          } else {
+            await transport?.destroy()
+          }
+        } catch (error) {
+          primaryError = error
+        }
+        try {
+          await this.destroySubTransports()
+        } catch (error) {
+          primaryError ||= error
+        }
+        try {
+          await this.transferSafety.dispose()
+        } catch (error) {
+          primaryError ||= error
+        }
+      } finally {
+        try {
+          await this.releaseRemoteFileSession()
+        } catch (error) {
+          primaryError ||= error
+        }
+      }
+      if (primaryError) throw primaryError
+    })().catch(error => {
       window.store?.onError(error)
     })
     this.fromFile = null
@@ -212,7 +288,11 @@ export default class TransportAction extends Component {
         isDirectory: Boolean(fromFile?.isDirectory),
         sourceDescriptor: transfer.sourceDescriptor || this.localSourceDescriptor,
         safetyOperationId: transfer.safetyOperationId || '',
-        conflictPolicy: transfer.conflictPolicy || ''
+        conflictPolicy: transfer.conflictPolicy || '',
+        runtimeIdentity: this.remoteFileSession?.runtimeIdentity || {
+          channel: 'sftp',
+          effectiveUsername: this.getTransferTaskEndpoint().username
+        }
       }
     })
   }
@@ -223,7 +303,11 @@ export default class TransportAction extends Component {
     finalToPath: this.newPath || this.props.transfer.toPath,
     conflictPolicy: this.conflictPolicy,
     isFtp: this.isFtp,
-    sourceDescriptor: this.localSourceDescriptor
+    sourceDescriptor: this.localSourceDescriptor,
+    runtimeIdentity: this.remoteFileSession?.runtimeIdentity || {
+      channel: 'sftp',
+      effectiveUsername: this.getTransferTaskEndpoint().username
+    }
   })
 
   getLocalSourceTransfer = (transfer = this.props.transfer) => ({
@@ -313,7 +397,7 @@ export default class TransportAction extends Component {
     return resolveTransferRuntimeTransport({
       transfer,
       sourcePin: this.crossHostSourcePin,
-      getCapability: tabId => refs.get('sftp-' + tabId)
+      session: this.remoteFileSessionController.current
     })
   }
 
@@ -322,13 +406,13 @@ export default class TransportAction extends Component {
       .catch(() => null)
   }
 
-  remoteCheckExist = (path, tabId) => {
-    const sftp = refs.get('sftp-' + tabId)?.sftp
-    if (!sftp) {
+  remoteCheckExist = async (path, tabId) => {
+    const session = await this.ensureRemoteFileSession()
+    if (String(tabId) !== String(this.tabId) || !session?.backend) {
       console.log('remoteCheckExist error', 'sftp not exist')
       return false
     }
-    return getRemoteFileInfo(sftp, path)
+    return getRemoteFileInfo(session.backend, path)
       .then(r => r)
       .catch((e) => {
         console.log('remoteCheckExist error', e)
@@ -349,12 +433,13 @@ export default class TransportAction extends Component {
     )
   }
 
-  tagTransferError = (id, errorMsg) => {
+  tagTransferError = async (id, errorMsg) => {
     // this.clear()
     const { store } = window
     const { fileTransfers } = store
     const index = fileTransfers.findIndex(d => d.id === id)
     if (index < 0) {
+      await this.releaseRemoteFileSession()
       return
     }
 
@@ -365,15 +450,16 @@ export default class TransportAction extends Component {
       finishTime: Date.now()
     })
     store.addTransferHistory(tr)
-    this.notifyAgentRiskTerminal({
+    await this.notifyAgentRiskTerminal({
       status: 'failed',
       error: errorMsg,
       transferId: id
     }).catch(error => window.store.onError(error))
-    refsStatic.get('transfer-queue')?.addToQueue(
+    await refsStatic.get('transfer-queue')?.addToQueue(
       'delete',
       id
     )
+    await this.releaseRemoteFileSession()
   }
 
   // insert = (insts) => {
@@ -521,6 +607,10 @@ export default class TransportAction extends Component {
         speed: format(size, this?.startTime),
         status: update.status || 'success',
         error: update.error || '',
+        runtimeIdentity: this.remoteFileSession?.runtimeIdentity || {
+          channel: 'sftp',
+          effectiveUsername: this.getTransferTaskEndpoint().username
+        },
         ...(this.folderItemResults.length
           ? {
               itemResults: this.folderItemResults.slice(0, 1000),
@@ -540,7 +630,11 @@ export default class TransportAction extends Component {
       cbs.forEach(cb => cb())
     }
     if (protectedAttempt) this.transferAttempts.finishCompletion(attemptToken)
-    this.finishTransfer(cb).catch(error => window.store.onError(error))
+    try {
+      await this.finishTransfer(cb)
+    } finally {
+      this.releaseRemoteFileSession().catch(error => window.store.onError(error))
+    }
   }
 
   onData = (transferred, attemptToken) => {
@@ -587,26 +681,26 @@ export default class TransportAction extends Component {
     })
   }
 
-  stopTransport = (reason = 'completed') => {
+  stopTransport = async (reason = 'completed') => {
     this.onCancel = true
     this.transferAttempts.invalidate(this.activeAttemptToken)
     this.activeAttemptToken = null
     clearTimeout(this.retryTimer)
     this.retryTimer = null
-    if (reason === 'cancelled') {
-      this.transport?.cancel()
-    } else if (reason === 'interrupted') {
-      this.transport?.interrupt()
-    } else {
-      this.transport?.destroy()
-    }
+    const transport = this.transport
     this.transport = null
-    this.destroySubTransports()
+    if (reason === 'cancelled') {
+      await transport?.cancel()
+    } else if (reason === 'interrupted') {
+      await transport?.interrupt()
+    }
+    await this.destroySubTransports()
   }
 
-  destroySubTransports = () => {
-    for (const transport of this.subTransports) transport?.destroy()
+  destroySubTransports = async () => {
+    const transports = [...this.subTransports]
     this.subTransports.clear()
+    await Promise.allSettled(transports.map(transport => transport?.destroy()))
   }
 
   removeTransferFromQueue = async () => {
@@ -623,7 +717,7 @@ export default class TransportAction extends Component {
   }
 
   finishTransfer = async (callback, reason = 'completed') => {
-    this.stopTransport(reason)
+    await this.stopTransport(reason)
     if (!this.queueRemovalPromise) {
       this.queueRemoved = true
       this.queueRemovalPromise = this.removeTransferFromQueue()
@@ -644,35 +738,67 @@ export default class TransportAction extends Component {
   }
 
   cancelProtectedTransport = async () => {
-    this.recordTransferBatchResult(this.props.transfer, {
-      status: 'cancelled'
-    })
-    await this.runTransferTask('onCancelled')
-    await this.finishTransfer(undefined, 'cancelled')
+    let primaryError
+    try {
+      try {
+        this.recordTransferBatchResult(this.props.transfer, {
+          status: 'cancelled'
+        })
+        await this.runTransferTask('onCancelled')
+        await this.finishTransfer(undefined, 'cancelled')
+      } catch (error) {
+        primaryError = error
+      }
+    } finally {
+      try {
+        await this.releaseRemoteFileSession()
+      } catch (error) {
+        primaryError ||= error
+      }
+    }
+    if (primaryError) throw primaryError
   }
 
   cancelAndWait = () => {
     if (this.cancellationPromise) return this.cancellationPromise
     this.userCancelling = true
     this.cancellationPromise = (async () => {
+      let primaryError
       try {
-        this.transport?.cancel()
-        await this.transferSafety.cancel()
-      } finally {
+        try {
+          const transport = this.transport
+          this.transport = null
+          await transport?.cancel()
+          await this.transferSafety.cancel()
+        } catch (error) {
+          primaryError = error
+        }
         try {
           await this.notifyAgentRiskTerminal({
             status: 'cancelled',
             remoteState: 'unknown',
             transferId: this.props.transfer.id
           })
-        } finally {
+        } catch (error) {
+          primaryError ||= error
+        }
+        try {
           this.recordTransferBatchResult(this.props.transfer, {
             status: 'cancelled'
           })
           await this.runTransferTask('onCancelled')
           await this.finishTransfer(undefined, 'cancelled')
+        } catch (error) {
+          primaryError ||= error
+        }
+      } finally {
+        try {
+          await this.releaseRemoteFileSession()
+        } catch (error) {
+          primaryError ||= error
         }
       }
+      if (primaryError) throw primaryError
     })()
     return this.cancellationPromise
   }
@@ -722,19 +848,27 @@ export default class TransportAction extends Component {
     await this.runTransferTask('onPaused', persistedCheckpoint)
   }
 
-  pause = () => {
-    this.runTransferTask('requestPause')
-    this.transport?.pause()
+  pause = async () => {
+    try {
+      await this.runTransferTask('requestPause')
+      await this.transport?.pause()
+    } catch (error) {
+      await this.onError(error, this.activeAttemptToken)
+    }
   }
 
-  resume = () => {
-    this.transport?.resume()
-    this.runTransferTask('onResume')
-    this.update({
-      status: 'running',
-      pausing: false,
-      paused: false
-    })
+  resume = async () => {
+    try {
+      await this.transport?.resume()
+      await this.runTransferTask('onResume')
+      this.update({
+        status: 'running',
+        pausing: false,
+        paused: false
+      })
+    } catch (error) {
+      await this.onError(error, this.activeAttemptToken)
+    }
   }
 
   mvOrCp = async () => {
@@ -869,6 +1003,14 @@ export default class TransportAction extends Component {
       startTime: t
     })
     this.startTime = t
+
+    if (typeFrom === typeMap.remote || typeTo === typeMap.remote) {
+      try {
+        await this.ensureRemoteFileSession()
+      } catch (error) {
+        return this.tagTransferError(id, error.message)
+      }
+    }
 
     const fromFile = transfer.fromFile
       ? transfer.fromFile
@@ -1092,7 +1234,9 @@ export default class TransportAction extends Component {
             ...transfer,
             fromFile
           },
-          getCapability: sourceTabId => refs.get('sftp-' + sourceTabId)
+          getCapability: sourceTabId => String(sourceTabId) === String(this.tabId)
+            ? this.remoteFileSessionController.current
+            : null
         })
         this.crossHostSourcePin = sourcePreflight.runtime
         this.crossHostSourcePreflight = sourcePreflight.verified
@@ -1105,17 +1249,11 @@ export default class TransportAction extends Component {
       if (shouldUseLegacyZipOptimization({ zip, isFtp: this.isFtp })) {
         return await this.zipTransferFolder(attemptToken)
       }
-      if (
-        transfer.typeFrom === typeMap.local &&
-        transfer.typeTo === typeMap.remote &&
-        !this.isFtp
-      ) {
-        await this.transferFolderRecursive(this.getDefaultTransfer(), true, attemptToken)
-      } else if (!this.isFtp) {
-        return await this.transferFile(transfer, undefined, attemptToken)
-      } else {
-        await this.transferFolderRecursive(this.getDefaultTransfer(), true, attemptToken)
-      }
+      await this.transferFolderRecursive(
+        this.getDefaultTransfer(),
+        true,
+        attemptToken
+      )
       this.onEnd({
         transferred: this.transferred,
         size: this.total
@@ -1140,9 +1278,9 @@ export default class TransportAction extends Component {
       ...transfer,
       tabId
     })
-    if (transfer.remote2remoteStep === 1 && type === typeMap.remote) {
+    if (type === typeMap.remote) {
       if (!runtime.capability?.sftpList) {
-        throw new Error('跨主机传输来源目录读取能力不可用，已停止下载。')
+        throw new Error('远程传输目录读取能力不可用，已停止传输。')
       }
       const result = await runtime.capability.sftpList(runtime.sftp, path)
       this.assertCurrentAttempt(attemptToken)
@@ -1222,7 +1360,6 @@ export default class TransportAction extends Component {
         }
         if (transport) {
           this.subTransports.delete(transport)
-          transport.destroy()
           transport = null
         }
         resolve(fileSize)
@@ -1231,7 +1368,6 @@ export default class TransportAction extends Component {
       const onSubError = (error) => {
         if (transport) {
           this.subTransports.delete(transport)
-          transport.destroy()
           transport = null
         }
         if (!this.transferAttempts.isCurrent(attemptToken)) {
@@ -1473,7 +1609,11 @@ export default class TransportAction extends Component {
     }
     this.transferAttempts.invalidate(attemptToken)
     this.activeAttemptToken = null
-    this.transport && this.transport.destroy()
+    const transport = this.transport
+    if (transport) {
+      Promise.resolve(transport?.destroy())
+        .catch(error => window.store.onError(error))
+    }
     this.transport = null
     const retrySource = resetCrossHostSourceAttemptForRetry({
       transfer: this.props.transfer,
@@ -1503,7 +1643,8 @@ export default class TransportAction extends Component {
     return true
   }
 
-  onError = (e, attemptToken) => {
+  onError = async (e, attemptToken) => {
+    if (this.userCancelling || this.onCancel) return
     if (!this.transferAttempts.isCurrent(attemptToken) ||
       this.transferAttempts.completing) return
     if (this.scheduleRetry(e, attemptToken)) {
@@ -1513,7 +1654,7 @@ export default class TransportAction extends Component {
       status: 'exception',
       error: e.message
     }
-    this.onEnd(up, attemptToken)
+    await this.onEnd(up, attemptToken)
     window.store.onError(e)
   }
 
@@ -1524,18 +1665,14 @@ export default class TransportAction extends Component {
       toPath
     } = transfer
     if (typeTo === typeMap.local) {
-      const result = await window.fs.mkdir(toPath)
-        .then(() => true)
-        .catch(() => false)
+      await window.fs.mkdir(toPath)
       this.assertCurrentAttempt(attemptToken)
-      return result
+      return true
     }
     const sftp = this.getTransferRuntimeTransport(transfer).sftp
-    const result = await sftp.mkdir(toPath)
-      .then(() => true)
-      .catch(() => false)
+    await sftp.mkdir(toPath)
     this.assertCurrentAttempt(attemptToken)
-    return result
+    return true
   }
 
   render () {

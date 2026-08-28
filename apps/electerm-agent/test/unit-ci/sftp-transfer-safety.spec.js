@@ -831,6 +831,121 @@ test('cross-host step1 revalidates the live source endpoint before any download'
   assert.match(handlerSource, /step1\.verifiedSourceIdentity/)
 })
 
+test('Task7 pins the capability and effective backend without reading raw sftp refs', async () => {
+  const {
+    buildCrossHostSourceIdentity,
+    buildTransferSourceEndpointKey,
+    resolveTransferRuntimeTransport,
+    verifyCrossHostSourcePreflight
+  } = await import(transferSafetyUrl)
+  const endpoint = {
+    host: 'source.example.com',
+    port: 22,
+    username: 'hik',
+    tabId: 'source-tab',
+    pid: 'sftp:source-tab:session-a'
+  }
+  const sourceEndpointKey = buildTransferSourceEndpointKey(endpoint)
+  const fromFile = { isDirectory: false, size: 7 }
+  const transfer = {
+    remote2remoteStep: 1,
+    tabId: 'source-tab',
+    fromPath: '/root/source.bin',
+    fromFile,
+    sourceEndpointKey,
+    sourceIdentity: buildCrossHostSourceIdentity({
+      sourceEndpointKey,
+      path: '/root/source.bin',
+      file: fromFile
+    })
+  }
+  const rawSftp = new Proxy({}, {
+    get () { throw new Error('raw sftp ref must not be read') }
+  })
+  const backend = descriptorSftp({ size: 7 })
+  const capability = {
+    getSftpSafetyEndpoint: () => endpoint,
+    get sftp () { return rawSftp }
+  }
+  const sourcePin = Object.freeze({ capability, backend, sftp: backend })
+  const verified = await verifyCrossHostSourcePreflight({
+    transfer,
+    getCapability: () => sourcePin
+  })
+
+  assert.equal(verified.runtime.capability, capability)
+  assert.equal(verified.runtime.backend, backend)
+  assert.equal(verified.runtime.sftp, backend)
+  assert.equal(resolveTransferRuntimeTransport({
+    transfer,
+    sourcePin: verified.runtime
+  }), verified.runtime)
+
+  const targetSession = Object.freeze({
+    capability,
+    backend,
+    sftp: backend
+  })
+  assert.equal(resolveTransferRuntimeTransport({
+    transfer: { remote2remoteStep: 2 },
+    session: targetSession,
+    getCapability: () => ({ sftp: rawSftp })
+  }), targetSession)
+})
+
+test('Task7 transfer file session acquires once and releases once after terminal work', async () => {
+  const { createTransferFileSessionController } = await import(transferSafetyUrl)
+  const terminalGate = deferred()
+  let acquireCount = 0
+  let releaseCount = 0
+  const backend = Object.freeze({ upload () {} })
+  const capability = Object.freeze({ getSftpSafetyEndpoint () {} })
+  const controller = createTransferFileSessionController({
+    async acquire ({ transferId }) {
+      acquireCount += 1
+      assert.equal(transferId, 'transfer-7')
+      return Object.freeze({
+        capability,
+        backend,
+        runtimeIdentity: Object.freeze({
+          channel: 'pty-root',
+          effectiveUid: '0',
+          effectiveUsername: 'root'
+        }),
+        async release () {
+          releaseCount += 1
+          await terminalGate.promise
+          return true
+        }
+      })
+    }
+  })
+
+  const [first, second] = await Promise.all([
+    controller.ensure({ transferId: 'transfer-7' }),
+    controller.ensure({ transferId: 'transfer-7' })
+  ])
+  assert.equal(first, second)
+  assert.equal(first.backend, backend)
+  assert.equal(first.sftp, backend)
+  assert.equal(Object.getPrototypeOf(first), null)
+  assert.equal(Object.isFrozen(first), true)
+  assert.equal(acquireCount, 1)
+
+  const releaseA = controller.release()
+  const releaseB = controller.release()
+  assert.equal(releaseA, releaseB)
+  await Promise.resolve()
+  assert.equal(releaseCount, 1)
+  terminalGate.resolve()
+  assert.equal(await releaseA, true)
+  assert.equal(releaseCount, 1)
+  await assert.rejects(
+    controller.ensure({ transferId: 'transfer-7' }),
+    /closing|released|释放|关闭/
+  )
+})
+
 test('cross-host step1 atomically pins one SFTP transport across ref replacement', async () => {
   const {
     buildCrossHostSourceIdentity,

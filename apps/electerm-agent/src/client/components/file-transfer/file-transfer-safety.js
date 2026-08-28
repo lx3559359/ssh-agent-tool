@@ -190,6 +190,67 @@ export function buildCrossHostSourceIdentity ({
   return `source:${stableHash(`${endpointKey}\u0000${sourcePath}\u0000${type}\u0000${size}`)}`
 }
 
+export function createTransferFileSessionController ({ acquire } = {}) {
+  if (typeof acquire !== 'function') {
+    throw new Error('transfer file session 缺少 acquire 合同')
+  }
+  let state = 'open'
+  let session
+  let acquirePromise
+  let releasePromise
+
+  function ensure (options = {}) {
+    if (state !== 'open') {
+      return Promise.reject(new Error('transfer file session 已关闭或正在释放'))
+    }
+    if (session) return Promise.resolve(session)
+    if (acquirePromise) return acquirePromise
+    acquirePromise = (async () => {
+      const acquired = await acquire(options)
+      if (!acquired?.capability || !acquired?.backend ||
+        typeof acquired.release !== 'function') {
+        throw new Error('transfer file session acquire 结果无效')
+      }
+      session = Object.assign(Object.create(null), {
+        capability: acquired.capability,
+        backend: acquired.backend,
+        sftp: acquired.backend,
+        runtimeIdentity: acquired.runtimeIdentity || null,
+        release: acquired.release
+      })
+      return Object.freeze(session)
+    })()
+    acquirePromise.catch(() => {
+      if (state === 'open') acquirePromise = null
+    })
+    return acquirePromise
+  }
+
+  function release () {
+    if (releasePromise) return releasePromise
+    state = 'closing'
+    releasePromise = (async () => {
+      try {
+        let current = session
+        if (!current && acquirePromise) {
+          try { current = await acquirePromise } catch {}
+        }
+        if (!current) return true
+        return await current.release()
+      } finally {
+        state = 'released'
+      }
+    })()
+    return releasePromise
+  }
+
+  return Object.freeze({
+    ensure,
+    release,
+    get current () { return session }
+  })
+}
+
 export async function verifyCrossHostSourcePreflight ({
   transfer = {},
   getCapability,
@@ -201,18 +262,24 @@ export async function verifyCrossHostSourcePreflight ({
     transfer.tabId,
     '来源标签页标识'
   )
-  const capability = getCapability?.(sourceTabId)
+  const source = getCapability?.(sourceTabId)
+  const capability = source?.capability || source
   if (!capability?.getSftpSafetyEndpoint) {
     throw new Error('跨主机传输无法重新确认当前来源 SFTP 安全端点，已停止下载。')
   }
-  const pinnedSftp = capability.sftp
-  if (!pinnedSftp) {
+  const pinnedBackend = source?.backend || capability.sftp
+  if (!pinnedBackend) {
     throw new Error('跨主机传输当前来源 SFTP 实例不可用，已停止下载。')
   }
 
   const endpoint = capability.getSftpSafetyEndpoint()
   await Promise.resolve()
-  if (getCapability?.(sourceTabId) !== capability || capability.sftp !== pinnedSftp) {
+  const endpointPin = getCapability?.(sourceTabId)
+  if (endpointPin !== source ||
+    (source?.backend
+      ? endpointPin.backend !== pinnedBackend ||
+        endpointPin.capability !== capability
+      : capability.sftp !== pinnedBackend)) {
     throw new Error('跨主机传输来源连接在验证期间已被替换，已停止下载。')
   }
 
@@ -230,11 +297,16 @@ export async function verifyCrossHostSourcePreflight ({
     throw new Error('跨主机传输来源文件身份不一致，已停止下载。')
   }
   const sourceDescriptor = await describeRemote(
-    pinnedSftp,
+    pinnedBackend,
     transfer.fromPath
   )
   await Promise.resolve()
-  if (getCapability?.(sourceTabId) !== capability || capability.sftp !== pinnedSftp) {
+  const contentPin = getCapability?.(sourceTabId)
+  if (contentPin !== source ||
+    (source?.backend
+      ? contentPin.backend !== pinnedBackend ||
+        contentPin.capability !== capability
+      : capability.sftp !== pinnedBackend)) {
     throw new Error('跨主机传输来源连接在内容验证期间已被替换，已停止下载。')
   }
   const expectedType = transfer.fromFile?.isDirectory ? 'directory' : 'file'
@@ -252,7 +324,8 @@ export async function verifyCrossHostSourcePreflight ({
     },
     runtime: {
       capability,
-      sftp: pinnedSftp
+      backend: pinnedBackend,
+      sftp: pinnedBackend
     }
   }
 }
@@ -265,13 +338,14 @@ export async function verifyCrossHostSourceContent ({
   describeLocal
 } = {}) {
   if (transfer.remote2remoteStep !== 1) return null
-  if (!sourcePin?.sftp || !preflight?.sourceDescriptor) {
+  const backend = sourcePin?.backend || sourcePin?.sftp
+  if (!backend || !preflight?.sourceDescriptor) {
     throw new Error('跨主机传输缺少已固定的来源内容身份，已阻止目标写入。')
   }
   if (typeof describeLocal !== 'function') {
     throw new Error('跨主机传输缺少本地临时文件描述能力，已阻止目标写入。')
   }
-  const remoteAfter = await describeRemote(sourcePin.sftp, transfer.fromPath)
+  const remoteAfter = await describeRemote(backend, transfer.fromPath)
   if (!sameTransferDescriptor(remoteAfter, preflight.sourceDescriptor)) {
     throw new Error('跨主机传输来源内容在下载期间发生变化，已阻止目标写入。')
   }
@@ -296,6 +370,7 @@ export async function verifyCrossHostSourceContent ({
 export function resolveTransferRuntimeTransport ({
   transfer = {},
   sourcePin,
+  session,
   getCapability
 } = {}) {
   if (transfer.remote2remoteStep === 1) {
@@ -304,9 +379,11 @@ export function resolveTransferRuntimeTransport ({
     }
     return sourcePin
   }
+  if (session?.capability && session?.backend) return session
   const capability = getCapability?.(transfer.tabId)
   return {
     capability,
+    backend: capability?.sftp,
     sftp: capability?.sftp
   }
 }
@@ -562,9 +639,13 @@ export function createTransferSafetyController ({
       action: 'transfer'
     })
     qualityFinished = false
+    const runtimeIdentity = getTransfer().runtimeIdentity
     plan = {
       ...plan,
-      metadata: { traceId: traceContext.traceId }
+      metadata: {
+        traceId: traceContext.traceId,
+        ...(runtimeIdentity ? { runtimeIdentity } : {})
+      }
     }
     recordTransferEvent('started')
 

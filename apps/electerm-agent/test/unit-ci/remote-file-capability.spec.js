@@ -703,6 +703,301 @@ test('Task4 native capability never exposes raw transfer handles', async () => {
   assert.equal(downloadCalls, 0)
 })
 
+test('Task7 derives an opaque transfer session without reopening the Task4 facade', async () => {
+  const { createRemoteFileTransferCapability } = await importModule(
+    capabilityModule
+  )
+  let uploadOptions
+  let releaseOuterEnd
+  const outerEndGate = new Promise(resolve => { releaseOuterEnd = resolve })
+  const rawHandle = {
+    pause () { throw new Error('pause should be blocked while closing') },
+    resume () { throw new Error('resume should be blocked while closing') },
+    cancel () { throw new Error('completed transfer should not be cancelled') },
+    interrupt () { throw new Error('completed transfer should not be interrupted') },
+    destroy () { throw new Error('completed transfer should not be destroyed') }
+  }
+  const harness = await acquireWithHarness({
+    terminalOptions: { identity: { uid: '1000', username: 'hik' } },
+    sftpOptions: {
+      async upload (options) {
+        uploadOptions = options
+        return rawHandle
+      },
+      async download () {
+        throw new Error('download should not run')
+      }
+    }
+  })
+
+  const transfer = createRemoteFileTransferCapability(harness.capability)
+  assert.equal(harness.capability.backend.upload, undefined)
+  assert.equal(Object.getPrototypeOf(transfer), null)
+  assert.equal(Object.getPrototypeOf(transfer.backend), null)
+  assert.equal(Object.isFrozen(transfer), true)
+  assert.equal(Object.isFrozen(transfer.backend), true)
+  assert.deepEqual(Object.getOwnPropertySymbols(transfer), [])
+  assert.deepEqual(Object.getOwnPropertySymbols(transfer.backend), [])
+  assert.equal(transfer.backend, transfer.sftp)
+  assert.equal(typeof transfer.backend.upload, 'function')
+  assert.equal(typeof transfer.backend.download, 'function')
+  assert.equal(transfer.backend.ws, undefined)
+
+  const events = []
+  const handle = await transfer.backend.upload({
+    remotePath: '/home/hik/app.conf',
+    localPath: 'C:\\tmp\\app.conf',
+    onEnd: async () => {
+      events.push('outer-end-start')
+      await outerEndGate
+      events.push('outer-end-finished')
+    }
+  })
+  assert.equal(Object.getPrototypeOf(handle), null)
+  assert.equal(Object.isFrozen(handle), true)
+  assert.deepEqual(Object.keys(handle).sort(), [
+    'cancel', 'destroy', 'interrupt', 'pause', 'resume'
+  ])
+  assert.deepEqual(Object.getOwnPropertySymbols(handle), [])
+  assert.equal(handle.raw, undefined)
+
+  const outerEnd = uploadOptions.onEnd({ transferred: 7 })
+  await new Promise(resolve => setImmediate(resolve))
+  const releasing = transfer.release()
+  let released = false
+  releasing.then(() => { released = true })
+  await Promise.resolve()
+  assert.equal(released, false)
+  assert.equal(harness.terminal.releaseCount, 1)
+  await assert.rejects(handle.pause(), error => {
+    assert.equal(error.code, 'REMOTE_FILE_CAPABILITY_RELEASED')
+    return true
+  })
+
+  releaseOuterEnd()
+  await outerEnd
+  assert.equal(await releasing, true)
+  assert.deepEqual(events, ['outer-end-start', 'outer-end-finished'])
+})
+
+test('Task7 release cancels and joins an active transfer before releasing once', async () => {
+  const { createRemoteFileTransferCapability } = await importModule(
+    capabilityModule
+  )
+  let releaseCancel
+  const cancelGate = new Promise(resolve => { releaseCancel = resolve })
+  let cancelCount = 0
+  const harness = await acquireWithHarness({
+    terminalOptions: { identity: { uid: '1000', username: 'hik' } },
+    sftpOptions: {
+      async upload () {
+        return {
+          pause () {},
+          resume () {},
+          async cancel () {
+            cancelCount += 1
+            await cancelGate
+          },
+          interrupt () {},
+          destroy () {}
+        }
+      }
+    }
+  })
+  const transfer = createRemoteFileTransferCapability(harness.capability)
+  await transfer.backend.upload({
+    remotePath: '/home/hik/app.conf',
+    localPath: 'C:\\tmp\\app.conf'
+  })
+
+  const first = transfer.release()
+  const second = transfer.release()
+  assert.equal(first, second)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(cancelCount, 1)
+  assert.equal(harness.terminal.releaseCount, 1)
+  releaseCancel()
+  assert.equal(await first, true)
+  assert.equal(harness.terminal.releaseCount, 1)
+})
+
+test('Task7 transfer controls fail closed and cancel on SSH generation change', async () => {
+  const { createRemoteFileTransferCapability } = await importModule(
+    capabilityModule
+  )
+  let generation = 'ssh-generation-1'
+  let cancelCount = 0
+  const harness = await acquireWithHarness({
+    terminalOptions: {
+      identity: { uid: '1000', username: 'hik' },
+      endpoint: () => terminalEndpoint({
+        sshSessionGeneration: generation
+      })
+    },
+    sftpOptions: {
+      async download () {
+        return {
+          pause () {},
+          resume () {},
+          cancel () { cancelCount += 1 },
+          interrupt () {},
+          destroy () {}
+        }
+      }
+    }
+  })
+  const transfer = createRemoteFileTransferCapability(harness.capability)
+  const handle = await transfer.backend.download({
+    remotePath: '/home/hik/app.conf',
+    localPath: 'C:\\tmp\\app.conf'
+  })
+
+  generation = 'ssh-generation-2'
+  await assert.rejects(handle.pause(), error => {
+    assert.equal(error.code, 'REMOTE_FILE_IDENTITY_UNAVAILABLE')
+    return true
+  })
+  assert.equal(cancelCount, 1)
+  assert.equal(await transfer.release(), true)
+  assert.equal(harness.terminal.releaseCount, 1)
+})
+
+test('Task7 stale generation before transfer start releases without self-wait', async () => {
+  const { createRemoteFileTransferCapability } = await importModule(
+    capabilityModule
+  )
+  let generation = 'ssh-generation-1'
+  let downloadCount = 0
+  const harness = await acquireWithHarness({
+    terminalOptions: {
+      identity: { uid: '1000', username: 'hik' },
+      endpoint: () => terminalEndpoint({
+        sshSessionGeneration: generation
+      })
+    },
+    sftpOptions: {
+      async download () {
+        downloadCount += 1
+        throw new Error('stale transfer must not start')
+      }
+    }
+  })
+  const transfer = createRemoteFileTransferCapability(harness.capability)
+  generation = 'ssh-generation-2'
+
+  const stale = transfer.backend.download({
+    remotePath: '/home/hik/app.conf',
+    localPath: 'C:\\tmp\\app.conf'
+  })
+  const result = await Promise.race([
+    stale.then(
+      value => ({ value }),
+      error => ({ error })
+    ),
+    new Promise(resolve => setTimeout(
+      () => resolve({ timeout: true }),
+      250
+    ))
+  ])
+
+  assert.equal(result.timeout, undefined, 'stale guard must not self-wait')
+  assert.equal(result.error?.code, 'REMOTE_FILE_IDENTITY_UNAVAILABLE')
+  assert.equal(downloadCount, 0)
+  assert.equal(await transfer.release(), true)
+  assert.equal(harness.terminal.releaseCount, 1)
+})
+
+test('Task7 transfer combines caller abort with capability cancellation', async () => {
+  const { createRemoteFileTransferCapability } = await importModule(
+    capabilityModule
+  )
+  let uploadCount = 0
+  let cancelCount = 0
+  const harness = await acquireWithHarness({
+    terminalOptions: { identity: { uid: '1000', username: 'hik' } },
+    sftpOptions: {
+      async upload () {
+        uploadCount += 1
+        return {
+          pause () {},
+          resume () {},
+          cancel () { cancelCount += 1 },
+          interrupt () {},
+          destroy () {}
+        }
+      }
+    }
+  })
+  const transfer = createRemoteFileTransferCapability(harness.capability)
+  const alreadyAborted = new AbortController()
+  const abortReason = new Error('caller cancelled before start')
+  alreadyAborted.abort(abortReason)
+
+  await assert.rejects(transfer.backend.upload({
+    signal: alreadyAborted.signal,
+    remotePath: '/home/hik/not-started.bin',
+    localPath: 'C:\\tmp\\not-started.bin'
+  }), error => error === abortReason)
+  assert.equal(uploadCount, 0)
+
+  const activeController = new AbortController()
+  await transfer.backend.upload({
+    signal: activeController.signal,
+    remotePath: '/home/hik/active.bin',
+    localPath: 'C:\\tmp\\active.bin'
+  })
+  activeController.abort(new Error('caller cancelled active transfer'))
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(uploadCount, 1)
+  assert.equal(cancelCount, 1)
+  assert.equal(await transfer.release(), true)
+})
+
+test('Task7 terminal control claims before native acknowledgement and suppresses natural end', async () => {
+  const { createRemoteFileTransferCapability } = await importModule(
+    capabilityModule
+  )
+  let uploadOptions
+  let releaseCancel
+  const cancelGate = new Promise(resolve => { releaseCancel = resolve })
+  let cancelCount = 0
+  let endCount = 0
+  const harness = await acquireWithHarness({
+    terminalOptions: { identity: { uid: '1000', username: 'hik' } },
+    sftpOptions: {
+      async upload (options) {
+        uploadOptions = options
+        return {
+          pause () {},
+          resume () {},
+          async cancel () {
+            cancelCount += 1
+            await cancelGate
+          },
+          interrupt () {},
+          destroy () {}
+        }
+      }
+    }
+  })
+  const transfer = createRemoteFileTransferCapability(harness.capability)
+  const handle = await transfer.backend.upload({
+    remotePath: '/home/hik/race.bin',
+    localPath: 'C:\\tmp\\race.bin',
+    onEnd: () => { endCount += 1 }
+  })
+
+  const cancelling = handle.cancel()
+  const naturalEnd = uploadOptions.onEnd({ transferred: 1 })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(cancelCount, 1)
+  assert.equal(endCount, 0)
+  releaseCancel()
+  assert.equal(await cancelling, true)
+  assert.equal(await naturalEnd, true)
+  assert.equal(await transfer.release(), true)
+})
+
 test('root capability hides staging and exposes only the current backend contract', async () => {
   const harness = await acquireWithHarness()
   const rootMethods = [...productionRemoteFileMethods]

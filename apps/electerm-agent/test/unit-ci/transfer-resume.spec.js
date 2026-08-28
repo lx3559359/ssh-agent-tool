@@ -315,7 +315,7 @@ test('explicit cancellation removes a resumable partial upload', async () => {
     messages,
     'transfer:paused:cancel-upload'
   )
-  transfer.cancel()
+  await transfer.cancel()
   await new Promise(resolve => setTimeout(resolve, 250))
 
   assert.equal(fs.existsSync(paused.data.partialPath), false)

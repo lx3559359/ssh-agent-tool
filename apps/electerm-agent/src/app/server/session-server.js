@@ -436,11 +436,30 @@ if (type === 'rdp') {
         const Cls = isFtp ? FtpTransfer : Transfer
         transfer(id, sftpId, new Cls(opts))
       } else if (action === 'transfer-func') {
-        const { id, func, args, sftpId } = msg
-        if (func === 'destroy') {
-          return onDestroyTransfer(id, sftpId)
+        const { id, func, args, sftpId, controlId } = msg
+        const acknowledge = async () => {
+          try {
+            const instance = transfer(id, sftpId)
+            const operation = instance?.[func]
+            if (typeof operation !== 'function') {
+              throw new Error(`Transfer control is unavailable: ${func}`)
+            }
+            await Promise.resolve(operation.apply(instance, args))
+            ws.s({
+              id: `transfer:control:${id}:${controlId}`,
+              data: { ok: true }
+            })
+          } catch (error) {
+            ws.s({
+              id: `transfer:control:${id}:${controlId}`,
+              data: {
+                ok: false,
+                error: { message: error?.message || String(error) }
+              }
+            })
+          }
         }
-        transfer(id, sftpId)[func](...args)
+        acknowledge().catch(log.error)
       }
     })
     // end

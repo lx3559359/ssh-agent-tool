@@ -21,6 +21,10 @@ Module._load = function (request, parent, isMain) {
   return originalLoad.call(this, request, parent, isMain)
 }
 const { Transfer } = require(path.resolve(__dirname, '../../src/app/server/transfer'))
+const { Transfer: FtpTransfer } = require(path.resolve(
+  __dirname,
+  '../../src/app/server/ftp-transfer'
+))
 Module._load = originalLoad
 
 function makeTmpDir () {
@@ -111,6 +115,10 @@ test('file transfer progress includes transferred bytes, chunk bytes, and total 
     total: source.length
   })
   assert.equal(endMessage.id, 'transfer:end:large-upload')
+  assert.deepEqual(endMessage.data, {
+    transferred: source.length,
+    size: source.length
+  })
   assert.deepEqual(fs.readFileSync(remotePath), source)
 
   fs.rmSync(tmp, { recursive: true, force: true })
@@ -165,7 +173,270 @@ test('file transfer downloads large binary files with progress and byte integrit
     total: source.length
   })
   assert.equal(endMessage.id, 'transfer:end:large-download')
+  assert.deepEqual(endMessage.data, {
+    transferred: source.length,
+    size: source.length
+  })
   assert.deepEqual(fs.readFileSync(localPath), source)
+
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+test('terminal cancellation waits for a late source handle to close', async () => {
+  const tmp = makeTmpDir()
+  const remotePath = path.join(tmp, 'late-source.bin')
+  const localPath = path.join(tmp, 'late-download.bin')
+  fs.writeFileSync(remotePath, Buffer.alloc(64 * 1024, 0x61))
+  let releaseOpen
+  let closeCount = 0
+  const sftp = {
+    ...createFsLikeSftp(),
+    open (filePath, flags, callback) {
+      releaseOpen = () => fs.open(filePath, flags, callback)
+    },
+    close (handle, callback) {
+      closeCount += 1
+      setTimeout(() => fs.close(handle, callback), 50)
+    }
+  }
+  const transfer = new Transfer({
+    id: 'late-source-cancel',
+    type: 'download',
+    localPath,
+    remotePath,
+    sftp,
+    options: { chunkSize: 32 * 1024, concurrency: 1 },
+    ws: { s () {} }
+  })
+
+  const cancelling = transfer.cancel()
+  releaseOpen()
+  assert.equal(closeCount, 0)
+  assert.equal(await cancelling, true)
+  assert.equal(closeCount, 1)
+  assert.equal(fs.existsSync(localPath), false)
+
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+test('FTP terminal cancellation joins a late operation client before acknowledging', async () => {
+  let resolveClient
+  const clientReady = new Promise(resolve => { resolveClient = resolve })
+  let releaseClose
+  const closeGate = new Promise(resolve => { releaseClose = resolve })
+  let uploadCalls = 0
+  let closeCalls = 0
+  const transfer = new FtpTransfer({
+    id: 'late-ftp-control',
+    type: 'upload',
+    localPath: 'C:/tmp/source.bin',
+    remotePath: '/target.bin',
+    ftpSession: {
+      createOperationClient: () => clientReady
+    },
+    ws: { s () {} }
+  })
+
+  let settled = false
+  const cancelling = transfer.cancel().finally(() => { settled = true })
+  await Promise.resolve()
+  assert.equal(settled, false)
+
+  resolveClient({
+    trackProgress () {},
+    async uploadFrom () { uploadCalls += 1 },
+    async downloadTo () { throw new Error('unexpected download') },
+    close () {
+      closeCalls += 1
+      return closeGate
+    }
+  })
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.equal(uploadCalls, 0)
+  assert.equal(closeCalls, 1)
+  assert.equal(settled, false)
+  releaseClose()
+  assert.equal(await cancelling, true)
+})
+
+test('FTP terminal cancellation rejects within its server deadline when client creation hangs', async () => {
+  const transfer = new FtpTransfer({
+    id: 'hung-ftp-create',
+    type: 'download',
+    localPath: 'C:/tmp/target.bin',
+    remotePath: '/source.bin',
+    ftpSession: {
+      createOperationClient: () => new Promise(() => {})
+    },
+    ws: { s () {} }
+  })
+  transfer.terminalJoinTimeout = 25
+
+  const result = await Promise.race([
+    transfer.cancel().then(
+      () => ({ status: 'resolved' }),
+      error => ({ status: 'rejected', error })
+    ),
+    new Promise(resolve => setTimeout(
+      () => resolve({ status: 'pending' }),
+      200
+    ))
+  ])
+
+  assert.equal(result.status, 'rejected')
+  assert.match(result.error.message, /FTP transfer start/)
+})
+
+test('FTP terminal cancellation rejects within its server deadline when close hangs', async () => {
+  const transfer = new FtpTransfer({
+    id: 'hung-ftp-close',
+    type: 'upload',
+    localPath: 'C:/tmp/source.bin',
+    remotePath: '/target.bin',
+    ftpSession: {
+      async createOperationClient () {
+        return {
+          trackProgress () {},
+          uploadFrom: () => new Promise(() => {}),
+          close: () => new Promise(() => {})
+        }
+      }
+    },
+    ws: { s () {} }
+  })
+  transfer.terminalJoinTimeout = 25
+  await new Promise(resolve => setImmediate(resolve))
+
+  const result = await Promise.race([
+    transfer.cancel().then(
+      () => ({ status: 'resolved' }),
+      error => ({ status: 'rejected', error })
+    ),
+    new Promise(resolve => setTimeout(
+      () => resolve({ status: 'pending' }),
+      200
+    ))
+  ])
+
+  assert.equal(result.status, 'rejected')
+  assert.match(result.error.message, /FTP operation client/)
+})
+
+test('terminal cancellation joins an atomic upload finalization before acknowledging', async () => {
+  const tmp = makeTmpDir()
+  const localPath = path.join(tmp, 'atomic-race-source.txt')
+  const remotePath = path.join(tmp, 'atomic-race-target.txt')
+  fs.writeFileSync(localPath, 'new-content')
+  fs.writeFileSync(remotePath, 'old-content')
+
+  let resolveRenameStarted
+  const renameStarted = new Promise(resolve => { resolveRenameStarted = resolve })
+  let releaseRename
+  const messages = []
+  const sftp = {
+    ...createFsLikeSftp(),
+    _extensions: {
+      'posix-rename@openssh.com': '1'
+    },
+    ext_openssh_rename (fromPath, toPath, callback) {
+      releaseRename = () => fs.rename(fromPath, toPath, callback)
+      resolveRenameStarted()
+    },
+    unlink: fs.unlink
+  }
+  const transfer = new Transfer({
+    id: 'atomic-finalize-cancel',
+    type: 'upload',
+    localPath,
+    remotePath,
+    sftp,
+    options: {
+      atomicUpload: true,
+      chunkSize: 4,
+      concurrency: 1
+    },
+    ws: { s (message) { messages.push(message) } }
+  })
+
+  await renameStarted
+  let settled = false
+  const cancelling = transfer.cancel().finally(() => { settled = true })
+  await new Promise(resolve => setTimeout(resolve, 250))
+
+  assert.equal(settled, false)
+  assert.equal(fs.readFileSync(remotePath, 'utf8'), 'old-content')
+  releaseRename()
+  assert.equal(await cancelling, true)
+  assert.equal(fs.readFileSync(remotePath, 'utf8'), 'new-content')
+  assert.equal(messages.filter(message =>
+    message.id === 'transfer:end:atomic-finalize-cancel'
+  ).length, 1)
+
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+test('terminal cancellation bounds an uncertain atomic finalization without unlinking its partial', async () => {
+  const tmp = makeTmpDir()
+  const localPath = path.join(tmp, 'atomic-timeout-source.txt')
+  const remotePath = path.join(tmp, 'atomic-timeout-target.txt')
+  fs.writeFileSync(localPath, 'new-content')
+  fs.writeFileSync(remotePath, 'old-content')
+
+  let resolveRenameStarted
+  const renameStarted = new Promise(resolve => { resolveRenameStarted = resolve })
+  let partialPath
+  const unhandled = []
+  const captureUnhandled = error => { unhandled.push(error) }
+  process.on('unhandledRejection', captureUnhandled)
+  const sftp = {
+    ...createFsLikeSftp(),
+    _extensions: {
+      'posix-rename@openssh.com': '1'
+    },
+    ext_openssh_rename (fromPath) {
+      partialPath = fromPath
+      resolveRenameStarted()
+    },
+    unlink: fs.unlink
+  }
+  const transfer = new Transfer({
+    id: 'atomic-finalize-timeout',
+    type: 'upload',
+    localPath,
+    remotePath,
+    sftp,
+    options: {
+      atomicUpload: true,
+      chunkSize: 4,
+      concurrency: 1
+    },
+    ws: { s () {} }
+  })
+
+  await renameStarted
+  transfer.terminalJoinTimeout = 50
+  transfer.kill = () => new Promise((resolve, reject) => {
+    setTimeout(() => reject(new Error('late kill failure')), 20)
+  })
+  const result = await Promise.race([
+    transfer.cancel().then(
+      () => ({ status: 'resolved' }),
+      error => ({ status: 'rejected', error })
+    ),
+    new Promise(resolve => setTimeout(
+      () => resolve({ status: 'pending' }),
+      300
+    ))
+  ])
+
+  assert.equal(result.status, 'rejected')
+  assert.match(result.error.message, /successful finalization/)
+  assert.equal(fs.readFileSync(remotePath, 'utf8'), 'old-content')
+  assert.equal(fs.existsSync(partialPath), true)
+  await new Promise(resolve => setTimeout(resolve, 40))
+  process.removeListener('unhandledRejection', captureUnhandled)
+  assert.equal(unhandled.length, 0)
 
   fs.rmSync(tmp, { recursive: true, force: true })
 })

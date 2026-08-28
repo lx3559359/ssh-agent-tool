@@ -30,6 +30,21 @@ const remoteFileMethodNames = Object.freeze([
   'describeResumeEntry'
 ])
 
+const remoteFileTransferMethodNames = Object.freeze([
+  'upload',
+  'download'
+])
+
+const remoteFileTransferControlNames = Object.freeze([
+  'pause',
+  'resume',
+  'cancel',
+  'interrupt',
+  'destroy'
+])
+
+const guardedCapabilityInternals = new WeakMap()
+
 function requiredIdentity (value, label) {
   const identity = String(value ?? '').trim()
   if (!identity) throw new Error(`远程文件端点缺少${label}`)
@@ -152,18 +167,47 @@ function createGuardedRemoteFileCapability (capability, assertCurrent) {
   let state = 'open'
   let releasePromise
   const activeOperations = new Set()
+  const activeTransfers = new Set()
   const proxies = new WeakMap()
+  let transferCapability
+
+  function settleActive (operation, collection) {
+    if (operation.finished) return
+    operation.finished = true
+    collection.delete(operation)
+    operation.markSettled()
+  }
 
   function beginRelease (excludedOperation) {
     if (releasePromise) return releasePromise
     state = 'closing'
-    const pending = [...activeOperations]
+    const operations = [...activeOperations]
       .filter(operation => operation !== excludedOperation)
       .map(operation => operation.settled)
+    const transfers = [...activeTransfers]
+    const pending = [
+      ...operations,
+      ...transfers
+        .filter(operation => operation !== excludedOperation)
+        .map(operation => operation.settled)
+    ]
     releasePromise = (async () => {
+      const stops = await Promise.allSettled(
+        transfers
+          .filter(operation => (
+            operation !== excludedOperation || operation.hasStarted
+          ))
+          .map(operation => operation.stopForRelease())
+      )
       await Promise.allSettled(pending)
+      let firstError = stops.find(result => result.status === 'rejected')?.reason
       try {
-        return await capability.release()
+        const released = await capability.release()
+        if (firstError) throw firstError
+        return released
+      } catch (error) {
+        firstError ||= error
+        throw firstError
       } finally {
         state = 'released'
       }
@@ -195,7 +239,8 @@ function createGuardedRemoteFileCapability (capability, assertCurrent) {
     }
     let markSettled
     const activeOperation = {
-      settled: new Promise(resolve => { markSettled = resolve })
+      settled: new Promise(resolve => { markSettled = resolve }),
+      markSettled
     }
     activeOperations.add(activeOperation)
     return (async () => {
@@ -203,8 +248,7 @@ function createGuardedRemoteFileCapability (capability, assertCurrent) {
         await guardCurrent(activeOperation)
         return await operation()
       } finally {
-        activeOperations.delete(activeOperation)
-        markSettled()
+        settleActive(activeOperation, activeOperations)
       }
     })()
   }
@@ -223,6 +267,220 @@ function createGuardedRemoteFileCapability (capability, assertCurrent) {
           const result = await Reflect.apply(operation, backend, args)
           return result === backend ? guarded : result
         })
+      })
+    }
+    return Object.freeze(guarded)
+  }
+
+  function guardTransferBackend (backend, guardedBackend) {
+    const guarded = Object.assign(Object.create(null), guardedBackend)
+    for (const name of remoteFileTransferMethodNames) {
+      const operation = Object.getOwnPropertyDescriptor(backend, name)?.value
+      if (typeof operation !== 'function') continue
+      Object.defineProperty(guarded, name, {
+        enumerable: true,
+        value: (options = {}) => {
+          if (state !== 'open') {
+            return Promise.reject(remoteFileCapabilityReleased())
+          }
+          const abortController = new AbortController()
+          const callerSignal = options && typeof options === 'object'
+            ? options.signal
+            : undefined
+          let markSettled
+          let markStarted
+          let inner
+          let terminalPromise
+          let callerStopPromise
+          const transfer = {
+            finished: false,
+            hasStarted: false,
+            terminalClaimed: false,
+            settled: new Promise(resolve => { markSettled = resolve }),
+            started: new Promise(resolve => { markStarted = resolve }),
+            markSettled,
+            stopForRelease: async () => {
+              abortController.abort(remoteFileCapabilityReleased())
+              await transfer.started
+              if (transfer.terminalClaimed || transfer.finished) {
+                return transfer.settled
+              }
+              return control('cancel', true, true)
+            }
+          }
+
+          function finishTransfer () {
+            callerSignal?.removeEventListener?.('abort', abortFromCaller)
+            settleActive(transfer, activeTransfers)
+          }
+
+          function abortFromCaller () {
+            if (!abortController.signal.aborted) {
+              abortController.abort(callerSignal?.reason)
+            }
+            callerStopPromise ||= (async () => {
+              await transfer.started
+              if (transfer.finished || transfer.terminalClaimed) return true
+              return control('cancel', true, true)
+            })()
+            callerStopPromise.catch(() => {})
+          }
+
+          function terminal (terminalCallback, args) {
+            if (terminalPromise) return terminalPromise
+            transfer.terminalClaimed = true
+            terminalPromise = (async () => {
+              try {
+                return await terminalCallback?.(...args)
+              } finally {
+                finishTransfer()
+              }
+            })()
+            return terminalPromise
+          }
+
+          function claimTerminalControl (controlName, internal) {
+            transfer.terminalClaimed = true
+            abortController.abort(remoteFileCapabilityReleased())
+            terminalPromise = (async () => {
+              let currentError
+              let controlError
+              if (!internal) {
+                try {
+                  await assertCurrent()
+                } catch (cause) {
+                  currentError = remoteFileIdentityUnavailable(cause)
+                }
+              }
+              try {
+                await transfer.started
+                if (!transfer.finished) {
+                  const current = Object.getOwnPropertyDescriptor(
+                    inner,
+                    controlName
+                  )?.value
+                  if (typeof current === 'function') {
+                    await Reflect.apply(current, inner, [])
+                  }
+                }
+              } catch (error) {
+                controlError = error
+              } finally {
+                finishTransfer()
+              }
+              if (currentError) {
+                if (controlError && Object.isExtensible(currentError)) {
+                  currentError.controlError = controlError
+                }
+                const alreadyReleasing = Boolean(releasePromise)
+                const releasing = beginRelease()
+                if (!alreadyReleasing) {
+                  try {
+                    await releasing
+                  } catch (releaseError) {
+                    if (Object.isExtensible(currentError)) {
+                      currentError.releaseError ||= releaseError
+                    }
+                  }
+                }
+                throw currentError
+              }
+              if (controlError) throw controlError
+              return true
+            })()
+            return terminalPromise
+          }
+
+          async function control (controlName, terminalControl, internal) {
+            if (!internal) {
+              if (state !== 'open') throw remoteFileCapabilityReleased()
+            }
+            if (transfer.finished) return true
+            if (transfer.terminalClaimed) return terminalPromise || true
+            if (terminalControl) {
+              return claimTerminalControl(controlName, internal)
+            }
+            if (!internal) {
+              await guardCurrent(transfer)
+            }
+            await transfer.started
+            if (transfer.finished) return true
+            if (transfer.terminalClaimed) return terminalPromise || true
+            const current = Object.getOwnPropertyDescriptor(
+              inner,
+              controlName
+            )?.value
+            if (typeof current === 'function') {
+              await Reflect.apply(current, inner, [])
+            }
+            return true
+          }
+
+          const handle = Object.assign(Object.create(null), Object.fromEntries(
+            remoteFileTransferControlNames.map(controlName => [
+              controlName,
+              () => control(
+                controlName,
+                ['cancel', 'interrupt', 'destroy'].includes(controlName),
+                false
+              )
+            ])
+          ))
+          Object.freeze(handle)
+          activeTransfers.add(transfer)
+          if (callerSignal?.aborted) {
+            abortFromCaller()
+          } else {
+            callerSignal?.addEventListener?.('abort', abortFromCaller, {
+              once: true
+            })
+          }
+
+          return (async () => {
+            try {
+              await guardCurrent(transfer)
+              if (!options || typeof options !== 'object' || Array.isArray(options)) {
+                throw new Error('远程文件 transfer options 无效')
+              }
+              if (callerSignal !== undefined && (
+                !callerSignal ||
+                typeof callerSignal.addEventListener !== 'function' ||
+                typeof callerSignal.removeEventListener !== 'function'
+              )) {
+                throw new Error('远程文件 transfer signal 无效')
+              }
+              if (abortController.signal.aborted) {
+                throw abortController.signal.reason ||
+                  remoteFileCapabilityReleased()
+              }
+              const transferOptions = {
+                ...options,
+                signal: abortController.signal,
+                onData: (...args) => {
+                  if (state !== 'open' || transfer.terminalClaimed) return
+                  return options.onData?.(...args)
+                },
+                onPaused: (...args) => {
+                  if (state !== 'open' || transfer.terminalClaimed) return
+                  return options.onPaused?.(...args)
+                },
+                onEnd: (...args) => terminal(options.onEnd, args),
+                onError: (...args) => terminal(options.onError, args)
+              }
+              inner = await Reflect.apply(operation, backend, [transferOptions])
+              if (!inner || typeof inner !== 'object') {
+                throw new Error('远程文件 transfer handle 无效')
+              }
+              return handle
+            } catch (error) {
+              finishTransfer()
+              throw error
+            } finally {
+              transfer.hasStarted = true
+              markStarted()
+            }
+          })()
+        }
       })
     }
     return Object.freeze(guarded)
@@ -251,7 +509,36 @@ function createGuardedRemoteFileCapability (capability, assertCurrent) {
       capability.capabilities
     )
   }
-  return Object.freeze(guardedCapability)
+  Object.freeze(guardedCapability)
+  guardedCapabilityInternals.set(guardedCapability, Object.freeze({
+    createTransferCapability: () => {
+      if (transferCapability) return transferCapability
+      const transferSftp = guardTransferBackend(capability.sftp, guardedSftp)
+      const transferBackend = capability.backend === capability.sftp
+        ? transferSftp
+        : guardTransferBackend(capability.backend, guardedBackend)
+      transferCapability = Object.assign(Object.create(null), {
+        channel,
+        runtimeIdentity: guardedCapability.runtimeIdentity,
+        sftp: transferSftp,
+        backend: transferBackend,
+        release: () => beginRelease()
+      })
+      if (Object.hasOwn(guardedCapability, 'capabilities')) {
+        transferCapability.capabilities = guardedCapability.capabilities
+      }
+      return Object.freeze(transferCapability)
+    }
+  }))
+  return guardedCapability
+}
+
+export function createRemoteFileTransferCapability (capability) {
+  const internal = guardedCapabilityInternals.get(capability)
+  if (!internal) {
+    throw new Error('远程文件 transfer capability 来源无效')
+  }
+  return internal.createTransferCapability()
 }
 
 export async function acquireRemoteFileCapability ({

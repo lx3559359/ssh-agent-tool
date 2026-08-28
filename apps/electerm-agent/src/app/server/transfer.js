@@ -67,6 +67,30 @@ function isRecoverableTransferError (error) {
     )
 }
 
+function waitForTerminalPromise (promise, deadline, message) {
+  const observed = Promise.resolve(promise)
+  const remaining = deadline - Date.now()
+  if (remaining <= 0) {
+    observed.catch(() => {})
+    return Promise.reject(new Error(message))
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const settle = (error, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (error) reject(error)
+      else resolve(value)
+    }
+    const timer = setTimeout(() => settle(new Error(message)), remaining)
+    observed.then(
+      value => settle(null, value),
+      error => settle(error)
+    )
+  })
+}
+
 class Transfer {
   constructor ({
     remotePath,
@@ -98,6 +122,9 @@ class Transfer {
     this.keepPartial = options.keepPartial === true
     this.transferred = this.startOffset
     this.inFlightOperations = 0
+    this.successfulFinalizationPromise = null
+    this.terminalJoinTimeout = 10000
+    this.atomicFinalizationUncertain = false
     this.pauseAcknowledged = false
     this.pausedReads = new Map()
     this.stopReason = null
@@ -198,6 +225,7 @@ class Transfer {
         localPath,
         chunkSize: this.chunkSize,
         onProgress: (transferred) => {
+          this.transferred = transferred
           this.onData(transferred)
         }
       })
@@ -263,16 +291,36 @@ class Transfer {
     }
   }
 
-  finishSuccessfulTransfer = async (data) => {
-    if (this.atomicUpload) {
-      try {
-        await this.renameAtomicUpload()
-        this.atomicUploadCommitted = true
-      } catch (error) {
-        return this.onError(error)
-      }
+  finishSuccessfulTransfer = (data) => {
+    if (this.successfulFinalizationPromise) {
+      return this.successfulFinalizationPromise
     }
-    this.onEnd(data)
+    if (this.onDestroy) return Promise.resolve(false)
+    this.successfulFinalizationPromise = (async () => {
+      if (this.atomicUpload) {
+        try {
+          await this.renameAtomicUpload()
+          this.atomicUploadCommitted = true
+        } catch (error) {
+          this.onError(error)
+          return false
+        }
+      }
+      const transferred = Number.isSafeInteger(this.transferred) &&
+        this.transferred >= 0
+        ? this.transferred
+        : 0
+      const size = Number.isSafeInteger(this.fsize) && this.fsize >= 0
+        ? this.fsize
+        : transferred
+      this.onEnd({
+        ...(data && typeof data === 'object' ? data : {}),
+        transferred,
+        size
+      })
+      return true
+    })()
+    return this.successfulFinalizationPromise
   }
 
   tryCreateBuffer = (size) => {
@@ -286,7 +334,55 @@ class Transfer {
   // from https://github.com/mscdex/ssh2-streams/blob/master/lib/sftp.js
   fastXfer () {
     const { src, srcPath } = this
-    src.open(srcPath, 'r', this.onSrcOpen)
+    src.open(srcPath, 'r', this.trackTransferCallback(this.onSrcOpen))
+  }
+
+  trackTransferCallback = (operation) => {
+    this.inFlightOperations += 1
+    let completed = false
+    return (...args) => {
+      if (completed) return
+      completed = true
+      const finish = () => {
+        this.inFlightOperations = Math.max(0, this.inFlightOperations - 1)
+      }
+      let result
+      try {
+        result = operation(...args)
+      } catch (error) {
+        this.transferIoError ||= error
+        finish()
+        return
+      }
+      Promise.resolve(result).then(finish, error => {
+        this.transferIoError ||= error
+        finish()
+      })
+    }
+  }
+
+  closeTransferHandle = (backend, handle) => {
+    if (!backend || !handle || typeof backend.close !== 'function') {
+      return Promise.resolve(true)
+    }
+    return new Promise((resolve, reject) => {
+      let completed = false
+      const finish = (error) => {
+        if (completed) return
+        completed = true
+        clearTimeout(timer)
+        if (error) reject(error)
+        else resolve(true)
+      }
+      const timer = setTimeout(() => {
+        finish(new Error('Timed out closing transfer handle'))
+      }, 5000)
+      try {
+        backend.close(handle, finish)
+      } catch (error) {
+        finish(error)
+      }
+    })
   }
 
   onSrcOpen = (err, sourceHandle) => {
@@ -294,14 +390,17 @@ class Transfer {
       return this.onError(err)
     }
     if (this.onDestroy) {
-      return
+      return this.closeTransferHandle(this.src, sourceHandle)
     }
     const { src } = this
     const th = this
 
     th.srcHandle = sourceHandle
 
-    src.fstat(th.srcHandle, this.tryStat)
+    src.fstat(
+      th.srcHandle,
+      this.trackTransferCallback(this.tryStat)
+    )
   }
 
   tryStat = (err, attrs) => {
@@ -311,12 +410,12 @@ class Transfer {
       if (src !== fs) {
         // Try stat() for sftp servers that may not support fstat() for
         // whatever reason
-        src.stat(srcPath, (err_, attrs_) => {
+        src.stat(srcPath, this.trackTransferCallback((err_, attrs_) => {
           if (err_) {
             return th.onError(err_)
           }
           this.tryStat(null, attrs_)
-        })
+        }))
         return
       }
       return th.onError(err)
@@ -336,13 +435,13 @@ class Transfer {
       dst.open(
         dstPath,
         this.startOffset > 0 ? 'r+' : 'w',
-        this.onDstOpen
+        this.trackTransferCallback(this.onDstOpen)
       )
     }
     if (this.startOffset <= 0) {
       return openDestination()
     }
-    dst.stat(dstPath, (statError, targetAttrs) => {
+    dst.stat(dstPath, this.trackTransferCallback((statError, targetAttrs) => {
       if (statError) return this.onError(statError)
       if (Number(targetAttrs?.size) !== this.startOffset) {
         const error = new Error('Transfer partial size no longer matches checkpoint')
@@ -350,7 +449,7 @@ class Transfer {
         return this.onError(error)
       }
       openDestination()
-    })
+    }))
   }
 
   onDstOpen = (err, destHandle) => {
@@ -359,7 +458,7 @@ class Transfer {
     }
 
     if (this.onDestroy) {
-      return
+      return this.closeTransferHandle(this.dst, destHandle)
     }
 
     let {
@@ -395,46 +494,47 @@ class Transfer {
         if (canCloseDst) ++left
         const finish = () => {
           if (--left === 0) {
-            if (err) th.onError(err)
-            else th.finishSuccessfulTransfer()
+            if (err) return th.onError(err)
+            return th.finishSuccessfulTransfer()
           }
         }
         if (left === 0) {
-          if (err) th.onError(err)
-          else th.finishSuccessfulTransfer()
-          return
+          if (err) return th.onError(err)
+          return th.finishSuccessfulTransfer()
         }
         if (canCloseSrc) {
-          src.close(th.srcHandle, () => {
+          src.close(th.srcHandle, th.trackTransferCallback(() => {
             th.srcHandle = undefined
-            finish()
-          })
+            return finish()
+          }))
         }
         if (canCloseDst) {
-          dst.close(th.dstHandle, () => {
+          dst.close(th.dstHandle, th.trackTransferCallback(() => {
             th.dstHandle = undefined
-            finish()
-          })
+            return finish()
+          }))
         }
       }
 
       // Preserve source file mtime on destination after successful transfer
       if (!err && th.srcMtime && canCloseDst) {
         const mtimeDate = new Date(th.srcMtime)
-        dst.futimes(th.dstHandle, mtimeDate, mtimeDate, (utimesErr) => {
-          if (utimesErr) {
-            // Try utimes() as fallback for sftp servers that may not support futimes()
-            dst.utimes(dstPath, mtimeDate, mtimeDate, () => {
-              closeHandles()
-            })
-            return
-          }
-          closeHandles()
-        })
+        dst.futimes(th.dstHandle, mtimeDate, mtimeDate,
+          th.trackTransferCallback((utimesErr) => {
+            if (utimesErr) {
+              // Try utimes() as fallback for sftp servers that may not support futimes()
+              dst.utimes(dstPath, mtimeDate, mtimeDate,
+                th.trackTransferCallback(() => {
+                  return closeHandles()
+                }))
+              return
+            }
+            return closeHandles()
+          }))
         return
       }
 
-      closeHandles()
+      return closeHandles()
     }
 
     if (fsize <= 0 || total === fsize) {
@@ -458,17 +558,20 @@ class Transfer {
     }
 
     if (mode !== undefined) {
-      dst.fchmod(th.dstHandle, mode, function tryAgain (err) {
+      const tryAgain = function (err) {
         if (err) {
           // Try chmod() for sftp servers that may not support fchmod() for
           // whatever reason
-          dst.chmod(dstPath, mode, function (err_) {
-            tryAgain()
-          })
+          dst.chmod(dstPath, mode, th.trackTransferCallback(tryAgain))
           return
         }
         startReads()
-      })
+      }
+      dst.fchmod(
+        th.dstHandle,
+        mode,
+        th.trackTransferCallback(tryAgain)
+      )
     } else {
       startReads()
     }
@@ -609,6 +712,7 @@ class Transfer {
   }
 
   cleanupAfterStop = () => {
+    if (this.atomicFinalizationUncertain) return Promise.resolve()
     return this.shouldKeepPartial()
       ? Promise.resolve()
       : this.cleanupAtomicUpload()
@@ -653,40 +757,46 @@ class Transfer {
   }
 
   kill = () => {
+    const pending = []
     if (this.src && this.srcHandle && this.src.close) {
-      this.src.close(this.srcHandle, log.error)
+      pending.push(this.closeTransferHandle(this.src, this.srcHandle))
     }
     if (this.dst && this.dstHandle && this.dst.close) {
-      this.dst.close(this.dstHandle, log.error)
+      pending.push(this.closeTransferHandle(this.dst, this.dstHandle))
     }
     this.src = null
     this.dst = null
     this.srcHandle = null
     this.dstHandle = null
+    return Promise.all(pending).then(() => true)
+  }
+
+  waitForTransferQuiescence = async (deadline = Date.now() + 5000) => {
+    while (this.inFlightOperations > 0) {
+      if (Date.now() >= deadline) {
+        throw new Error('Timed out waiting for transfer I/O to stop')
+      }
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
   }
 
   cancel = () => {
     this.stopReason = 'cancelled'
-    this.destroy()
+    return this.destroy()
   }
 
   interrupt = () => {
     this.stopReason = 'interrupted'
-    this.destroy()
+    return this.destroy()
   }
 
   destroy = () => {
+    if (this.destroyPromise) return this.destroyPromise
     if (!this.stopReason) {
       this.stopReason = this.keepPartial ? 'interrupted' : 'cancelled'
     }
     this.onDestroy = true
-    this.scpTransfer && this.scpTransfer.destroy && this.scpTransfer.destroy()
-    this.cleanupAfterStop()
-    setTimeout(this.kill, 200)
-    if (this.ws) {
-      this.ws.close()
-      this.ws = null
-    }
+    const scpStop = this.scpTransfer?.destroy?.()
     if (this.timers) {
       Object.keys(this.timers).forEach(k => {
         clearTimeout(this.timers[k])
@@ -694,6 +804,80 @@ class Transfer {
       })
       this.timers = null
     }
+    this.destroyPromise = (async () => {
+      const deadline = Date.now() + this.terminalJoinTimeout
+      let primaryError
+      try {
+        await waitForTerminalPromise(
+          scpStop,
+          deadline,
+          'Timed out waiting for SCP transfer to stop'
+        )
+      } catch (error) {
+        primaryError = error
+      }
+      if (this.successfulFinalizationPromise) {
+        try {
+          await waitForTerminalPromise(
+            this.successfulFinalizationPromise,
+            deadline,
+            'Timed out waiting for transfer successful finalization'
+          )
+        } catch (error) {
+          if (this.atomicUpload && !this.atomicUploadCommitted) {
+            this.atomicFinalizationUncertain = true
+          }
+          primaryError ||= error
+        }
+      }
+      const closeDelay = Math.min(200, Math.max(0, deadline - Date.now()))
+      if (closeDelay > 0) {
+        await new Promise(resolve => setTimeout(resolve, closeDelay))
+      }
+      try {
+        await this.waitForTransferQuiescence(deadline)
+      } catch (error) {
+        primaryError ||= error
+      }
+      let cleanupPromise
+      try {
+        cleanupPromise = this.cleanupAfterStop()
+      } catch (error) {
+        primaryError ||= error
+      }
+      if (cleanupPromise) {
+        try {
+          await waitForTerminalPromise(
+            cleanupPromise,
+            deadline,
+            'Timed out cleaning up a stopped transfer'
+          )
+        } catch (error) {
+          primaryError ||= error
+        }
+      }
+      let killPromise
+      try {
+        killPromise = this.kill()
+      } catch (error) {
+        primaryError ||= error
+      }
+      if (killPromise) {
+        try {
+          await waitForTerminalPromise(
+            killPromise,
+            deadline,
+            'Timed out closing stopped transfer handles'
+          )
+        } catch (error) {
+          primaryError ||= error
+        }
+      }
+      primaryError ||= this.transferIoError
+      if (primaryError) throw primaryError
+      return true
+    })()
+    return this.destroyPromise
   }
 
   // end

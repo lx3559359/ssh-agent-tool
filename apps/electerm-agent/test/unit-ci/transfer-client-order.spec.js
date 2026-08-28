@@ -20,3 +20,29 @@ test('subscribes to terminal transfer events before starting the transfer', () =
     'terminal event subscriptions must be installed before a zero-byte transfer can finish'
   )
 })
+
+test('terminal transfer controls wait for server quiescence acknowledgement', () => {
+  const client = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/common/transfer.js'
+  ), 'utf8')
+  const server = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/app/server/transfer.js'
+  ), 'utf8')
+  const sessionServer = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/app/server/session-server.js'
+  ), 'utf8')
+
+  assert.match(client, /controlId/)
+  assert.match(client, /transfer:control:/)
+  assert.match(client, /return acknowledgement/)
+  assert.match(client, /const transferControlAckTimeout = 15000/)
+  assert.match(sessionServer, /transfer:control:/)
+  assert.match(sessionServer, /await Promise\.resolve\(/)
+  assert.match(server, /destroyPromise/)
+  assert.match(server, /terminalJoinTimeout = 10000/)
+  assert.match(server, /waitForTerminalPromise/)
+  assert.match(server, /closeDelay = Math\.min\(200/)
+})
