@@ -10,6 +10,13 @@ const moduleUrl = pathToFileURL(
 
 const fixedDisplacementToken = 'f'.repeat(24)
 
+function rootRecoveryProof (kind, sourcePath, backupPath, proof) {
+  return {
+    action: Object.freeze({ kind, sourcePath, backupPath }),
+    ...proof
+  }
+}
+
 test('SFTP backup and trash paths stay beside the source with timestamps', async () => {
   const { buildSftpSafetyPath } = await import(moduleUrl)
   const now = new Date('2026-07-12T08:09:10Z')
@@ -28,6 +35,9 @@ test('one-click SFTP backup copies files and folders without changing originals'
   const { backupRemoteFiles } = await import(moduleUrl)
   const calls = []
   const sftp = {
+    lstat: async () => {
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+    },
     mkdir: async value => calls.push(['mkdir', value]),
     cp: async (from, to) => calls.push(['cp', from, to])
   }
@@ -63,6 +73,9 @@ test('SFTP backup publishes each recovery record before starting the next copy',
   const events = []
   const secondCopyError = new Error('second copy failed')
   const sftp = {
+    lstat: async () => {
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+    },
     mkdir: async value => events.push(['mkdir', value]),
     cp: async (from, to) => {
       events.push(['cp', from, to])
@@ -100,9 +113,10 @@ test('SFTP backup chooses a collision-free path when the timestamped name alread
   const calls = []
   const existing = '/var/www/.shellpilot-backups/app-20260712-080910'
   const sftp = {
-    stat: async value => {
+    stat: async () => { throw new Error('backup missing checks must not follow symlinks') },
+    lstat: async value => {
       if (value === existing) return { isDirectory: true }
-      throw new Error('No such file')
+      throw Object.assign(new Error('No such file'), { code: 'ENOENT' })
     },
     mkdir: async value => calls.push(['mkdir', value]),
     cp: async (from, to) => calls.push(['cp', from, to])
@@ -122,10 +136,97 @@ test('SFTP backup chooses a collision-free path when the timestamped name alread
   assert.equal(records[0].backupPath, `${existing}-2`)
 })
 
+test('SFTP backup accepts only authoritative missing and existing-directory codes', async t => {
+  const { backupRemoteFiles } = await import(moduleUrl)
+  const file = { path: '/etc', name: 'app.conf', isDirectory: false }
+  const now = new Date('2026-07-12T08:09:10Z')
+
+  for (const code of ['ENOENT', 'SFTP_NO_SUCH_FILE', 2]) {
+    await t.test(`missing ${code}`, async () => {
+      const calls = []
+      const sftp = {
+        stat: async () => { throw new Error('stat must not be called') },
+        lstat: async path => {
+          calls.push(['lstat', path])
+          throw Object.assign(new Error('missing'), { code })
+        },
+        mkdir: async path => calls.push(['mkdir', path]),
+        cp: async (source, target) => calls.push(['cp', source, target])
+      }
+      const records = await backupRemoteFiles({ sftp, files: [file], now })
+      assert.equal(records.length, 1)
+      assert.equal(calls[0][0], 'lstat')
+      assert.equal(calls.at(-1)[0], 'cp')
+    })
+  }
+
+  for (const error of [
+    Object.assign(new Error('No such file'), { code: 'EACCES' }),
+    Object.assign(new Error('failure'), {
+      code: 'PRIVILEGED_FILE_OPERATION_FAILED'
+    }),
+    new Error('No such file')
+  ]) {
+    await t.test(`fails closed for ${error.code || 'generic error'}`, async () => {
+      let copies = 0
+      await assert.rejects(backupRemoteFiles({
+        sftp: {
+          lstat: async () => { throw error },
+          mkdir: async () => {},
+          cp: async () => { copies += 1 }
+        },
+        files: [file],
+        now
+      }), cause => cause === error)
+      assert.equal(copies, 0)
+    })
+  }
+
+  await t.test('existing backup directory uses only EEXIST', async () => {
+    const copied = []
+    await backupRemoteFiles({
+      sftp: {
+        lstat: async () => {
+          throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+        },
+        mkdir: async () => {
+          throw Object.assign(new Error('exists'), { code: 'EEXIST' })
+        },
+        cp: async (source, target) => copied.push([source, target])
+      },
+      files: [file],
+      now
+    })
+    assert.equal(copied.length, 1)
+  })
+
+  await t.test('generic mkdir failure is not an existing directory', async () => {
+    const failure = Object.assign(new Error('Failure'), {
+      code: 'PRIVILEGED_FILE_OPERATION_FAILED'
+    })
+    let copies = 0
+    await assert.rejects(backupRemoteFiles({
+      sftp: {
+        lstat: async () => {
+          throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+        },
+        mkdir: async () => { throw failure },
+        cp: async () => { copies += 1 }
+      },
+      files: [file],
+      now
+    }), cause => cause === failure)
+    assert.equal(copies, 0)
+  })
+})
+
 test('SFTP safe delete moves entries to trash instead of removing them', async () => {
   const { softDeleteRemoteFiles } = await import(moduleUrl)
   const calls = []
   const sftp = {
+    lstat: async () => {
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+    },
     mkdir: async value => calls.push(['mkdir', value]),
     rename: async (from, to) => calls.push(['rename', from, to]),
     rm: async value => calls.push(['rm', value]),
@@ -224,7 +325,9 @@ test('root recovery installs a deleted target with exact proof and no path-only 
       backupPath,
       status: 'available'
     },
-    recoveryProof: { source: absent, backup },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: absent, backup
+    }),
     describeEntry: async path => path === sourcePath ? absent : backup,
     persistRecord: async value => value
   })
@@ -240,6 +343,43 @@ test('root recovery installs a deleted target with exact proof and no path-only 
     expectedSource: backup,
     expectedTarget: absent
   })
+})
+
+test('root recovery helper rejects an action changed after proof binding without mutation', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const source = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  let mutations = 0
+  await assert.rejects(restoreSftpRecoveryRecord({
+    sftp: {
+      copyEntry: async () => { mutations += 1 },
+      removeEntry: async () => { mutations += 1 }
+    },
+    record: {
+      id: 'root-action-helper',
+      kind: 'trash',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    describeEntry: async () => source,
+    recoveryProof: {
+      action: Object.freeze({ kind: 'backup', sourcePath, backupPath }),
+      source,
+      backup: { ...source, inode: '42' }
+    }
+  }), error => error?.code === 'REMOTE_FILE_RECOVERY_BINDING_MISMATCH')
+  assert.equal(mutations, 0)
 })
 
 test('root recovery proof never downgrades to path-only mutation methods', async () => {
@@ -285,7 +425,9 @@ test('root recovery proof never downgrades to path-only mutation methods', async
       backupPath,
       status: 'available'
     },
-    recoveryProof: { source: absent, backup },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: absent, backup
+    }),
     describeEntry: async path => path === sourcePath ? absent : backup
   }).catch(error => error)
 
@@ -338,7 +480,9 @@ test('root trash recovery consumes the backup with an exact remove after install
       backupPath,
       status: 'available'
     },
-    recoveryProof: { source: absent, backup },
+    recoveryProof: rootRecoveryProof('trash', sourcePath, backupPath, {
+      source: absent, backup
+    }),
     describeEntry: async () => backup,
     persistRecord: async value => value
   })
@@ -401,7 +545,9 @@ test('root trash recovery records both copies when exact backup removal fails', 
       backupPath,
       status: 'available'
     },
-    recoveryProof: { source: absent, backup },
+    recoveryProof: rootRecoveryProof('trash', sourcePath, backupPath, {
+      source: absent, backup
+    }),
     describeEntry: async path => path === sourcePath ? installed : changedBackup,
     persistRecord: async value => {
       persisted.push(structuredClone(value))
@@ -474,7 +620,9 @@ test('root trash recovery does not claim success if installed content changes du
       backupPath,
       status: 'available'
     },
-    recoveryProof: { source: sourceAbsent, backup },
+    recoveryProof: rootRecoveryProof('trash', sourcePath, backupPath, {
+      source: sourceAbsent, backup
+    }),
     describeEntry: async path => {
       if (path === sourcePath) {
         sourceReads += 1
@@ -560,7 +708,9 @@ test('root recovery displaces an existing target with proof-bound copy and exact
     },
     now: new Date('2026-07-12T09:10:11Z'),
     generateDisplacementToken: () => fixedDisplacementToken,
-    recoveryProof: { source: current, backup },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: current, backup
+    }),
     describeEntry: async (path, options) => {
       if (path === sourcePath) return sourceRemoved ? sourceAbsent : current
       if (path === displacedPath) {
@@ -677,7 +827,9 @@ test('root recovery skips an occupied displacement candidate and persists an abs
       status: 'available'
     },
     now: new Date('2026-07-12T09:10:11Z'),
-    recoveryProof: { source: descriptor, backup },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: descriptor, backup
+    }),
     generateDisplacementToken: () => tokens.shift(),
     describeEntry: async path => {
       if (path === sourcePath) return sourceRemoved ? sourceAbsent : descriptor
@@ -778,7 +930,9 @@ test('root recovery replans when an absent displacement candidate races to occup
       status: 'available'
     },
     now: new Date('2026-07-12T09:10:11Z'),
-    recoveryProof: { source: descriptor, backup },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: descriptor, backup
+    }),
     generateDisplacementToken: () => tokens.shift(),
     describeEntry: async path => {
       if (path === sourcePath) return sourceRemoved ? absent(path, '/root') : descriptor
@@ -840,7 +994,9 @@ test('root recovery fails closed after sixteen occupied displacement candidates'
       status: 'available'
     },
     now: new Date('2026-07-12T09:10:11Z'),
-    recoveryProof: { source: descriptor, backup },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: descriptor, backup
+    }),
     generateDisplacementToken: () => tokens.shift(),
     describeEntry: async path => path === sourcePath ? descriptor : foreign,
     persistRecord: async value => {
@@ -917,7 +1073,9 @@ test('root recovery persists a displaced target replacement before source remova
     },
     now: new Date('2026-07-12T09:10:11Z'),
     generateDisplacementToken: () => fixedDisplacementToken,
-    recoveryProof: { source: original, backup },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: original, backup
+    }),
     describeEntry: async path => path === displacedPath
       ? displacedAbsent
       : path === sourcePath ? original : backup,
@@ -992,7 +1150,9 @@ test('root recovery does not remove the source after the displaced copy is repla
     },
     now: new Date('2026-07-12T09:10:11Z'),
     generateDisplacementToken: () => fixedDisplacementToken,
-    recoveryProof: { source: original, backup },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: original, backup
+    }),
     describeEntry: async path => {
       if (path === displacedPath) {
         displacedReads += 1
@@ -1084,7 +1244,9 @@ test('root recovery stops before install if the displaced copy changes during ex
     },
     now: new Date('2026-07-12T09:10:11Z'),
     generateDisplacementToken: () => fixedDisplacementToken,
-    recoveryProof: { source: original, backup },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: original, backup
+    }),
     describeEntry: async path => {
       if (path === displacedPath) {
         displacedReads += 1
@@ -1165,7 +1327,9 @@ test('root recovery persists duplicated uncertainty when exact source removal fa
     },
     now: new Date('2026-07-12T09:10:11Z'),
     generateDisplacementToken: () => fixedDisplacementToken,
-    recoveryProof: { source: original, backup },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: original, backup
+    }),
     describeEntry: async path => {
       if (path === displacedPath) return copied ? displaced : displacedAbsent
       if (path === sourcePath) return changedSource
@@ -1246,7 +1410,9 @@ test('root recovery records an unavailable observation instead of stale expected
     },
     now: new Date('2026-07-12T09:10:11Z'),
     generateDisplacementToken: () => fixedDisplacementToken,
-    recoveryProof: { source: original, backup },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: original, backup
+    }),
     describeEntry: async path => {
       if (path === displacedPath) return copied ? displaced : displacedAbsent
       if (path === sourcePath) throw observeFailure
@@ -1268,6 +1434,224 @@ test('root recovery records an unavailable observation instead of stale expected
       message: 'cannot observe source'
     }
   )
+})
+
+test('root recovery persists copy-completed uncertainty when post-copy observation fails', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const now = new Date('2026-07-12T09:10:11Z')
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const displacedPath =
+    `/root/.shellpilot-before-restore/app.conf-20260712-091011-${fixedDisplacementToken}`
+  const original = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const backup = Object.freeze({ ...original, inode: '42' })
+  const copied = Object.freeze({ ...original, inode: '43' })
+  const displacedAbsent = Object.freeze({
+    type: 'bound-absent',
+    path: displacedPath,
+    basename: displacedPath.slice(displacedPath.lastIndexOf('/') + 1),
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: '/root/.shellpilot-before-restore',
+      device: '1',
+      inode: '11',
+      mode: 0o700,
+      uid: 0,
+      gid: 0
+    })
+  })
+  const observationFailure = Object.assign(
+    new Error('post-copy observation disconnected'),
+    { code: 'ECONNRESET' }
+  )
+  const persisted = []
+  let copyCompleted = false
+  let removes = 0
+  const error = await restoreSftpRecoveryRecord({
+    sftp: {
+      mkdir: async () => {},
+      copyEntry: async () => {
+        copyCompleted = true
+        return copied
+      },
+      removeEntry: async () => { removes += 1 }
+    },
+    record: {
+      id: 'root-post-copy-observation',
+      kind: 'backup',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    now,
+    generateDisplacementToken: () => fixedDisplacementToken,
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: original, backup
+    }),
+    describeEntry: async (path, options) => {
+      if (path === sourcePath) return original
+      if (path === displacedPath && options?.allowAbsent && !copyCompleted) {
+        return displacedAbsent
+      }
+      if (path === displacedPath && copyCompleted) throw observationFailure
+      return backup
+    },
+    persistRecord: async value => {
+      const stored = { ...value, persistedRevision: persisted.length + 1 }
+      persisted.push(structuredClone(stored))
+      return stored
+    }
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_UNCERTAIN')
+  assert.equal(error.primaryCause, observationFailure)
+  assert.equal(error.recoveryRecord.status, 'uncertain')
+  assert.equal(error.recoveryRecord.displacement.status, 'duplicated')
+  assert.equal(error.recoveryRecord.displacement.copyCompleted, true)
+  assert.equal(error.recoveryRecord.displacement.sourceExactRemoved, false)
+  assert.deepEqual(error.recoveryRecord.displacement.sourceDescriptor, original)
+  assert.deepEqual(error.recoveryRecord.displacement.descriptor, copied)
+  assert.deepEqual(error.recoveryRecord.displacement.observationFailure, {
+    phase: 'post-copy-describe',
+    code: 'ECONNRESET',
+    message: 'post-copy observation disconnected'
+  })
+  assert.deepEqual(error.recoveryRecord, persisted.at(-1))
+  assert.equal(removes, 0)
+  assert.doesNotThrow(() => JSON.stringify(error.recoveryRecord))
+})
+
+test('root recovery persists exact-remove facts when peer observation fails', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const now = new Date('2026-07-12T09:10:11Z')
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const displacedPath =
+    `/root/.shellpilot-before-restore/app.conf-20260712-091011-${fixedDisplacementToken}`
+  const original = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const backup = Object.freeze({ ...original, inode: '42' })
+  const displaced = Object.freeze({ ...original, inode: '43' })
+  const absent = path => Object.freeze({
+    type: 'bound-absent',
+    path,
+    basename: path.slice(path.lastIndexOf('/') + 1),
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: path.slice(0, path.lastIndexOf('/')),
+      device: '1',
+      inode: '11',
+      mode: 0o700,
+      uid: 0,
+      gid: 0
+    })
+  })
+  const observationFailure = Object.assign(
+    new Error('post-remove peer observation disconnected'),
+    { code: 'ECONNRESET' }
+  )
+  let copied = false
+  let sourceRemoved = false
+  const persisted = []
+  const error = await restoreSftpRecoveryRecord({
+    sftp: {
+      mkdir: async () => {},
+      copyEntry: async () => {
+        copied = true
+        return displaced
+      },
+      removeEntry: async path => {
+        assert.equal(path, sourcePath)
+        sourceRemoved = true
+        return 1
+      }
+    },
+    record: {
+      id: 'root-post-remove-observation',
+      kind: 'backup',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    now,
+    generateDisplacementToken: () => fixedDisplacementToken,
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: original, backup
+    }),
+    describeEntry: async (path, options) => {
+      if (path === sourcePath) return sourceRemoved ? absent(sourcePath) : original
+      if (path === displacedPath && options?.allowAbsent && !copied) {
+        return absent(displacedPath)
+      }
+      if (path === displacedPath && copied && sourceRemoved) {
+        throw observationFailure
+      }
+      if (path === displacedPath) return displaced
+      return backup
+    },
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_UNCERTAIN')
+  assert.equal(error.primaryCause, observationFailure)
+  assert.equal(error.recoveryRecord.status, 'uncertain')
+  assert.equal(error.recoveryRecord.displacement.status, 'displaced')
+  assert.equal(error.recoveryRecord.displacement.copyCompleted, true)
+  assert.equal(error.recoveryRecord.displacement.sourceExactRemoved, true)
+  assert.deepEqual(error.recoveryRecord.displacement.sourceDescriptor, original)
+  assert.deepEqual(error.recoveryRecord.displacement.descriptor, displaced)
+  assert.deepEqual(error.recoveryRecord.displacement.observationFailure, {
+    phase: 'post-exact-remove-peer-describe',
+    code: 'ECONNRESET',
+    message: 'post-remove peer observation disconnected'
+  })
+  assert.deepEqual(error.recoveryRecord, persisted.at(-1))
+  assert.doesNotThrow(() => JSON.stringify(error.recoveryRecord))
+
+  const retryCalls = []
+  const retry = await restoreSftpRecoveryRecord({
+    sftp: {
+      copyEntry: async (source, target, options) => {
+        retryCalls.push([source, target, options])
+        return { ...backup, inode: '44' }
+      },
+      removeEntry: async () => { throw new Error('retry must not redisplace') }
+    },
+    record: error.recoveryRecord,
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: absent(sourcePath),
+      backup,
+      displaced
+    }),
+    describeEntry: async path => path === sourcePath
+      ? absent(sourcePath)
+      : displaced,
+    persistRecord: async value => value
+  })
+  assert.equal(retry.status, 'restored')
+  assert.equal(retryCalls.length, 1)
+  assert.equal(retryCalls[0][0], backupPath)
+  assert.equal(retryCalls[0][1], sourcePath)
 })
 
 test('root recovery retry preserves both sides of a duplicated displacement and converges', async () => {
@@ -1343,7 +1727,9 @@ test('root recovery retry preserves both sides of a duplicated displacement and 
     record,
     now: new Date('2026-07-13T09:10:11Z'),
     generateDisplacementToken: () => fixedDisplacementToken,
-    recoveryProof: { source: changed, backup, displaced: original },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: changed, backup, displaced: original
+    }),
     describeEntry: async path => {
       if (path === oldDisplacedPath) return original
       if (path === newDisplacedPath) return copied ? newDisplaced : newAbsent
@@ -1440,7 +1826,9 @@ test('root recovery fails closed on an uncommitted planned displacement without 
         status: 'planned'
       }
     },
-    recoveryProof: { source: absent, backup, displaced },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: absent, backup, displaced
+    }),
     describeEntry: async path => {
       if (path === displacedPath) return displaced
       if (path === backupPath) return backup
@@ -1506,7 +1894,9 @@ test('root recovery persists exact descriptors when backup proof changes during 
       backupPath,
       status: 'available'
     },
-    recoveryProof: { source: absent, backup },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: absent, backup
+    }),
     describeEntry: async path => path === backupPath ? changedBackup : absent,
     persistRecord: async value => {
       persisted.push(structuredClone(value))
@@ -1610,7 +2000,9 @@ test('root recovery keeps a raced creator and records proof-bound compensation f
     },
     now: new Date('2026-07-12T09:10:11Z'),
     generateDisplacementToken: () => fixedDisplacementToken,
-    recoveryProof: { source: original, backup },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: original, backup
+    }),
     describeEntry: async path => {
       if (path === displacedPath) return displacedCreated ? displaced : displacedAbsent
       if (path === sourcePath) return sourceRemoved ? sourceAbsent : original
@@ -1713,7 +2105,9 @@ test('root recovery records both sides when compensation copy exact-remove fails
     },
     now: new Date('2026-07-12T09:10:11Z'),
     generateDisplacementToken: () => fixedDisplacementToken,
-    recoveryProof: { source: original, backup },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: original, backup
+    }),
     describeEntry: async path => {
       if (path === displacedPath) {
         if (!displacedCreated) return displacedAbsent
@@ -1815,7 +2209,9 @@ test('root recovery does not claim compensation if its target changes during exa
     },
     now: new Date('2026-07-12T09:10:11Z'),
     generateDisplacementToken: () => fixedDisplacementToken,
-    recoveryProof: { source: original, backup },
+    recoveryProof: rootRecoveryProof('backup', sourcePath, backupPath, {
+      source: original, backup
+    }),
     describeEntry: async path => {
       if (path === displacedPath) {
         return displacedRemoved

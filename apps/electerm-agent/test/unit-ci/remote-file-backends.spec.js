@@ -5,6 +5,8 @@ const { importModule } = require('./helpers/import-esm')
 
 const backendsModule =
   'src/client/components/sftp/remote-file-backends.js'
+const sftpSafetyModule =
+  'src/client/components/sftp/sftp-safety.js'
 
 function sha256 (value) {
   return createHash('sha256').update(value).digest('hex')
@@ -244,6 +246,8 @@ function createBackendHarness (options = {}) {
     assert.equal(typeof protocol?.buildCommand, 'function')
     requests.push(request)
     const args = request.args
+    const injectedFailure = options.failPrivilegedRequest?.(request)
+    if (injectedFailure) throw injectedFailure
     if (request.operation === 'stage-handshake') {
       if (options.badHandshake) throw new Error('handshake rejected')
       const response = sha256(`${args.challenge}:root`)
@@ -1237,6 +1241,87 @@ test('native backend preserves the original SFTP object identity', async () => {
   assert.equal(backend.backend, sftp)
   assert.equal(await backend.release(), true)
   assert.throws(() => createNativeSftpFileBackend(), /SFTP|sftp/)
+})
+
+test('backup helper works through the real privileged facade and fails closed on lstat errors', async t => {
+  const { backupRemoteFiles } = await importModule(sftpSafetyModule)
+  const now = new Date('2026-07-12T08:09:10Z')
+  const sourcePath = '/root/app.conf'
+  const baseBackupPath =
+    '/root/.shellpilot-backups/app.conf-20260712-080910'
+  const harness = createBackendHarness({
+    privilegedTree: {
+      '/': { type: 'directory', mode: 0o755, uid: 0, gid: 0 },
+      '/root': { type: 'directory', mode: 0o700, uid: 0, gid: 0 },
+      [sourcePath]: {
+        type: 'file', mode: 0o600, uid: 0, gid: 0, content: 'safe'
+      }
+    }
+  })
+  const backend = await createRootBackend(harness)
+  try {
+    const first = await backupRemoteFiles({
+      sftp: backend.sftp,
+      files: [{ path: '/root', name: 'app.conf', isDirectory: false }],
+      now
+    })
+    const second = await backupRemoteFiles({
+      sftp: backend.sftp,
+      files: [{ path: '/root', name: 'app.conf', isDirectory: false }],
+      now
+    })
+    assert.equal(first[0].backupPath, baseBackupPath)
+    assert.equal(second[0].backupPath, `${baseBackupPath}-2`)
+    assert.equal(
+      harness.privilegedNodes.get(baseBackupPath).content.toString(),
+      'safe'
+    )
+    assert.equal(
+      harness.privilegedNodes.get(`${baseBackupPath}-2`).content.toString(),
+      'safe'
+    )
+  } finally {
+    await backend.release()
+  }
+
+  for (const failure of [
+    Object.assign(new Error('permission denied'), { code: 'EACCES' }),
+    Object.assign(new Error('transport disconnected'), {
+      code: 'ECONNRESET'
+    }),
+    Object.assign(new Error('generic privileged failure'), {
+      code: 'PRIVILEGED_FILE_OPERATION_FAILED'
+    })
+  ]) {
+    await t.test(failure.code, async () => {
+      const failedHarness = createBackendHarness({
+        privilegedTree: {
+          '/': { type: 'directory', mode: 0o755, uid: 0, gid: 0 },
+          '/root': { type: 'directory', mode: 0o700, uid: 0, gid: 0 },
+          [sourcePath]: {
+            type: 'file', mode: 0o600, uid: 0, gid: 0, content: 'safe'
+          }
+        },
+        failPrivilegedRequest: request => (
+          request.operation === 'lstat' &&
+          request.args.path === baseBackupPath
+            ? failure
+            : null
+        )
+      })
+      const failedBackend = await createRootBackend(failedHarness)
+      try {
+        await assert.rejects(backupRemoteFiles({
+          sftp: failedBackend.sftp,
+          files: [{ path: '/root', name: 'app.conf', isDirectory: false }],
+          now
+        }), error => error === failure)
+        assert.equal(failedHarness.privilegedNodes.has(baseBackupPath), false)
+      } finally {
+        await failedBackend.release()
+      }
+    })
+  }
 })
 
 test('privileged backend validates root identity and bounded lease and releases failed creation', async () => {

@@ -1,15 +1,10 @@
 import { createPtyTaskToken } from '../operations-toolkit/runtime/pty-task-protocol.js'
 import { createPrivilegedFileRequest } from './privileged-file-protocol.js'
+import { isAuthoritativeRemoteMissingError } from './remote-file-errors.js'
 
 const stageBaseName = '.shellpilot-privileged-transfers'
 const safeObjectName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const canonicalDigest = /^[a-f0-9]{64}$/
-const missingCodes = new Set([2, 'ENOENT', 'SFTP_NO_SUCH_FILE'])
-
-function isMissingError (error) {
-  return missingCodes.has(error?.code)
-}
-
 function canonicalRemotePath (value, label) {
   const path = String(value ?? '')
   if (!path.startsWith('/') || path.includes('\u0000') ||
@@ -64,7 +59,7 @@ async function lstatOrNull (sftp, path) {
   try {
     return await sftp.lstat(path)
   } catch (error) {
-    if (isMissingError(error)) return null
+    if (isAuthoritativeRemoteMissingError(error)) return null
     throw error
   }
 }

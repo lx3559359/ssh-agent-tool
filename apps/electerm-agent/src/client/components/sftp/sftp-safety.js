@@ -5,6 +5,10 @@ import {
   assertSameSftpSafetyEndpoint,
   canonicalizeSftpSafetyEndpoint
 } from './sftp-safety-endpoint.js'
+import {
+  isAuthoritativeRemoteExistsError,
+  isAuthoritativeRemoteMissingError
+} from './remote-file-errors.js'
 
 const safetyDirMap = {
   backup: '.shellpilot-backups',
@@ -17,6 +21,7 @@ const recoveryDescriptorFields = [
 ]
 
 const displacementCandidateBudget = 16
+const recoveryActionKinds = new Set(['backup', 'trash', 'rename', 'chmod'])
 
 function sameJsonValue (left, right) {
   return JSON.stringify(left) === JSON.stringify(right)
@@ -89,16 +94,93 @@ function requireRootRuntimeIdentity (identity) {
   }
 }
 
+function requireCanonicalRecoveryPath (value, label) {
+  const path = String(value ?? '')
+  if (!path.startsWith('/') || path === '/' || path.includes('\u0000') ||
+    path.includes('\\') ||
+    path.endsWith('/') || path.includes('//') ||
+    path.slice(1).split('/').some(part => !part || part === '.' || part === '..')) {
+    throw new Error(`root SFTP 恢复 ${label} 不是规范绝对路径。`)
+  }
+  return path
+}
+
+function recoveryActionFromRecord (record) {
+  const kind = String(record?.kind || '')
+  if (!recoveryActionKinds.has(kind)) {
+    throw new Error('root SFTP 恢复 action kind 无效。')
+  }
+  const sourcePath = requireCanonicalRecoveryPath(
+    record.sourcePath,
+    'sourcePath'
+  )
+  if (kind === 'chmod') {
+    if (!Number.isInteger(record.previousMode) || record.previousMode < 0 ||
+      record.previousMode > 0o7777 ||
+      (record.backupPath !== undefined && record.backupPath !== '')) {
+      throw new Error('root SFTP chmod 恢复 action 无效。')
+    }
+    return freezeSafetyRecoveryBinding({
+      kind,
+      sourcePath,
+      previousMode: record.previousMode
+    })
+  }
+  if (record.previousMode !== undefined) {
+    throw new Error('root SFTP 非 chmod 恢复 action 不允许 previousMode。')
+  }
+  const backupPath = requireCanonicalRecoveryPath(
+    record.backupPath,
+    'backupPath'
+  )
+  if (backupPath === sourcePath) {
+    throw new Error('root SFTP 恢复 sourcePath 与 backupPath 不得相同。')
+  }
+  return freezeSafetyRecoveryBinding({ kind, sourcePath, backupPath })
+}
+
+function requireBoundRecoveryAction (action) {
+  if (!action || typeof action !== 'object' || Array.isArray(action)) {
+    throw new Error('root SFTP 恢复 action 缺失。')
+  }
+  const expectedKeys = action.kind === 'chmod'
+    ? ['kind', 'sourcePath', 'previousMode']
+    : ['kind', 'sourcePath', 'backupPath']
+  if (Object.keys(action).length !== expectedKeys.length ||
+    expectedKeys.some(key => !Object.hasOwn(action, key))) {
+    throw new Error('root SFTP 恢复 action schema 无效。')
+  }
+  return recoveryActionFromRecord(action)
+}
+
+function assertRecoveryActionMatchesRecord (record, action) {
+  const boundAction = requireBoundRecoveryAction(action)
+  const outerAction = recoveryActionFromRecord(record)
+  if (!sameJsonValue(boundAction, outerAction)) {
+    throw createSftpRecoveryBindingMismatchError()
+  }
+  return boundAction
+}
+
+function recordWithBoundRecoveryAction (record, action) {
+  const result = { ...record }
+  delete result.backupPath
+  delete result.previousMode
+  return { ...result, ...action }
+}
+
 export function createRootSftpRecoveryBinding ({
+  record,
   endpoint,
   runtimeIdentity,
   source,
   backup
 }) {
   return freezeSafetyRecoveryBinding({
-    version: 1,
+    version: 2,
     endpoint: canonicalizeSftpSafetyEndpoint(endpoint),
     runtimeIdentity: requireRootRuntimeIdentity(runtimeIdentity),
+    action: recoveryActionFromRecord(record),
     source: requireRootRecoveryDescriptor(source, '源文件'),
     backup: requireRootRecoveryDescriptor(backup, '备份文件')
   })
@@ -127,16 +209,20 @@ export function assertSftpRecoveryIdentityProvenance (record) {
     }
     return Object.freeze({ requiresRoot: false })
   }
-  if (binding.version !== 1) throw createSftpRecoveryUnboundError()
+  if (binding.version !== 2 || !binding.action) {
+    throw createSftpRecoveryUnboundError()
+  }
   try {
     const boundIdentity = requireRootRuntimeIdentity(binding.runtimeIdentity)
     const normalizedOuter = requireRootRuntimeIdentity(outerIdentity)
+    const action = assertRecoveryActionMatchesRecord(record, binding.action)
     if (!sameJsonValue(boundIdentity, normalizedOuter)) {
       throw createSftpRecoveryBindingMismatchError()
     }
     return Object.freeze({
       requiresRoot: true,
-      runtimeIdentity: freezeSafetyRecoveryBinding(boundIdentity)
+      runtimeIdentity: freezeSafetyRecoveryBinding(boundIdentity),
+      action
     })
   } catch (cause) {
     if (cause?.code === 'REMOTE_FILE_RECOVERY_BINDING_MISMATCH') throw cause
@@ -153,9 +239,10 @@ export function assertRootSftpRecoveryBinding (record, {
   expectedSource
 }) {
   const binding = record?.metadata?.recoveryBinding
-  if (!binding || binding.version !== 1) {
+  if (!binding || binding.version !== 2 || !binding.action) {
     throw createSftpRecoveryUnboundError()
   }
+  const action = assertRecoveryActionMatchesRecord(record, binding.action)
   const originalBoundSource = requireRootRecoveryDescriptor(
     binding.source,
     '原始源文件'
@@ -164,6 +251,7 @@ export function assertRootSftpRecoveryBinding (record, {
     ? requireRootRecoveryDescriptor(expectedSource, '恢复中源文件')
     : originalBoundSource
   const current = createRootSftpRecoveryBinding({
+    record: action,
     endpoint,
     runtimeIdentity,
     source: source?.type === 'bound-absent' ? boundExpectedSource : source,
@@ -178,11 +266,12 @@ export function assertRootSftpRecoveryBinding (record, {
     ? Boolean(requireBoundAbsentRecoveryState(source, sourcePath))
     : sameJsonValue(boundExpectedSource, current.source)
   if (!sameJsonValue(binding.runtimeIdentity, current.runtimeIdentity) ||
+    !sameJsonValue(binding.action, current.action) ||
     !sourceMatches ||
     !sameJsonValue(binding.backup, current.backup)) {
     throw createSftpRecoveryBindingMismatchError()
   }
-  return true
+  return action
 }
 
 export function createSftpRecoveryUncertainError ({
@@ -257,8 +346,7 @@ async function ensureRemoteDir (sftp, path, createdDirs) {
   try {
     await sftp.mkdir(path)
   } catch (err) {
-    const message = String(err?.message || err)
-    if (!/exist|failure|already/i.test(message)) throw err
+    if (!isAuthoritativeRemoteExistsError(err)) throw err
   }
   createdDirs?.add(path)
 }
@@ -270,16 +358,15 @@ export function buildSftpSafetyPath (sourcePath, kind = 'backup', now = new Date
 }
 
 async function findAvailableSftpSafetyPath (sftp, basePath) {
-  if (typeof sftp?.stat !== 'function') return basePath
+  if (typeof sftp?.lstat !== 'function') {
+    throw new Error('SFTP 安全路径检查缺少 lstat。')
+  }
   for (let index = 1; index <= 1000; index++) {
     const candidate = index === 1 ? basePath : `${basePath}-${index}`
     try {
-      await sftp.stat(candidate)
+      await sftp.lstat(candidate)
     } catch (err) {
-      const message = String(err?.message || err)
-      if (/no such|not found|does not exist|enoent/i.test(message)) {
-        return candidate
-      }
+      if (isAuthoritativeRemoteMissingError(err)) return candidate
       throw err
     }
   }
@@ -414,6 +501,18 @@ export async function restoreSftpRecoveryRecord ({
   recoveryProof,
   generateDisplacementToken = generateSecureDisplacementToken
 }) {
+  if (recoveryProof) {
+    try {
+      const action = assertRecoveryActionMatchesRecord(
+        record,
+        recoveryProof.action
+      )
+      record = recordWithBoundRecoveryAction(record, action)
+    } catch (cause) {
+      if (cause?.code === 'REMOTE_FILE_RECOVERY_BINDING_MISMATCH') throw cause
+      throw createSftpRecoveryBindingMismatchError(cause)
+    }
+  }
   if (record.kind === 'chmod') {
     await sftp.chmod(record.sourcePath, record.previousMode)
     return {
@@ -464,6 +563,7 @@ export async function restoreSftpRecoveryRecord ({
       }
       return {
         descriptor,
+        cause: error,
         observationFailure: freezeSafetyRecoveryBinding({
           path,
           code: String(error?.code || ''),
@@ -493,7 +593,50 @@ export async function restoreSftpRecoveryRecord ({
       primaryCause,
       displacedPath: displacement?.path,
       displacedDescriptor: displacement?.descriptor,
-      record: uncertainRecord
+      record: currentRecord
+    })
+  }
+  const persistMutationObservationFailure = async ({
+    primaryCause,
+    phase,
+    displacementStatus,
+    displacedDescriptor,
+    sourceDescriptor,
+    sourceState,
+    copyCompleted,
+    sourceExactRemoved
+  }) => {
+    const observationFailure = freezeSafetyRecoveryBinding({
+      phase,
+      code: String(primaryCause?.code || ''),
+      message: primaryCause?.message || String(primaryCause)
+    })
+    displacement = {
+      ...displacement,
+      descriptor: displacedDescriptor || null,
+      sourceDescriptor: sourceDescriptor || null,
+      ...(sourceState ? { sourceState } : {}),
+      copyCompleted: copyCompleted === true,
+      sourceExactRemoved: sourceExactRemoved === true,
+      observationFailure,
+      status: displacementStatus,
+      uncertainAt: now.toISOString()
+    }
+    const uncertainRecord = {
+      ...currentRecord,
+      status: 'uncertain',
+      rollbackStatus: 'uncertain',
+      displacement,
+      error: observationFailure.message,
+      failedAt: now.toISOString()
+    }
+    await persist(uncertainRecord)
+    return createSftpRecoveryUncertainError({
+      message: 'SFTP 恢复远端修改已完成，但完成态观察失败。',
+      primaryCause,
+      displacedPath,
+      displacedDescriptor,
+      record: currentRecord
     })
   }
   if (proofBound && displacement?.status === 'duplicated') {
@@ -683,7 +826,23 @@ export async function restoreSftpRecoveryRecord ({
             throw primaryCause
           }
         }
-        displacedDescriptor = await describeEntry(displacedPath)
+        try {
+          displacedDescriptor = await describeEntry(displacedPath)
+        } catch (primaryCause) {
+          const knownDisplacedDescriptor = copiedDescriptor &&
+            typeof copiedDescriptor === 'object'
+            ? copiedDescriptor
+            : null
+          throw await persistMutationObservationFailure({
+            primaryCause,
+            phase: 'post-copy-describe',
+            displacementStatus: 'duplicated',
+            displacedDescriptor: knownDisplacedDescriptor,
+            sourceDescriptor: recoveryProof.source,
+            copyCompleted: true,
+            sourceExactRemoved: false
+          })
+        }
         if (copiedDescriptor && typeof copiedDescriptor === 'object' &&
           !sameJsonValue(copiedDescriptor, displacedDescriptor)) {
           const mismatch = new Error(
@@ -712,6 +871,8 @@ export async function restoreSftpRecoveryRecord ({
             ...displacement,
             descriptor: displacedDescriptor,
             sourceDescriptor,
+            copyCompleted: true,
+            sourceExactRemoved: false,
             ...(sourceObservation.observationFailure
               ? { sourceObservationFailure: sourceObservation.observationFailure }
               : {}),
@@ -737,10 +898,22 @@ export async function restoreSftpRecoveryRecord ({
           uncertainError.sourceDescriptor = sourceDescriptor
           throw uncertainError
         }
-        restoreTargetState = await describeEntry(
-          record.sourcePath,
-          { allowAbsent: true }
-        )
+        try {
+          restoreTargetState = await describeEntry(
+            record.sourcePath,
+            { allowAbsent: true }
+          )
+        } catch (primaryCause) {
+          throw await persistMutationObservationFailure({
+            primaryCause,
+            phase: 'post-exact-remove-source-describe',
+            displacementStatus: 'displaced',
+            displacedDescriptor,
+            sourceDescriptor: recoveryProof.source,
+            copyCompleted: true,
+            sourceExactRemoved: true
+          })
+        }
         const finalDisplacedObservation = await observeRecoveryDescriptor(
           displacedPath
         )
@@ -748,6 +921,18 @@ export async function restoreSftpRecoveryRecord ({
           finalDisplacedObservation.descriptor
         if (!finalDisplacedDescriptor ||
           !sameJsonValue(displacedDescriptor, finalDisplacedDescriptor)) {
+          if (finalDisplacedObservation.observationFailure) {
+            throw await persistMutationObservationFailure({
+              primaryCause: finalDisplacedObservation.cause,
+              phase: 'post-exact-remove-peer-describe',
+              displacementStatus: 'displaced',
+              displacedDescriptor,
+              sourceDescriptor: recoveryProof.source,
+              sourceState: restoreTargetState,
+              copyCompleted: true,
+              sourceExactRemoved: true
+            })
+          }
           displacement = {
             ...displacement,
             descriptor: displacedDescriptor,
@@ -776,6 +961,9 @@ export async function restoreSftpRecoveryRecord ({
       displacement = {
         ...displacement,
         descriptor: displacedDescriptor,
+        ...(proofBound
+          ? { copyCompleted: true, sourceExactRemoved: true }
+          : {}),
         ...(restoreTargetState
           ? { sourceState: restoreTargetState }
           : {}),

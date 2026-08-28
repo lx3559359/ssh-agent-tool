@@ -3499,7 +3499,12 @@ test('root multi-editor mixed cancellation retries the failed id and discards on
 
   assert.equal(error, firstFailure)
   assert.deepEqual(Array.from(error.operationIds), [operationIds[1]])
-  assert.deepEqual(Array.from(error.cancelErrors), [firstFailure, retryFailure])
+  assert.equal(error.cancelErrors.includes(error), false)
+  assert.deepEqual(Array.from(error.cancelErrors, value => value.message), [
+    retryFailure.message
+  ])
+  assert.equal(error.cancelErrors.every(Object.isFrozen), true)
+  assert.doesNotThrow(() => JSON.stringify(error))
   assert.equal(attempts.get(operationIds[0]), 1)
   assert.equal(attempts.get(operationIds[1]), 2)
   assert.deepEqual(discarded, [operationIds[0]])
@@ -3626,7 +3631,12 @@ test('root safe delete mixed cancellation retries authoritatively and keeps fail
 
   assert.equal(error, firstFailure)
   assert.deepEqual(Array.from(error.operationIds), [operationIds[1]])
-  assert.deepEqual(Array.from(error.cancelErrors), [firstFailure, retryFailure])
+  assert.equal(error.cancelErrors.includes(error), false)
+  assert.deepEqual(Array.from(error.cancelErrors, value => value.message), [
+    retryFailure.message
+  ])
+  assert.equal(error.cancelErrors.every(Object.isFrozen), true)
+  assert.doesNotThrow(() => JSON.stringify(error))
   assert.equal(attempts.get(operationIds[0]), 1)
   assert.equal(attempts.get(operationIds[1]), 2)
   assert.deepEqual(discarded, [operationIds[0]])
@@ -3786,6 +3796,11 @@ test('quick delete backup and restore use one exact-bound root backend and persi
     JSON.stringify(rootRuntimeIdentity)
   )
   assert.deepEqual(storedRecords[0].metadata.recoveryBinding.endpoint, endpoint)
+  assert.deepEqual(storedRecords[0].metadata.recoveryBinding.action, {
+    kind: 'backup',
+    sourcePath: '/root/app.conf',
+    backupPath: '/root/.shellpilot-backups/app.conf'
+  })
   assert.deepEqual(storedRecords[0].metadata.recoveryBinding.source, descriptors['/root/app.conf'])
   assert.deepEqual(storedRecords[0].metadata.recoveryBinding.backup, descriptors['/root/.shellpilot-backups/app.conf'])
   assert.equal(Object.isFrozen(storedRecords[0].metadata.recoveryBinding), true)
@@ -4076,6 +4091,9 @@ test('root batch backup persists an exact record before a later copy fails', asy
   let copyCount = 0
   const laterFailure = new Error('second copy failed')
   const backend = {
+    lstat: async () => {
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+    },
     mkdir: async () => {},
     cp: async () => {
       copyCount += 1
@@ -4218,6 +4236,11 @@ test('recovery identity provenance rejects missing or altered outer root metadat
     sessionType: 'sftp'
   }
   const binding = recoveryHelpers.createRootSftpRecoveryBinding({
+    record: {
+      kind: 'backup',
+      sourcePath: '/root/app.conf',
+      backupPath: '/root/.shellpilot-backups/app.conf'
+    },
     endpoint,
     runtimeIdentity: rootRuntimeIdentity,
     source: descriptor,
@@ -4291,6 +4314,148 @@ test('recovery identity provenance rejects missing or altered outer root metadat
   }
 })
 
+test('root recovery binding freezes the canonical action and rejects outer action changes before acquisition', async () => {
+  const recoveryHelpers = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-safety.js'
+  )).href)
+  const descriptor = {
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  }
+  const endpoint = {
+    host: 'example.com',
+    port: 22,
+    username: 'hik',
+    connectionUsername: 'hik',
+    tabId: 'tab-1',
+    pid: 'sftp:tab-1:terminal-uuid',
+    terminalId: 'terminal-uuid',
+    terminalPid: 'terminal-uuid',
+    sshTerminalPid: 4242,
+    sshSessionGeneration: 'generation-1',
+    hostKeyFingerprint: 'SHA256:one',
+    sessionType: 'sftp'
+  }
+  const baseRecord = {
+    id: 'root-action-bound',
+    source: 'sftp',
+    kind: 'backup',
+    status: 'available',
+    sourcePath: '/root/app.conf',
+    backupPath: '/root/.shellpilot-backups/app.conf'
+  }
+  const binding = recoveryHelpers.createRootSftpRecoveryBinding({
+    record: baseRecord,
+    endpoint,
+    runtimeIdentity: rootRuntimeIdentity,
+    source: descriptor,
+    backup: { ...descriptor, inode: '42' }
+  })
+  assert.equal(binding.version, 2)
+  assert.equal(Object.isFrozen(binding.action), true)
+  assert.deepEqual(binding.action, {
+    kind: 'backup',
+    sourcePath: '/root/app.conf',
+    backupPath: '/root/.shellpilot-backups/app.conf'
+  })
+  const chmodBinding = recoveryHelpers.createRootSftpRecoveryBinding({
+    record: {
+      kind: 'chmod',
+      sourcePath: '/root/app.conf',
+      previousMode: 0o640
+    },
+    endpoint,
+    runtimeIdentity: rootRuntimeIdentity,
+    source: descriptor,
+    backup: { ...descriptor, inode: '42' }
+  })
+  assert.deepEqual(chmodBinding.action, {
+    kind: 'chmod',
+    sourcePath: '/root/app.conf',
+    previousMode: 0o640
+  })
+  for (const record of [
+    { kind: 'chmod', sourcePath: '/root/app.conf', previousMode: 0o10000 },
+    {
+      kind: 'chmod',
+      sourcePath: '/root/app.conf',
+      backupPath: '/root/other',
+      previousMode: 0o640
+    },
+    {
+      kind: 'backup',
+      sourcePath: '/root\\app.conf',
+      backupPath: '/root/.shellpilot-backups/app.conf'
+    },
+    { kind: 'unknown', sourcePath: '/root/app.conf' }
+  ]) {
+    assert.throws(() => recoveryHelpers.createRootSftpRecoveryBinding({
+      record,
+      endpoint,
+      runtimeIdentity: rootRuntimeIdentity,
+      source: descriptor,
+      backup: { ...descriptor, inode: '42' }
+    }))
+  }
+
+  const variants = [
+    ['kind', { kind: 'trash' }],
+    ['hard-link path', { sourcePath: '/root/app-hardlink.conf' }],
+    ['backup path', { backupPath: '/root/.shellpilot-backups/other.conf' }],
+    ['non-canonical source', { sourcePath: '/root/dir/../app.conf' }],
+    ['backup mode injection', { previousMode: 0o600 }]
+  ]
+  for (const [label, mutation] of variants) {
+    const record = {
+      ...baseRecord,
+      ...mutation,
+      metadata: {
+        runtimeIdentity: rootRuntimeIdentity,
+        recoveryBinding: binding
+      }
+    }
+    let acquisitions = 0
+    const entry = {
+      props: { isFtp: false, tab: { id: 'tab-1', host: 'example.com' } },
+      withRemoteFileOperation: async () => { acquisitions += 1 }
+    }
+    installSftpEntryClassField(entry, 'restoreSftpRecord', {
+      ...recoveryHelpers,
+      matchesSafetyOperationEndpoint: () => true,
+      message: { warning: () => {} }
+    })
+    await assert.rejects(
+      entry.restoreSftpRecord(record),
+      error => error?.code === 'REMOTE_FILE_RECOVERY_BINDING_MISMATCH',
+      label
+    )
+    assert.equal(acquisitions, 0, label)
+  }
+
+  const legacyRecord = {
+    ...baseRecord,
+    metadata: {
+      runtimeIdentity: rootRuntimeIdentity,
+      recoveryBinding: {
+        ...binding,
+        version: 1,
+        action: undefined
+      }
+    }
+  }
+  assert.throws(
+    () => recoveryHelpers.assertSftpRecoveryIdentityProvenance(legacyRecord),
+    error => error?.code === 'REMOTE_FILE_RECOVERY_UNBOUND'
+  )
+})
+
 test('modern root restore rejects changed endpoint or file proof before remote restore', async () => {
   const recoveryHelpers = await import(pathToFileURL(path.resolve(
     __dirname,
@@ -4335,6 +4500,11 @@ test('modern root restore rejects changed endpoint or file proof before remote r
     metadata: {
       runtimeIdentity: rootRuntimeIdentity,
       recoveryBinding: recoveryHelpers.createRootSftpRecoveryBinding({
+        record: {
+          kind: 'backup',
+          sourcePath: '/root/app.conf',
+          backupPath: '/root/.shellpilot-backups/app.conf'
+        },
         endpoint,
         runtimeIdentity: rootRuntimeIdentity,
         source,
@@ -4446,6 +4616,11 @@ test('modern root restore accepts an authoritatively absent original target', as
     metadata: {
       runtimeIdentity: rootRuntimeIdentity,
       recoveryBinding: recoveryHelpers.createRootSftpRecoveryBinding({
+        record: {
+          kind: 'backup',
+          sourcePath: absent.path,
+          backupPath: '/root/.shellpilot-backups/app.conf'
+        },
         endpoint,
         runtimeIdentity: rootRuntimeIdentity,
         source: original,
@@ -4485,7 +4660,11 @@ test('modern root restore accepts an authoritatively absent original target', as
       restoreCalls += 1
       assert.equal(
         JSON.stringify(recoveryProof),
-        JSON.stringify({ source: absent, backup })
+        JSON.stringify({
+          action: record.metadata.recoveryBinding.action,
+          source: absent,
+          backup
+        })
       )
       return { ...value, status: 'restored', rollbackStatus: 'completed' }
     },
@@ -4575,7 +4754,15 @@ test('modern root restore passes a raced planned displacement to bounded replann
     metadata: {
       runtimeIdentity: rootRuntimeIdentity,
       recoveryBinding: recoveryHelpers.createRootSftpRecoveryBinding({
-        endpoint, runtimeIdentity: rootRuntimeIdentity, source: original, backup
+        record: {
+          kind: 'backup',
+          sourcePath: '/root/app.conf',
+          backupPath: '/root/.shellpilot-backups/app.conf'
+        },
+        endpoint,
+        runtimeIdentity: rootRuntimeIdentity,
+        source: original,
+        backup
       })
     }
   }
@@ -4689,7 +4876,15 @@ test('modern root restore persists displaced proof replacement as uncertain', as
     metadata: {
       runtimeIdentity: rootRuntimeIdentity,
       recoveryBinding: recoveryHelpers.createRootSftpRecoveryBinding({
-        endpoint, runtimeIdentity: rootRuntimeIdentity, source: original, backup
+        record: {
+          kind: 'backup',
+          sourcePath: absent.path,
+          backupPath: '/root/.shellpilot-backups/app.conf'
+        },
+        endpoint,
+        runtimeIdentity: rootRuntimeIdentity,
+        source: original,
+        backup
       })
     }
   }
@@ -4812,7 +5007,15 @@ test('modern root restore accepts an exact persisted displacement proof', async 
     metadata: {
       runtimeIdentity: rootRuntimeIdentity,
       recoveryBinding: recoveryHelpers.createRootSftpRecoveryBinding({
-        endpoint, runtimeIdentity: rootRuntimeIdentity, source: original, backup
+        record: {
+          kind: 'backup',
+          sourcePath: absent.path,
+          backupPath: '/root/.shellpilot-backups/app.conf'
+        },
+        endpoint,
+        runtimeIdentity: rootRuntimeIdentity,
+        source: original,
+        backup
       })
     }
   }
@@ -4845,7 +5048,10 @@ test('modern root restore accepts an exact persisted displacement proof', async 
     restoreSftpRecoveryRecord: async ({ record: value, recoveryProof }) => {
       restoreCalls += 1
       assert.equal(JSON.stringify(recoveryProof), JSON.stringify({
-        source: absent, backup, displaced
+        action: record.metadata.recoveryBinding.action,
+        source: absent,
+        backup,
+        displaced
       }))
       return { ...value, status: 'restored', rollbackStatus: 'completed' }
     },

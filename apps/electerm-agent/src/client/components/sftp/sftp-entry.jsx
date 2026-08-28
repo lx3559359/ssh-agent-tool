@@ -40,6 +40,7 @@ import getProxy from '../../common/get-proxy'
 import { createTerm } from '../terminal/terminal-apis'
 import message from '../common/message'
 import * as ls from '../../common/safe-local-storage'
+import { isAuthoritativeRemoteMissingError } from './remote-file-errors.js'
 import {
   assertRootSftpRecoveryBinding,
   assertSftpRecoveryIdentityProvenance,
@@ -163,12 +164,6 @@ function createRemoteFileRecoveryPersistenceError (cause, evidence = {}) {
   error.cause = cause
   if (evidence.records) error.recoveryRecords = evidence.records
   return error
-}
-
-function isAuthoritativeRemoteMissingError (error) {
-  return error?.code === 'ENOENT' ||
-    error?.code === 'SFTP_NO_SUCH_FILE' ||
-    error?.code === 2
 }
 
 function isRemoteDirectory (stat) {
@@ -1083,15 +1078,29 @@ export default class Sftp extends Component {
       const prepared = []
       const boundOperationIds = new Set()
       const terminalOperationIds = new Set()
+      const projectCancellationError = (error, operationId, phase) => (
+        Object.freeze({
+          name: String(error?.name || 'Error'),
+          code: String(error?.code || ''),
+          message: error?.message || String(error),
+          ...(operationId ? { operationId } : {}),
+          ...(phase ? { phase } : {})
+        })
+      )
       const preserveCancellationFailure = (primaryError, cancelError) => {
         if (Object.isExtensible(primaryError)) {
           primaryError.cancelFailureHandled = true
           primaryError.cancellationFailure = cancelError
           primaryError.operationIds = cancelError.operationIds || []
-          primaryError.cancelErrors = [
-            primaryError,
-            ...(cancelError.cancelErrors || [cancelError])
-          ]
+          primaryError.cancelErrors = Object.freeze(
+            (cancelError.cancelErrors || [cancelError])
+              .filter(error => error !== primaryError)
+              .map(error => projectCancellationError(
+                error,
+                error?.operationId,
+                error?.phase || 'cancel'
+              ))
+          )
         }
         return primaryError
       }
@@ -1131,9 +1140,22 @@ export default class Sftp extends Component {
             firstError.operationIds = unresolved.map(value => (
               value.item.operation.id
             ))
-            firstError.cancelErrors = unresolved.flatMap(value => (
-              [value.firstError, value.retryError]
-            ))
+            firstError.cancelErrors = Object.freeze(unresolved.flatMap(value => (
+              [
+                ...(value.firstError === firstError
+                  ? []
+                  : [projectCancellationError(
+                      value.firstError,
+                      value.item.operation.id,
+                      'cancel'
+                    )]),
+                projectCancellationError(
+                  value.retryError,
+                  value.item.operation.id,
+                  'cancel-retry'
+                )
+              ]
+            )))
           }
           throw firstError
         }
@@ -1340,15 +1362,29 @@ export default class Sftp extends Component {
           settlementOwnsCapability: true
         }, async (backend, capability) => {
           const terminalOperationIds = new Set()
+          const projectCancellationError = (error, operationId, phase) => (
+            Object.freeze({
+              name: String(error?.name || 'Error'),
+              code: String(error?.code || ''),
+              message: error?.message || String(error),
+              ...(operationId ? { operationId } : {}),
+              ...(phase ? { phase } : {})
+            })
+          )
           const preserveCancellationFailure = (primaryError, cancelError) => {
             if (Object.isExtensible(primaryError)) {
               primaryError.cancelFailureHandled = true
               primaryError.cancellationFailure = cancelError
               primaryError.operationIds = cancelError.operationIds || []
-              primaryError.cancelErrors = [
-                primaryError,
-                ...(cancelError.cancelErrors || [cancelError])
-              ]
+              primaryError.cancelErrors = Object.freeze(
+                (cancelError.cancelErrors || [cancelError])
+                  .filter(error => error !== primaryError)
+                  .map(error => projectCancellationError(
+                    error,
+                    error?.operationId,
+                    error?.phase || 'cancel'
+                  ))
+              )
             }
             return primaryError
           }
@@ -1389,9 +1425,24 @@ export default class Sftp extends Component {
                 firstError.operationIds = unresolved.map(value => (
                   value.operation.id
                 ))
-                firstError.cancelErrors = unresolved.flatMap(value => (
-                  [value.firstError, value.retryError]
-                ))
+                firstError.cancelErrors = Object.freeze(
+                  unresolved.flatMap(value => (
+                    [
+                      ...(value.firstError === firstError
+                        ? []
+                        : [projectCancellationError(
+                            value.firstError,
+                            value.operation.id,
+                            'cancel'
+                          )]),
+                      projectCancellationError(
+                        value.retryError,
+                        value.operation.id,
+                        'cancel-retry'
+                      )
+                    ]
+                  ))
+                )
               }
               throw firstError
             }
@@ -1679,6 +1730,7 @@ export default class Sftp extends Component {
                   ...record.metadata,
                   runtimeIdentity,
                   recoveryBinding: createRootSftpRecoveryBinding({
+                    record,
                     endpoint,
                     runtimeIdentity,
                     source,
@@ -1821,8 +1873,9 @@ export default class Sftp extends Component {
             const expectedDisplaced = record.displacement?.status === 'planned'
               ? record.displacement.targetState
               : record.displacement?.descriptor
+            let boundAction
             try {
-              assertRootSftpRecoveryBinding(record, {
+              boundAction = assertRootSftpRecoveryBinding(record, {
                 endpoint: this.getSftpSafetyEndpoint(),
                 runtimeIdentity: currentIdentity,
                 source: sourceState,
@@ -1887,6 +1940,7 @@ export default class Sftp extends Component {
               })
             }
             recoveryProof = Object.freeze({
+              action: boundAction,
               source: sourceState,
               backup,
               ...(displacedSource ? { displaced: displacedSource } : {})

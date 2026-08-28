@@ -1,5 +1,6 @@
 import { assertTrustedOperationId } from '../../common/safety-transactions/operation-id.js'
 import { markSftpEditorStage } from './sftp-editor-permission-error.js'
+import { isAuthoritativeRemoteMissingError } from './remote-file-errors.js'
 
 const digestChunkBytes = 64 * 1024
 const maxManifestBytes = 256 * 1024
@@ -49,9 +50,7 @@ function assertTransactionArtifactPath (operationDir, artifactPath) {
 }
 
 function isMissingError (error) {
-  const code = error?.code
-  return code === 2 || code === 'ENOENT' || code === 'SFTP_NO_SUCH_FILE' ||
-    /no such|not found|does not exist/i.test(String(error?.message || error))
+  return isAuthoritativeRemoteMissingError(error)
 }
 
 function throwIfAborted (signal) {
