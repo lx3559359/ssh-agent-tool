@@ -83,6 +83,7 @@ import {
   bindSftpEntryRemoteSession,
   initializeRemoteFileGeneration,
   isCurrentRemoteFileGeneration,
+  quiesceSftpEntryTransfers,
   removeDeletedRemoteEntries,
   reconnectSftpEntryRemote,
   runSftpBackgroundTask,
@@ -128,6 +129,14 @@ import {
 import './sftp.styl'
 
 const e = window.translate
+const transferSafetyTerminalStates = new Set([
+  'rollback-available',
+  'completed',
+  'kept',
+  'restored',
+  'failed',
+  'cancelled'
+])
 
 function abortRemoteFileOperation (signal) {
   if (!signal?.aborted) return
@@ -204,6 +213,9 @@ export default class Sftp extends Component {
     this.retryCount = 0
     this.remoteFileOperationBackends = new Map()
     this.remoteFileOperationBackendPins = new Map()
+    this.transferSafetySessionPins = new Map()
+    this.transferSafetySessionAliases = new Map()
+    this.preparedTransferFileSessions = new Map()
     this.remoteFileOperationSequence = 0
     this.remoteFileOperations = new Set()
     this.remoteFileOperationSettlements = new Set()
@@ -212,8 +224,7 @@ export default class Sftp extends Component {
     initializeRemoteFileGeneration(this)
     this.sftpSafetyProgressHandlers = new Map()
     this.sftpSafetyAdapter = createSftpTransactionAdapter({
-      getSftp: operation => this.getRemoteFileOperationBackend(operation) ||
-        this.sftp,
+      getSftp: operation => this.getRemoteFileOperationBackend(operation),
       onProgress: (operation, progress) => {
         this.sftpSafetyProgressHandlers.get(operation.id)?.(progress)
       }
@@ -290,8 +301,31 @@ export default class Sftp extends Component {
   componentWillUnmount () {
     if (this.remoteFileUnmounted) return this.remoteFileDisposalPromise
     this.remoteFileUnmounted = true
-    const drain = drainRemoteFileGeneration(this)
-    this.remoteFileDisposalPromise = drain.promise
+    const transferSettlement = this.quiesceActiveTransfers?.()
+    const preparedDrain = transferSettlement
+      ? null
+      : drainRemoteFileGeneration(this)
+    this.remoteFileDisposalPromise = (async () => {
+      let primaryError
+      if (transferSettlement) {
+        try {
+          await transferSettlement
+        } catch (error) {
+          primaryError = error
+        }
+      }
+      const drain = preparedDrain || drainRemoteFileGeneration(this)
+      let result
+      try {
+        result = await drain.promise
+      } catch (error) {
+        primaryError ||= error
+      } finally {
+        this.clearTransferSafetySessionPins?.()
+      }
+      if (primaryError) throw primaryError
+      return result
+    })()
     refs.remove(this.id)
     this.sftpSafetyProgressHandlers.clear()
     this.sftpSafetyAdapter.discardAllPreparedProofs()
@@ -679,9 +713,86 @@ export default class Sftp extends Component {
 
   getRemoteFileOperationBackend = operation => {
     const id = operation?.id
-    return this.remoteFileOperationBackends.get(id) ||
+    return this.transferSafetySessionPins?.get(id)?.backend ||
+      this.remoteFileOperationBackends.get(id) ||
       this.remoteFileOperationBackendPins.get(id)
   }
+
+  assertTransferSafetySession = session => {
+    if (!session || session.capability !== this || !session.backend ||
+      session.sftp !== session.backend || !Object.isFrozen(session) ||
+      Object.getPrototypeOf(session) !== null) {
+      throw new Error('安全传输缺少当前受控文件会话，已阻止远程操作。')
+    }
+    return session
+  }
+
+  pinTransferSafetySession = (plan, session) => {
+    const pinned = this.assertTransferSafetySession(session)
+    const operationId = String(plan?.operationId || '')
+    if (!operationId) throw new Error('安全传输缺少 operation id')
+    const taskId = plan?.metadata?.taskId
+      ? String(plan.metadata.taskId)
+      : ''
+    const aliases = [...new Set([operationId, taskId].filter(Boolean))]
+    for (const id of aliases) {
+      const existing = this.transferSafetySessionPins.get(id)
+      if (existing && existing !== pinned) {
+        throw new Error('安全传输会话已变更，已阻止跨后端操作。')
+      }
+    }
+    for (const id of aliases) {
+      this.transferSafetySessionPins.set(id, pinned)
+      this.remoteFileOperationBackends.set(id, pinned.backend)
+      this.remoteFileOperationBackendPins.set(id, pinned.backend)
+    }
+    this.transferSafetySessionAliases.set(operationId, aliases)
+    return pinned
+  }
+
+  assertTransferSafetySessionPin = (id, session) => {
+    const pinned = this.transferSafetySessionPins.get(String(id || ''))
+    if (!pinned || (session && pinned !== session)) {
+      throw new Error('安全传输会话绑定已失效，已阻止跨后端操作。')
+    }
+    return this.assertTransferSafetySession(pinned)
+  }
+
+  unpinTransferSafetySession = (id, session) => {
+    const operationId = String(id || '')
+    const aliases = this.transferSafetySessionAliases.get(operationId) ||
+      [operationId]
+    for (const alias of aliases) {
+      const pinned = this.transferSafetySessionPins.get(alias)
+      if (session && pinned && pinned !== session) continue
+      if (pinned) {
+        this.transferSafetySessionPins.delete(alias)
+        if (this.remoteFileOperationBackends.get(alias) === pinned.backend) {
+          this.remoteFileOperationBackends.delete(alias)
+        }
+        if (this.remoteFileOperationBackendPins.get(alias) === pinned.backend) {
+          this.remoteFileOperationBackendPins.delete(alias)
+        }
+      }
+    }
+    this.transferSafetySessionAliases.delete(operationId)
+  }
+
+  clearTransferSafetySessionPins = () => {
+    for (const [id, session] of this.transferSafetySessionPins) {
+      if (this.remoteFileOperationBackends.get(id) === session.backend) {
+        this.remoteFileOperationBackends.delete(id)
+      }
+      if (this.remoteFileOperationBackendPins.get(id) === session.backend) {
+        this.remoteFileOperationBackendPins.delete(id)
+      }
+    }
+    this.transferSafetySessionPins.clear()
+    this.transferSafetySessionAliases.clear()
+    this.preparedTransferFileSessions.clear()
+  }
+
+  quiesceActiveTransfers = () => quiesceSftpEntryTransfers(this)
 
   rollbackSafetyOperation = async id => {
     const operation = await this.assertSftpSafetyOperationEndpoint(id)
@@ -851,7 +962,8 @@ export default class Sftp extends Component {
     }
   }
 
-  prepareTransferSafetyOperation = async (plan) => {
+  prepareTransferSafetyOperation = async (plan, session) => {
+    const pinnedSession = this.pinTransferSafetySession(plan, session)
     const request = buildSideEffectSafetyRequest({
       id: plan.operationId,
       source: 'sftp',
@@ -873,40 +985,77 @@ export default class Sftp extends Component {
         sftpSafetyTransaction: true,
         fileTransferSafety: true,
         transferBatch: plan.transfer.batchId || '',
-        traceId: plan.metadata?.traceId
+        traceId: plan.metadata?.traceId,
+        runtimeIdentity: plan.metadata?.runtimeIdentity,
+        transferTaskId: plan.metadata?.taskId
       }
     })
-    const existing = await sftpSafetyStore.getOperation(request.id)
-    if (existing) {
-      await this.assertSftpSafetyOperationEndpoint(existing.id)
-      if (existing.effectKey !== request.effectKey) {
-        throw new Error('同一传输标识已绑定其他远程目标，已阻止覆盖恢复点')
+    try {
+      const existing = await sftpSafetyStore.getOperation(request.id)
+      if (existing) {
+        await this.assertSftpSafetyOperationEndpoint(existing.id)
+        if (existing.effectKey !== request.effectKey) {
+          throw new Error('同一传输标识已绑定其他远程目标，已阻止覆盖恢复点')
+        }
+        return existing
       }
-      return existing
+      return await this.sftpSafetyRunner.prepare(request)
+    } catch (error) {
+      this.unpinTransferSafetySession(request.id, pinnedSession)
+      throw error
     }
-    return this.sftpSafetyRunner.prepare(request)
   }
 
-  beginTransferSafetyOperation = async (id, options = {}) => {
+  beginTransferSafetyOperation = async (id, options = {}, session) => {
+    this.assertTransferSafetySessionPin(id, session)
     await this.assertSftpSafetyOperationEndpoint(id)
-    return this.sftpSafetyRunner.beginExternalExecution(id, {
-      ...options,
-      confirmed: true
-    })
+    try {
+      return await this.sftpSafetyRunner.beginExternalExecution(id, {
+        ...options,
+        confirmed: true
+      })
+    } catch (error) {
+      try {
+        await this.sftpSafetyRunner.cancel(id)
+      } catch (cancelError) {
+        if (Object.isExtensible(error)) error.cancelError ||= cancelError
+      } finally {
+        this.unpinTransferSafetySession(id, session)
+      }
+      throw error
+    }
   }
 
-  getTransferSafetyOperation = async id => {
-    return this.assertSftpSafetyOperationEndpoint(id)
+  getTransferSafetyOperation = async (id, session) => {
+    this.assertTransferSafetySessionPin(id, session)
+    const operation = await this.assertSftpSafetyOperationEndpoint(id)
+    if (transferSafetyTerminalStates.has(operation.state)) {
+      this.unpinTransferSafetySession(id, session)
+    }
+    return operation
   }
 
-  completeTransferSafetyOperation = async (id, completion) => {
+  completeTransferSafetyOperation = async (id, completion, session) => {
+    this.assertTransferSafetySessionPin(id, session)
     await this.assertSftpSafetyOperationEndpoint(id)
-    return this.sftpSafetyRunner.completeExternalExecution(id, completion)
+    const result = await this.sftpSafetyRunner.completeExternalExecution(
+      id,
+      completion
+    )
+    if (transferSafetyTerminalStates.has(result?.state)) {
+      this.unpinTransferSafetySession(id, session)
+    }
+    return result
   }
 
-  cancelTransferSafetyOperation = async (id) => {
+  cancelTransferSafetyOperation = async (id, session) => {
+    this.assertTransferSafetySessionPin(id, session)
     await this.assertSftpSafetyOperationEndpoint(id)
-    return this.sftpSafetyRunner.cancel(id)
+    const result = await this.sftpSafetyRunner.cancel(id)
+    if (transferSafetyTerminalStates.has(result?.state)) {
+      this.unpinTransferSafetySession(id, session)
+    }
+    return result
   }
 
   runSftpSafetyOperation = async (spec, options = {}) => {
@@ -2385,6 +2534,63 @@ export default class Sftp extends Component {
     return capability
   }
 
+  reserveTransferFileSession = async ({ transferId, signal } = {}) => {
+    const id = String(transferId || '')
+    if (!id) throw new Error('预备 transfer file session 缺少 transfer id')
+    const existing = this.preparedTransferFileSessions.get(id)
+    if (existing) return existing.session
+    const acquired = await this.acquireTransferFileCapability({
+      transferId: id,
+      signal
+    })
+    let releasePromise
+    const session = Object.assign(Object.create(null), {
+      capability: this,
+      backend: acquired.backend,
+      sftp: acquired.backend,
+      runtimeIdentity: acquired.runtimeIdentity,
+      release: () => {
+        if (releasePromise) return releasePromise
+        releasePromise = Promise.resolve(acquired.release()).finally(() => {
+          const current = this.preparedTransferFileSessions.get(id)
+          if (current?.session === session) {
+            this.preparedTransferFileSessions.delete(id)
+          }
+        })
+        return releasePromise
+      }
+    })
+    Object.freeze(session)
+    const raced = this.preparedTransferFileSessions.get(id)
+    if (raced) {
+      await session.release()
+      return raced.session
+    }
+    this.preparedTransferFileSessions.set(id, Object.freeze({
+      session,
+      acquired
+    }))
+    return session
+  }
+
+  getPreparedTransferFileSession = transferId => {
+    return this.preparedTransferFileSessions.get(String(transferId || ''))
+      ?.session || null
+  }
+
+  claimPreparedTransferFileSession = transferId => {
+    const id = String(transferId || '')
+    const record = this.preparedTransferFileSessions.get(id)
+    if (!record) return null
+    this.preparedTransferFileSessions.delete(id)
+    return record.session
+  }
+
+  releasePreparedTransferFileSession = transferId => {
+    const session = this.getPreparedTransferFileSession(transferId)
+    return session ? session.release() : Promise.resolve(true)
+  }
+
   acquireTransferFileCapability = async ({ transferId, signal } = {}) => {
     const generation = this.remoteFileGeneration ||
       initializeRemoteFileGeneration(this)
@@ -3168,8 +3374,19 @@ export default class Sftp extends Component {
   handleReloadRemoteSftp = async () => {
     this.sftpSafetyProgressHandlers.clear()
     this.sftpSafetyAdapter.discardAllPreparedProofs()
+    let settlementError
+    const transferSettlement = this.quiesceActiveTransfers?.()
+    if (transferSettlement) {
+      try {
+        await transferSettlement
+      } catch (error) {
+        settlementError = error
+      }
+    }
     const drain = drainRemoteFileGeneration(this)
     await drain.promise
+    this.clearTransferSafetySessionPins?.()
+    if (settlementError) throw settlementError
     if (!activateRemoteFileGeneration(this, drain.generation)) return
     this.setState({
       remoteLoading: true,

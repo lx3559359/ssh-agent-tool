@@ -3171,6 +3171,116 @@ test('operation backend pin survives a generation map swap until explicit cleanu
   assert.equal(entry.getRemoteFileOperationBackend({ id: 'operation-1' }), undefined)
 })
 
+test('transfer safety prepare and verify stay on one pinned root session without native fallback', async () => {
+  const { buildSideEffectSafetyRequest } = await importTransactionModule(
+    'side-effect-model.js'
+  )
+  const rootBackend = Object.freeze({ name: 'root-transfer-backend' })
+  const nativeBackend = Object.freeze({ name: 'native-sftp' })
+  const backendReads = []
+  let preparedRequest
+  const entry = {
+    sftp: nativeBackend,
+    remoteFileOperationBackends: new Map(),
+    remoteFileOperationBackendPins: new Map(),
+    transferSafetySessionPins: new Map(),
+    transferSafetySessionAliases: new Map(),
+    getSftpSafetyEndpoint: () => ({
+      host: 'prod.example.com',
+      port: 22,
+      username: 'hik',
+      tabId: 'tab-root-transfer',
+      pid: 1001,
+      sshSessionGeneration: 'generation-root-transfer',
+      sshTerminalPid: 4242,
+      sessionType: 'sftp'
+    }),
+    assertSftpSafetyOperationEndpoint: async id => ({ id, state: 'executing' })
+  }
+  for (const method of [
+    'getRemoteFileOperationBackend',
+    'assertTransferSafetySession',
+    'pinTransferSafetySession',
+    'assertTransferSafetySessionPin',
+    'unpinTransferSafetySession',
+    'prepareTransferSafetyOperation',
+    'beginTransferSafetyOperation',
+    'completeTransferSafetyOperation'
+  ]) {
+    installSftpEntryClassField(entry, method, {
+      buildSideEffectSafetyRequest,
+      e: () => 'transfer',
+      sftpSafetyStore: { getOperation: async () => null },
+      transferSafetyTerminalStates: new Set([
+        'rollback-available',
+        'completed',
+        'kept',
+        'restored',
+        'failed',
+        'cancelled'
+      ])
+    })
+  }
+  entry.sftpSafetyRunner = {
+    async prepare (request) {
+      preparedRequest = request
+      backendReads.push(entry.getRemoteFileOperationBackend(request))
+      return { ...request, state: 'prepared' }
+    },
+    async beginExternalExecution (id) {
+      backendReads.push(entry.getRemoteFileOperationBackend({ id }))
+      return { id, state: 'executing', executionId: 'execution-root' }
+    },
+    async completeExternalExecution (id) {
+      backendReads.push(entry.getRemoteFileOperationBackend({ id }))
+      return { id, state: 'rollback-available' }
+    }
+  }
+  const session = Object.freeze(Object.assign(Object.create(null), {
+    capability: entry,
+    backend: rootBackend,
+    sftp: rootBackend,
+    runtimeIdentity: rootRuntimeIdentity
+  }))
+  const plan = {
+    operationId: 'transfer-root-pin',
+    action: 'upload',
+    paths: { target: '/root/app.conf' },
+    type: 'file',
+    expected: { target: { size: 11 } },
+    transfer: {
+      identity: 'transfer:root-pin',
+      direction: 'local-to-remote',
+      sourceIdentity: 'source:root-pin',
+      batchId: 'batch-root'
+    },
+    metadata: {
+      traceId: 'trace-root-transfer',
+      taskId: 'sftp-transfer-task-root',
+      runtimeIdentity: rootRuntimeIdentity
+    }
+  }
+
+  const operation = await entry.prepareTransferSafetyOperation(plan, session)
+  const execution = await entry.beginTransferSafetyOperation(
+    operation.id,
+    { transferIdentity: plan.transfer.identity },
+    session
+  )
+  await entry.completeTransferSafetyOperation(operation.id, {
+    executionId: execution.executionId
+  }, session)
+
+  assert.deepEqual(backendReads, [rootBackend, rootBackend, rootBackend])
+  assert.equal(backendReads.includes(nativeBackend), false)
+  assert.deepEqual(preparedRequest.metadata.runtimeIdentity,
+    rootRuntimeIdentity)
+  assert.equal(preparedRequest.metadata.transferTaskId,
+    'sftp-transfer-task-root')
+  assert.equal(preparedRequest.endpoint.username, 'hik')
+  assert.equal(entry.transferSafetySessionPins.size, 0)
+})
+
 test('SFTP mutation runner clears the operation backend while preserving the first failure', async () => {
   const rootBackend = { name: 'root' }
   const scope = createOperationScope({ backend: rootBackend })
@@ -5291,7 +5401,11 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
   }
   assert.match(
     entrySource,
-    /getSftp:\s*operation\s*=>\s*this\.getRemoteFileOperationBackend\(operation\)\s*\|\|\s*this\.sftp/
+    /getSftp:\s*operation\s*=>\s*this\.getRemoteFileOperationBackend\(operation\)/
+  )
+  assert.doesNotMatch(
+    entrySource,
+    /getSftp:\s*operation\s*=>[\s\S]{0,120}\|\|\s*this\.sftp/
   )
 })
 

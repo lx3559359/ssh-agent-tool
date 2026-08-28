@@ -155,6 +155,94 @@ export function activateRemoteFileGeneration (entry, generation) {
   return true
 }
 
+function preserveSettlementErrors (errors) {
+  const primaryError = errors[0]
+  if (primaryError && errors.length > 1 && Object.isExtensible(primaryError)) {
+    const existing = Array.isArray(primaryError.cleanupErrors)
+      ? primaryError.cleanupErrors
+      : []
+    primaryError.cleanupErrors = Object.freeze([
+      ...existing,
+      ...errors.slice(1)
+    ])
+  }
+  return primaryError
+}
+
+async function settleTransferOwner (owner) {
+  const errors = []
+  for (const work of [
+    () => owner.cancelAndWait?.(),
+    () => owner.transferSafety?.dispose?.(),
+    () => owner.releaseRemoteFileSession?.()
+  ]) {
+    try {
+      await work()
+    } catch (error) {
+      errors.push(error)
+    }
+  }
+  if (errors.length) throw preserveSettlementErrors(errors)
+  return true
+}
+
+export function quiesceSftpEntryTransfers (entry, options = {}) {
+  const generation = ensureRemoteFileGeneration(entry)
+  generation.accepting = false
+  const tabId = String(entry.props?.tab?.id || '')
+  const candidates = options.owners || [
+    ...(globalThis.window?.refsTransfers?.values?.() || [])
+  ]
+  const owners = [...new Set(candidates)].filter(owner => (
+    String(owner?.tabId ?? owner?.props?.transfer?.tabId ?? '') === tabId
+  ))
+  const hasSafetyOperations = Boolean(
+    entry.transferSafetySessionAliases?.size
+  )
+  const hasPreparedSessions = Boolean(
+    entry.preparedTransferFileSessions?.size
+  )
+  if (!owners.length && !hasSafetyOperations && !hasPreparedSessions) {
+    return null
+  }
+
+  return (async () => {
+    const errors = []
+    const ownerSettlements = await Promise.allSettled(
+      owners.map(settleTransferOwner)
+    )
+    for (const result of ownerSettlements) {
+      if (result.status === 'rejected') errors.push(result.reason)
+    }
+
+    const operationIds = [
+      ...(entry.transferSafetySessionAliases?.keys?.() || [])
+    ]
+    for (const operationId of operationIds) {
+      const session = entry.transferSafetySessionPins?.get(operationId)
+      try {
+        await entry.cancelTransferSafetyOperation?.(operationId, session)
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+
+    const preparedTransferIds = [
+      ...(entry.preparedTransferFileSessions?.keys?.() || [])
+    ]
+    for (const transferId of preparedTransferIds) {
+      try {
+        await entry.releasePreparedTransferFileSession?.(transferId)
+      } catch (error) {
+        errors.push(error)
+      }
+    }
+
+    if (errors.length) throw preserveSettlementErrors(errors)
+    return true
+  })()
+}
+
 export function drainRemoteFileGeneration (entry) {
   const generation = ensureRemoteFileGeneration(entry)
   generation.accepting = false

@@ -430,12 +430,13 @@ test('production handlers use abortable waits and prepare upload recovery before
   assert.match(commandEntrypoint, /runOptions\.signal\.addEventListener\('abort'/)
   assert.ok(
     upload.indexOf('verifyLocalTransferSource') <
-      upload.indexOf('prepareTransferSafetyOperation')
+      upload.indexOf('prepareMcpTransferSafetyOperation')
   )
   assert.ok(
-    upload.indexOf('prepareTransferSafetyOperation') <
+    upload.indexOf('prepareMcpTransferSafetyOperation') <
       upload.indexOf('addTransferList')
   )
+  assert.match(source, /prepareMcpTransferSafetyOperation[\s\S]*prepareTransferSafetyOperation/)
   assert.match(upload, /preparedTransfer\?\.transferId/)
   assert.match(upload, /Prepared SFTP recovery operation changed before queueing/)
   assert.match(upload, /safetyOperationId/)
@@ -451,7 +452,7 @@ test('production handlers use abortable waits and prepare upload recovery before
     source.indexOf('Store.prototype.mcpDescribeSftpUploadSource'),
     source.indexOf('Store.prototype.mcpCancelPreparedSftpUpload')
   )
-  assert.match(describeUpload, /assertMcpActive\(options\.signal[\s\S]*cancelTransferSafetyOperation/)
+  assert.match(describeUpload, /assertMcpActive\(options\.signal[\s\S]*cleanupPreparedSftpTransfer/)
 
   const riskSource = fs.readFileSync(
     path.join(aiRoot, 'agent-tool-risk-lifecycle.js'),

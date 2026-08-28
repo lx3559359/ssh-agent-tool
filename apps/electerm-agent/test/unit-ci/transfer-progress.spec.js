@@ -182,6 +182,49 @@ test('file transfer downloads large binary files with progress and byte integrit
   fs.rmSync(tmp, { recursive: true, force: true })
 })
 
+test('failed fchmod falls back to chmod once and then terminates on failure', async () => {
+  const tmp = makeTmpDir()
+  const localPath = path.join(tmp, 'mode-source.txt')
+  const remotePath = path.join(tmp, 'mode-target.txt')
+  fs.writeFileSync(localPath, 'mode-content')
+
+  let fchmodCalls = 0
+  let chmodCalls = 0
+  const sftp = {
+    ...createFsLikeSftp(),
+    fchmod (handle, mode, callback) {
+      fchmodCalls += 1
+      callback(new Error('fchmod unsupported'))
+    },
+    chmod (filePath, mode, callback) {
+      chmodCalls += 1
+      callback(new Error('chmod denied'))
+    }
+  }
+
+  const { message, transfer } = await waitForTransferMessage(ws => new Transfer({
+    id: 'mode-fallback-fails',
+    type: 'upload',
+    localPath,
+    remotePath,
+    sftp,
+    options: {
+      mode: 0o600,
+      chunkSize: 4,
+      concurrency: 1
+    },
+    ws
+  }), 'mode-fallback-fails')
+  transfer.kill()
+
+  assert.equal(message.id, 'transfer:err:mode-fallback-fails')
+  assert.match(String(message.error?.message || ''), /chmod denied/)
+  assert.equal(fchmodCalls, 1)
+  assert.equal(chmodCalls, 1)
+
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
 test('terminal cancellation waits for a late source handle to close', async () => {
   const tmp = makeTmpDir()
   const remotePath = path.join(tmp, 'late-source.bin')

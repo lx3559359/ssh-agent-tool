@@ -105,6 +105,10 @@ export default class TransportAction extends Component {
             release: async () => true
           })
         }
+        const prepared = capability.claimPreparedTransferFileSession?.(
+          transferId
+        )
+        if (prepared) return prepared
         if (typeof capability.acquireTransferFileCapability !== 'function') {
           throw new Error('当前 SFTP 会话不支持受控文件传输')
         }
@@ -122,6 +126,7 @@ export default class TransportAction extends Component {
     this.transferSafety = createTransferSafetyController({
       getTransfer: this.getTransferSafetyInput,
       getCapability: () => this.remoteFileSessionController.current?.capability,
+      getSession: () => this.remoteFileSessionController.current,
       cancelTransport: this.cancelProtectedTransport
     })
   }
@@ -299,6 +304,7 @@ export default class TransportAction extends Component {
 
   getTransferSafetyInput = () => ({
     ...this.props.transfer,
+    operationTaskId: this.operationTaskId,
     fromFile: this.props.transfer.fromFile || this.fromFile,
     finalToPath: this.newPath || this.props.transfer.toPath,
     conflictPolicy: this.conflictPolicy,
@@ -939,6 +945,10 @@ export default class TransportAction extends Component {
     const mode = toFile.mode || fromMode
     const sftp = this.getTransferRuntimeTransport(transfer).sftp
     const atomicUpload = !isDown && !fromFile.isDirectory && !this.isFtp
+    const mergeOrOverwrite = [
+      fileActions.mergeOrOverwrite,
+      fileActions.mergeOrOverwriteAll
+    ].includes(this.conflictPolicy)
     const resumeOptions = buildTransferResumeOptions(transfer.checkpoint)
     const handleEnd = onEnd
       ? update => onEnd(update, attemptToken)
@@ -951,8 +961,9 @@ export default class TransportAction extends Component {
         options: {
           mode,
           atomicUpload,
-          atomicOverwrite: atomicUpload &&
-            this.conflictPolicy === fileActions.mergeOrOverwrite,
+          atomicOverwrite: atomicUpload && mergeOrOverwrite,
+          overwrite: atomicUpload && mergeOrOverwrite,
+          mergeOrOverwrite,
           keepPartial: atomicUpload,
           ...resumeOptions
         },
@@ -1347,6 +1358,10 @@ export default class TransportAction extends Component {
     const mode = toFile.mode || fromMode
     const sftp = this.getTransferRuntimeTransport(transfer).sftp
     const atomicUpload = !isDown && !transfer.fromFile?.isDirectory && !this.isFtp
+    const mergeOrOverwrite = [
+      fileActions.mergeOrOverwrite,
+      fileActions.mergeOrOverwriteAll
+    ].includes(this.conflictPolicy)
 
     return new Promise((resolve, reject) => {
       let transport
@@ -1385,8 +1400,9 @@ export default class TransportAction extends Component {
         options: {
           mode,
           atomicUpload,
-          atomicOverwrite: atomicUpload &&
-            this.conflictPolicy === fileActions.mergeOrOverwrite
+          atomicOverwrite: atomicUpload && mergeOrOverwrite,
+          overwrite: atomicUpload && mergeOrOverwrite,
+          mergeOrOverwrite
         },
         onData: () => {},
         onError: onSubError,

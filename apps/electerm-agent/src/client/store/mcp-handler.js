@@ -35,6 +35,9 @@ import {
   verifyLocalTransferSource
 } from '../components/file-transfer/file-transfer-safety.js'
 import { installMcpRequestListener } from './mcp-request-listener.js'
+import {
+  cleanupPreparedSftpTransfer
+} from './mcp-sftp-transfer-cleanup.js'
 
 function mcpAbortError (message = 'MCP operation cancelled') {
   const error = new Error(message)
@@ -1299,6 +1302,42 @@ export default Store => {
 
   // ==================== File Transfer APIs ====================
 
+  async function prepareMcpTransferSafetyOperation (
+    sftpEntry,
+    transfer,
+    signal
+  ) {
+    const safetyPlan = buildTransferSafetyPlan(transfer)
+    if (!safetyPlan.required) return { operation: null, session: null }
+    let session = sftpEntry.getPreparedTransferFileSession?.(transfer.id)
+    if (!session) {
+      session = await sftpEntry.reserveTransferFileSession({
+        transferId: transfer.id,
+        signal
+      })
+    }
+    const pinnedPlan = {
+      ...safetyPlan,
+      metadata: {
+        traceId: safetyPlan.metadata?.traceId,
+        taskId: `sftp-transfer-${transfer.id}`,
+        runtimeIdentity: session.runtimeIdentity
+      }
+    }
+    try {
+      return {
+        operation: await sftpEntry.prepareTransferSafetyOperation(
+          pinnedPlan,
+          session
+        ),
+        session
+      }
+    } catch (error) {
+      await session.release().catch(() => {})
+      throw error
+    }
+  }
+
   Store.prototype.mcpDescribeSftpUploadSource = async function (args, options = {}) {
     const { store } = window
     const { tab, tabId, sftpEntry } = store.mcpGetSshSftpRef(args.tabId)
@@ -1333,17 +1372,21 @@ export default Store => {
     assertMcpActive(options.signal, 'SFTP upload source capture cancelled')
     if (options.prepareRecovery !== true) return { sourceDescriptor }
     transfer.sourceDescriptor = sourceDescriptor
-    const safetyPlan = buildTransferSafetyPlan(transfer)
-    const safetyOperation = safetyPlan.required
-      ? await sftpEntry.prepareTransferSafetyOperation(safetyPlan)
-      : null
+    const { operation: safetyOperation } =
+      await prepareMcpTransferSafetyOperation(
+        sftpEntry,
+        transfer,
+        options.signal
+      )
     try {
       assertMcpActive(options.signal, 'SFTP upload recovery preparation cancelled')
     } catch (error) {
-      if (safetyOperation?.id) {
-        await sftpEntry.cancelTransferSafetyOperation(safetyOperation.id)
-      }
-      throw error
+      await cleanupPreparedSftpTransfer({
+        sftpEntry,
+        safetyOperationIds: [safetyOperation?.id],
+        transferId: transfer.id,
+        primaryError: error
+      })
     }
     return {
       sourceDescriptor,
@@ -1358,7 +1401,11 @@ export default Store => {
   Store.prototype.mcpCancelPreparedSftpUpload = async function (prepared = {}) {
     if (!prepared.safetyOperationId) return false
     const { sftpEntry } = window.store.mcpGetSshSftpRef(prepared.tabId)
-    await sftpEntry.cancelTransferSafetyOperation(prepared.safetyOperationId)
+    await cleanupPreparedSftpTransfer({
+      sftpEntry,
+      safetyOperationIds: [prepared.safetyOperationId],
+      transferId: prepared.transferId
+    })
     return true
   }
 
@@ -1367,87 +1414,95 @@ export default Store => {
     const { tab, tabId, sftpEntry } = store.mcpGetSshSftpRef(args.tabId)
     const localPath = args.localPath
     const remotePath = args.remotePath
-    if (!localPath) {
-      throw new Error('localPath is required')
-    }
-    if (!remotePath) {
-      throw new Error('remotePath is required')
-    }
-    assertMcpActive(options.signal, 'SFTP upload cancelled')
+    let transferId = args.preparedTransfer?.transferId
+    const safetyOperationIds = new Set([
+      args.preparedTransfer?.safetyOperationId
+    ].filter(Boolean))
+    try {
+      if (!localPath) {
+        throw new Error('localPath is required')
+      }
+      if (!remotePath) {
+        throw new Error('remotePath is required')
+      }
+      assertMcpActive(options.signal, 'SFTP upload cancelled')
 
-    window._transferConflictPolicy = args.conflictPolicy || 'mergeOrOverwriteAll'
+      window._transferConflictPolicy = args.conflictPolicy || 'mergeOrOverwriteAll'
 
-    const fromFile = await getLocalFileInfo(localPath)
-    const transferItem = {
-      host: tab.host,
-      tabType: tab.type || 'ssh',
-      typeFrom: 'local',
-      typeTo: 'remote',
-      fromPath: localPath,
-      toPath: remotePath,
-      fromFile: {
-        ...fromFile,
+      const fromFile = await getLocalFileInfo(localPath)
+      const transferItem = {
         host: tab.host,
         tabType: tab.type || 'ssh',
+        typeFrom: 'local',
+        typeTo: 'remote',
+        fromPath: localPath,
+        toPath: remotePath,
+        fromFile: {
+          ...fromFile,
+          host: tab.host,
+          tabType: tab.type || 'ssh',
+          tabId,
+          title: tab.title
+        },
+        id: transferId || uid(),
+        title: tab.title,
         tabId,
-        title: tab.title
-      },
-      id: args.preparedTransfer?.transferId || uid(),
-      title: tab.title,
-      tabId,
-      conflictPolicy: args.conflictPolicy || 'mergeOrOverwriteAll',
-      operation: ''
-    }
-    transferItem.sourceDescriptor = args.sourceDescriptor ||
-      await captureLocalTransferSource({
+        conflictPolicy: args.conflictPolicy || 'mergeOrOverwriteAll',
+        operation: ''
+      }
+      transferId = transferItem.id
+      transferItem.sourceDescriptor = args.sourceDescriptor ||
+        await captureLocalTransferSource({
+          transfer: transferItem,
+          describeLocal: window.fs.describeTransferEntry
+        })
+      await verifyLocalTransferSource({
         transfer: transferItem,
+        sourceDescriptor: transferItem.sourceDescriptor,
         describeLocal: window.fs.describeTransferEntry
       })
-    await verifyLocalTransferSource({
-      transfer: transferItem,
-      sourceDescriptor: transferItem.sourceDescriptor,
-      describeLocal: window.fs.describeTransferEntry
-    })
-    if (typeof options.onTerminal === 'function') {
-      Object.defineProperty(transferItem, '_agentRiskTerminal', {
-        configurable: false,
-        enumerable: false,
-        value: options.onTerminal
-      })
-    }
-    const safetyPlan = buildTransferSafetyPlan(transferItem)
-    let safetyOperation
-    if (safetyPlan.required) {
-      safetyOperation = await sftpEntry.prepareTransferSafetyOperation(safetyPlan)
-      if (args.preparedTransfer?.safetyOperationId &&
-        safetyOperation.id !== args.preparedTransfer.safetyOperationId) {
-        throw new Error('Prepared SFTP recovery operation changed before queueing')
+      if (typeof options.onTerminal === 'function') {
+        Object.defineProperty(transferItem, '_agentRiskTerminal', {
+          configurable: false,
+          enumerable: false,
+          value: options.onTerminal
+        })
       }
-      transferItem.safetyOperationId = safetyOperation.id
-    }
-    if (options.signal?.aborted) {
+      const prepared = await prepareMcpTransferSafetyOperation(
+        sftpEntry,
+        transferItem,
+        options.signal
+      )
+      const safetyOperation = prepared.operation
       if (safetyOperation) {
-        await sftpEntry.cancelTransferSafetyOperation(safetyOperation.id)
+        safetyOperationIds.add(safetyOperation.id)
+        if (args.preparedTransfer?.safetyOperationId &&
+          safetyOperation.id !== args.preparedTransfer.safetyOperationId) {
+          throw new Error('Prepared SFTP recovery operation changed before queueing')
+        }
+        transferItem.safetyOperationId = safetyOperation.id
       }
-      throw mcpAbortError('SFTP upload cancelled before queueing')
-    }
-    try {
+      if (options.signal?.aborted) {
+        throw mcpAbortError('SFTP upload cancelled before queueing')
+      }
       store.addTransferList([transferItem])
-    } catch (error) {
-      if (safetyOperation) {
-        await sftpEntry.cancelTransferSafetyOperation(safetyOperation.id)
-      }
-      throw error
-    }
 
-    return {
-      success: true,
-      pending: true,
-      recoveryPrepared: safetyOperation != null,
-      safetyOperationId: safetyOperation?.id,
-      message: `Upload started: ${localPath} → ${tab.host}:${remotePath}`,
-      transferId: transferItem.id,
-      tabId
+      return {
+        success: true,
+        pending: true,
+        recoveryPrepared: safetyOperation != null,
+        safetyOperationId: safetyOperation?.id,
+        message: `Upload started: ${localPath} → ${tab.host}:${remotePath}`,
+        transferId: transferItem.id,
+        tabId
+      }
+    } catch (error) {
+      await cleanupPreparedSftpTransfer({
+        sftpEntry,
+        safetyOperationIds: [...safetyOperationIds],
+        transferId,
+        primaryError: error
+      })
     }
   }
 
@@ -1521,6 +1576,14 @@ export default Store => {
     if (handledByActiveTransfer) {
       await activeTransfer.cancelAndWait()
     } else {
+      if (transfer.safetyOperationId) {
+        const { sftpEntry } = store.mcpGetSshSftpRef(transfer.tabId)
+        await cleanupPreparedSftpTransfer({
+          sftpEntry,
+          safetyOperationIds: [transfer.safetyOperationId],
+          transferId: id
+        })
+      }
       const queue = refsStatic.get('transfer-queue')
       if (queue) {
         await queue.addToQueue('delete', id)
@@ -1531,10 +1594,6 @@ export default Store => {
     }
     if (store.fileTransfers.some(item => item.id === id)) {
       throw new Error(`Transfer cancellation did not complete: ${id}`)
-    }
-    if (transfer.safetyOperationId && !handledByActiveTransfer) {
-      const { sftpEntry } = store.mcpGetSshSftpRef(transfer.tabId)
-      await sftpEntry.cancelTransferSafetyOperation(transfer.safetyOperationId)
     }
     if (!handledByActiveTransfer && typeof transfer._agentRiskTerminal === 'function') {
       await transfer._agentRiskTerminal({

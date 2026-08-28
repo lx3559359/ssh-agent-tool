@@ -558,19 +558,19 @@ class Transfer {
     }
 
     if (mode !== undefined) {
-      const tryAgain = function (err) {
-        if (err) {
-          // Try chmod() for sftp servers that may not support fchmod() for
-          // whatever reason
-          dst.chmod(dstPath, mode, th.trackTransferCallback(tryAgain))
-          return
-        }
+      const onChmod = function (err) {
+        if (err) return onerror(err)
         startReads()
+      }
+      const onFchmod = function (err) {
+        if (!err) return startReads()
+        // Try chmod() once for SFTP servers that do not support fchmod().
+        dst.chmod(dstPath, mode, th.trackTransferCallback(onChmod))
       }
       dst.fchmod(
         th.dstHandle,
         mode,
-        th.trackTransferCallback(tryAgain)
+        th.trackTransferCallback(onFchmod)
       )
     } else {
       startReads()

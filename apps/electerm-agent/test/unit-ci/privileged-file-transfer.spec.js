@@ -52,6 +52,16 @@ async function createPrivilegedBackendHarness (overrides = {}) {
       '3'
     )]
   ])
+  if (overrides.existingUploadBytes !== undefined) {
+    privileged.set('/root/app.conf', file(
+      overrides.existingUploadBytes,
+      0o640,
+      0,
+      0,
+      '1',
+      '4'
+    ))
+  }
   const requests = []
   const nativeCalls = []
   const controls = []
@@ -174,6 +184,10 @@ async function createPrivilegedBackendHarness (overrides = {}) {
   }
 
   function metadata (remotePath, node, parentPath, parent) {
+    if (parent && !parent.device) {
+      parent.device = remotePath.startsWith(home) ? '2049' : '1'
+      parent.inode = String(nextInode++)
+    }
     return {
       mode: typeMode(node),
       type: node.type,
@@ -190,11 +204,15 @@ async function createPrivilegedBackendHarness (overrides = {}) {
     }
   }
 
-  async function execute ({ request }) {
+  async function execute ({ request }, executionOptions = {}) {
     requests.push(request)
     const args = request.args
     if (request.operation === 'stage-handshake') {
       const response = sha256(`${args.challenge}:root`)
+      Object.assign(nodes.get(args.rootPath), {
+        device: '2049',
+        inode: '777'
+      })
       nodes.set(`${args.rootPath}/${args.responseName}`,
         file(response, 0o600, 1000, 1000))
       return {
@@ -230,11 +248,12 @@ async function createPrivilegedBackendHarness (overrides = {}) {
     if (request.operation === 'lstat' || request.operation === 'lstat-bound') {
       let node = privileged.get(args.path)
       let parentPath = args.path.slice(0, args.path.lastIndexOf('/')) || '/'
-      let parent = privileged.get(parentPath)
+      let parent = privileged.get(parentPath) || nodes.get(parentPath)
       if (nodes.has(args.path)) {
         node = nodes.get(args.path)
         parentPath = args.rootPath || args.path.slice(0, args.path.lastIndexOf('/'))
-        parent = directory(0o700, 1000, 1000, '2049', '777')
+        parent = nodes.get(parentPath) ||
+          directory(0o700, 1000, 1000, '2049', '777')
         if (node && !node.device) {
           node.device = '2049'
           node.inode = String(nextInode++)
@@ -267,7 +286,7 @@ async function createPrivilegedBackendHarness (overrides = {}) {
       if (overrides.exportFailure) {
         throw new Error('stage export failed')
       }
-      const source = privileged.get(args.sourcePath)
+      const source = nodes.get(args.sourcePath) || privileged.get(args.sourcePath)
       if (!source || source.type !== 'file') throw missing(args.sourcePath)
       const stagePath = `${args.rootPath}/${args.objectName}`
       nodes.set(stagePath, file(source.content, 0o600, 1000, 1000))
@@ -279,7 +298,19 @@ async function createPrivilegedBackendHarness (overrides = {}) {
       }
     }
     if (request.operation === 'stage-import') {
-      if (overrides.importFailure) {
+      await overrides.beforeImport?.({
+        args,
+        signal: executionOptions.signal,
+        nodes,
+        privileged
+      })
+      if (executionOptions.signal?.aborted) {
+        throw executionOptions.signal.reason || new Error('cancelled')
+      }
+      if (overrides.importFailure && (
+        typeof overrides.importFailure !== 'function' ||
+        overrides.importFailure(args)
+      )) {
         return {
           exitCode: 1,
           kind: 'stage-import',
@@ -289,7 +320,10 @@ async function createPrivilegedBackendHarness (overrides = {}) {
         }
       }
       const stage = nodes.get(`${args.rootPath}/${args.objectName}`)
-      if (!stage || privileged.has(args.targetPath)) {
+      const targetMap = args.targetPath.startsWith(`${home}/`)
+        ? nodes
+        : privileged
+      if (!stage || targetMap.has(args.targetPath)) {
         throw new Error('stage import no-clobber failed')
       }
       const installed = file(
@@ -300,7 +334,8 @@ async function createPrivilegedBackendHarness (overrides = {}) {
         '1',
         String(nextInode++)
       )
-      privileged.set(args.targetPath, installed)
+      targetMap.set(args.targetPath, installed)
+      overrides.afterImport?.({ args, installed, nodes, privileged })
       return {
         exitCode: 0,
         kind: 'stage-import',
@@ -325,6 +360,42 @@ async function createPrivilegedBackendHarness (overrides = {}) {
         cleanupSucceeded: true,
         residualLocation: 'complete'
       }
+    }
+    if (request.operation === 'remove-bound' ||
+      request.operation === 'remove-peer-bound') {
+      const targetMap = args.targetPath.startsWith(`${home}/`)
+        ? nodes
+        : privileged
+      const target = targetMap.get(args.targetPath)
+      if (!target || String(target.device) !== String(args.targetDevice) ||
+        String(target.inode) !== String(args.targetInode)) {
+        throw new Error('remove target proof changed')
+      }
+      if (target.type === 'file' && (
+        sha256(target.content) !== args.sha256 ||
+        String(target.content.length) !== String(args.size)
+      )) {
+        throw new Error('remove target digest changed')
+      }
+      if (request.operation === 'remove-peer-bound') {
+        const peerMap = args.peerPath.startsWith(`${home}/`)
+          ? nodes
+          : privileged
+        const peer = peerMap.get(args.peerPath)
+        if (!peer || String(peer.device) !== String(args.peerDevice) ||
+          String(peer.inode) !== String(args.peerInode)) {
+          throw new Error('remove peer proof changed')
+        }
+      }
+      targetMap.delete(args.targetPath)
+      overrides.afterRemove?.({
+        args,
+        operation: request.operation,
+        nodes,
+        privileged,
+        file
+      })
+      return { exitCode: 0, kind: request.operation, ok: true }
     }
     throw new Error(`unexpected privileged operation: ${request.operation}`)
   }
@@ -386,6 +457,220 @@ test('privileged upload transfers to stage then installs the verified target', a
   assert.equal(Object.getPrototypeOf(transport), null)
   assert.equal(Object.isFrozen(transport), true)
   await harness.backend.release()
+})
+
+test('privileged upload atomically overwrites an exact existing file', async () => {
+  const harness = await createPrivilegedBackendHarness({
+    existingUploadBytes: Buffer.from('old-root-content')
+  })
+  const events = []
+  await harness.backend.backend.upload({
+    localPath: 'C:\\tmp\\app.conf',
+    remotePath: '/root/app.conf',
+    options: {
+      mode: 0o600,
+      atomicUpload: true,
+      atomicOverwrite: true
+    },
+    onEnd: () => events.push('end'),
+    onError: error => events.push(`error:${error.message}`)
+  })
+  const native = await harness.uploadGate.promise
+  await native.onEnd({ transferred: Buffer.byteLength('root-upload') })
+
+  assert.deepEqual(events, ['end'])
+  assert.equal(harness.privileged.get('/root/app.conf').content.toString(),
+    'root-upload')
+  assert.equal(harness.requests.some(request =>
+    request.operation === 'remove-peer-bound'), true)
+  await harness.backend.release()
+})
+
+test('privileged overwrite restores the exact old content when install fails', async () => {
+  let failedInstall = false
+  const harness = await createPrivilegedBackendHarness({
+    existingUploadBytes: Buffer.from('old-root-content'),
+    importFailure: args => args.targetPath === '/root/app.conf' &&
+      !failedInstall && (failedInstall = true)
+  })
+  const events = []
+  await harness.backend.backend.upload({
+    localPath: 'C:\\tmp\\app.conf',
+    remotePath: '/root/app.conf',
+    options: { atomicOverwrite: true },
+    onEnd: () => events.push('end'),
+    onError: error => events.push(`error:${error.message}`)
+  })
+  const native = await harness.uploadGate.promise
+  await native.onEnd({ transferred: Buffer.byteLength('root-upload') })
+
+  assert.equal(events.length, 1)
+  assert.match(events[0], /^error:/)
+  assert.equal(harness.privileged.get('/root/app.conf').content.toString(),
+    'old-root-content')
+  assert.equal([...harness.nodes.keys()].some(path => /\/download-/.test(path)),
+    false)
+  await harness.backend.release()
+})
+
+test('privileged overwrite cancellation during install restores old content before terminal', async () => {
+  const installStarted = deferred()
+  const continueInstall = deferred()
+  let gated = false
+  const harness = await createPrivilegedBackendHarness({
+    existingUploadBytes: Buffer.from('old-root-content'),
+    beforeImport: async ({ args }) => {
+      if (!gated && args.targetPath === '/root/app.conf') {
+        gated = true
+        installStarted.resolve()
+        await continueInstall.promise
+      }
+    }
+  })
+  const controller = new AbortController()
+  const events = []
+  await harness.backend.backend.upload({
+    localPath: 'C:\\tmp\\app.conf',
+    remotePath: '/root/app.conf',
+    signal: controller.signal,
+    options: { atomicOverwrite: true },
+    onEnd: () => events.push('end'),
+    onError: error => events.push(`error:${error.message}`)
+  })
+  const native = await harness.uploadGate.promise
+  const finishing = native.onEnd({
+    transferred: Buffer.byteLength('root-upload')
+  })
+  await installStarted.promise
+  controller.abort(new Error('cancelled during install'))
+  continueInstall.resolve()
+  await finishing
+
+  assert.deepEqual(events, ['error:cancelled during install'])
+  assert.equal(harness.privileged.get('/root/app.conf').content.toString(),
+    'old-root-content')
+  assert.equal([...harness.nodes.keys()].some(path => /\/download-/.test(path)),
+    false)
+  await harness.backend.release()
+})
+
+test('privileged overwrite preserves displacement when a foreign target wins the race', async () => {
+  let raced = false
+  const harness = await createPrivilegedBackendHarness({
+    existingUploadBytes: Buffer.from('old-root-content'),
+    afterRemove: ({ args, operation, privileged, file }) => {
+      if (!raced && operation === 'remove-peer-bound' &&
+        args.targetPath === '/root/app.conf') {
+        raced = true
+        privileged.set('/root/app.conf', file(
+          Buffer.from('foreign-content'),
+          0o600,
+          0,
+          0,
+          '1',
+          '901'
+        ))
+      }
+    }
+  })
+  const events = []
+  await harness.backend.backend.upload({
+    localPath: 'C:\\tmp\\app.conf',
+    remotePath: '/root/app.conf',
+    options: { overwrite: true },
+    onError: error => events.push(error)
+  })
+  const native = await harness.uploadGate.promise
+  await native.onEnd({ transferred: Buffer.byteLength('root-upload') })
+
+  assert.equal(events.length, 1)
+  assert.equal(events[0].code, 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH')
+  assert.equal(events[0].recoveryUncertain, true)
+  assert.equal(harness.privileged.get('/root/app.conf').content.toString(),
+    'foreign-content')
+  assert.equal([...harness.nodes.keys()].some(path => /\/download-/.test(path)),
+    true)
+  await assert.rejects(harness.backend.release(), /residual|owned/i)
+})
+
+test('privileged overwrite never deletes a same-inode rewrite after install', async () => {
+  let rewrote = false
+  const harness = await createPrivilegedBackendHarness({
+    existingUploadBytes: Buffer.from('old-root-content'),
+    afterImport: ({ args, installed }) => {
+      if (!rewrote && args.targetPath === '/root/app.conf') {
+        rewrote = true
+        installed.content = Buffer.from('same-inode-foreign-rewrite')
+      }
+    }
+  })
+  const events = []
+  await harness.backend.backend.upload({
+    localPath: 'C:\\tmp\\app.conf',
+    remotePath: '/root/app.conf',
+    options: { mergeOrOverwrite: true },
+    onError: error => events.push(error)
+  })
+  const native = await harness.uploadGate.promise
+  await native.onEnd({ transferred: Buffer.byteLength('root-upload') })
+
+  assert.equal(events.length, 1)
+  assert.equal(events[0].code, 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH')
+  assert.equal(harness.privileged.get('/root/app.conf').content.toString(),
+    'same-inode-foreign-rewrite')
+  assert.equal([...harness.nodes.keys()].some(path => /\/download-/.test(path)),
+    true)
+  await assert.rejects(harness.backend.release(), /residual|owned/i)
+})
+
+test('privileged directory merge accepts only an exactly bound existing directory', async () => {
+  const harness = await createPrivilegedBackendHarness()
+  harness.privileged.set('/root/merge', {
+    type: 'directory',
+    mode: 0o750,
+    uid: 0,
+    gid: 0,
+    device: '1',
+    inode: '920'
+  })
+  harness.privileged.set('/root/not-a-directory', {
+    type: 'file',
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    device: '1',
+    inode: '921',
+    content: Buffer.from('file')
+  })
+
+  assert.equal(await harness.backend.backend.mkdir('/root/merge'), 1)
+  await assert.rejects(
+    harness.backend.backend.mkdir('/root/not-a-directory'),
+    error => error?.code === 'EEXIST'
+  )
+  assert.equal(harness.nativeCalls.length, 0)
+  await harness.backend.release()
+})
+
+test('Transfer directory traversal forwards merge overwrite to every root file upload', () => {
+  const source = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/file-transfer/transfer.jsx'
+  ), 'utf8')
+  const primary = source.slice(
+    source.indexOf('transferFile = async'),
+    source.indexOf('isTransferAction =')
+  )
+  const subtransfer = source.slice(
+    source.indexOf('transferFileAsSubTransfer ='),
+    source.indexOf('getDefaultTransfer =')
+  )
+  for (const body of [primary, subtransfer]) {
+    assert.match(body, /fileActions\.mergeOrOverwriteAll/)
+    assert.match(body, /atomicOverwrite:\s*atomicUpload\s*&&\s*mergeOrOverwrite/)
+    assert.match(body, /overwrite:\s*atomicUpload\s*&&\s*mergeOrOverwrite/)
+    assert.match(body, /mergeOrOverwrite,?/)
+  }
 })
 
 test('privileged upload reports import failure after inner end and cleans its stage', async () => {

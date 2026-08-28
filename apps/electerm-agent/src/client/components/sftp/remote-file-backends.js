@@ -2105,6 +2105,171 @@ export async function createPrivilegedFileBackend ({
     })
   }
 
+  function permitsUploadOverwrite (options = {}) {
+    return options.atomicOverwrite === true ||
+      options.overwrite === true ||
+      options.mergeOrOverwrite === true
+  }
+
+  function importClaimDescriptor (claim, proof) {
+    if (!claim || claim.targetType !== 'file' ||
+      claim.sha256 !== proof.sha256 || claim.size !== proof.size) return null
+    try {
+      return normalizeRecoveryDescriptor({
+        type: 'file',
+        device: String(claim.targetDevice),
+        inode: String(claim.targetInode),
+        size: claim.size,
+        mode: claim.mode,
+        uid: claim.uid,
+        gid: claim.gid,
+        sha256: claim.sha256
+      }, 'upload installed target')
+    } catch {
+      return null
+    }
+  }
+
+  async function cleanupUploadDisplacement (
+    displacement,
+    peer,
+    signal
+  ) {
+    await removeTree(displacement.stage.path, {
+      signal,
+      expectedSource: displacement.descriptor,
+      ...(peer
+        ? {
+            expectedPeer: {
+              path: peer.path,
+              descriptor: peer.descriptor
+            }
+          }
+        : {})
+    })
+    staging.abandon(displacement.stage.path)
+  }
+
+  async function cleanupUnboundUploadDisplacement (stage, cause) {
+    try {
+      const current = await describeRecoveryState(stage.path, undefined, true)
+      if (current.type !== 'bound-absent') {
+        await removeTree(stage.path, { expectedSource: current })
+      }
+      staging.abandon(stage.path)
+    } catch (cleanupError) {
+      try { staging.preserve(stage.path) } catch {}
+      attachCleanupFailure(cause, cleanupError)
+    }
+  }
+
+  async function cleanupFailedNewUploadTarget (
+    targetPath,
+    installedDescriptor,
+    cause
+  ) {
+    if (!installedDescriptor) return
+    try {
+      const current = await describeRecoveryState(targetPath, undefined, true)
+      if (current.type === 'bound-absent') return
+      if (!sameRecoveryDescriptor(current, installedDescriptor)) {
+        throw recoveryProofMismatch(
+          'root 文件后端 upload 失败后 target 已被其他写入改变',
+          targetPath,
+          installedDescriptor,
+          current,
+          cause
+        )
+      }
+      await removeTree(targetPath, {
+        expectedSource: installedDescriptor
+      })
+    } catch (cleanupError) {
+      if (cleanupError?.code === 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH') {
+        cleanupError.recoveryUncertain = true
+        throw cleanupError
+      }
+      attachCleanupFailure(cause, cleanupError)
+    }
+  }
+
+  async function rollbackUploadDisplacement ({
+    targetPath,
+    originalDescriptor,
+    installedDescriptor,
+    displacement,
+    cause
+  }) {
+    let current
+    try {
+      current = await describeRecoveryState(targetPath, undefined, true)
+    } catch (error) {
+      staging.preserve(displacement.stage.path)
+      throw recoveryProofMismatch(
+        'root 文件后端 upload rollback 无法确认 target',
+        targetPath,
+        installedDescriptor || originalDescriptor,
+        null,
+        error
+      )
+    }
+
+    let restoredDescriptor
+    if (sameRecoveryDescriptor(current, originalDescriptor)) {
+      restoredDescriptor = current
+    } else if (current.type === 'bound-absent') {
+      restoredDescriptor = await copyTree(
+        displacement.stage.path,
+        targetPath,
+        {
+          expectedSource: displacement.descriptor,
+          expectedTarget: current
+        }
+      )
+    } else if (installedDescriptor &&
+      sameRecoveryDescriptor(current, installedDescriptor)) {
+      await removeTree(targetPath, {
+        expectedSource: installedDescriptor,
+        expectedPeer: {
+          path: displacement.stage.path,
+          descriptor: displacement.descriptor
+        }
+      })
+      const absent = await describeRecoveryState(targetPath, undefined, true)
+      restoredDescriptor = await copyTree(
+        displacement.stage.path,
+        targetPath,
+        {
+          expectedSource: displacement.descriptor,
+          expectedTarget: absent
+        }
+      )
+    } else {
+      staging.preserve(displacement.stage.path)
+      const uncertain = recoveryProofMismatch(
+        'root 文件后端 upload rollback target 已被其他写入改变',
+        targetPath,
+        installedDescriptor || originalDescriptor,
+        current,
+        cause
+      )
+      uncertain.recoveryUncertain = true
+      uncertain.residualPath = displacement.stage.path
+      throw uncertain
+    }
+
+    try {
+      await cleanupUploadDisplacement(displacement, {
+        path: targetPath,
+        descriptor: restoredDescriptor
+      })
+    } catch (error) {
+      staging.preserve(displacement.stage.path)
+      throw error
+    }
+    return restoredDescriptor
+  }
+
   function createPrivilegedTransferProxy ({
     onData,
     onPaused,
@@ -2355,33 +2520,183 @@ export async function createPrivilegedFileBackend ({
           if (proof.size !== completed) {
             throw new Error('root 文件后端 upload 已传输大小与 stage 证明不一致')
           }
-          const { parent, parentPath } = await boundAbsentParent(
+          const originalDescriptor = await describeRecoveryState(
             targetPath,
-            'upload',
-            signal
+            signal,
+            true
           )
-          const imported = digestResult(await executeStageImport(
-            ownedStage.stage,
-            targetPath,
-            parent,
-            {
-              ...staging.rootBinding,
-              objectName: ownedStage.stage.objectName,
+          let displacement
+          let installedDescriptor
+          let installVerified = false
+          try {
+            if (originalDescriptor.type !== 'bound-absent') {
+              if (!permitsUploadOverwrite(options)) {
+                const error = new Error(
+                  `root 文件后端 upload target 已存在：${targetPath}`
+                )
+                error.code = 'EEXIST'
+                throw error
+              }
+              if (originalDescriptor.type !== 'file') {
+                throw new Error('root 文件后端 upload overwrite target 必须为普通文件')
+              }
+              const displacementStage = staging.allocate('download')
+              try {
+                const displacementAbsent = await describeRecoveryState(
+                  displacementStage.path,
+                  signal,
+                  true
+                )
+                const displacementDescriptor = await copyTree(
+                  targetPath,
+                  displacementStage.path,
+                  {
+                    signal,
+                    expectedSource: originalDescriptor,
+                    expectedTarget: displacementAbsent
+                  }
+                )
+                displacement = Object.freeze({
+                  stage: displacementStage,
+                  descriptor: displacementDescriptor
+                })
+                await removeTree(targetPath, {
+                  signal,
+                  expectedSource: originalDescriptor,
+                  expectedPeer: {
+                    path: displacementStage.path,
+                    descriptor: displacementDescriptor
+                  }
+                })
+              } catch (error) {
+                if (!displacement) {
+                  await cleanupUnboundUploadDisplacement(
+                    displacementStage,
+                    error
+                  )
+                }
+                throw error
+              }
+            }
+
+            const targetAbsent = await describeRecoveryState(
               targetPath,
-              sha256: proof.sha256,
-              size: String(proof.size),
-              targetMode: normalizeMode(options.mode, 0o600).toString(8),
-              targetUid: '0',
-              targetGid: '0',
-              mustBeAbsent: '1',
-              ...targetParentBindingArgs(parentPath, parent),
-              targetDevice: '0',
-              targetInode: '0'
-            },
-            signal
-          ), 'stage-import')
-          if (imported.sha256 !== proof.sha256 || imported.size !== proof.size) {
-            throw new Error('root 文件后端 upload import 摘要或大小不匹配')
+              signal,
+              true
+            )
+            if (targetAbsent.type !== 'bound-absent') {
+              throw recoveryProofMismatch(
+                'root 文件后端 upload no-clobber target 已被占用',
+                targetPath,
+                originalDescriptor.type === 'bound-absent'
+                  ? originalDescriptor
+                  : null,
+                targetAbsent
+              )
+            }
+            const { parent, parentPath } = await boundAbsentParent(
+              targetPath,
+              'upload',
+              signal
+            )
+            if (!recoveryParentMatches(parent, targetAbsent.parent)) {
+              throw recoveryProofMismatch(
+                'root 文件后端 upload target parent 绑定发生变化',
+                targetPath,
+                targetAbsent,
+                await describeRecoveryState(targetPath, signal, true)
+              )
+            }
+            let imported
+            try {
+              imported = digestResult(await executeStageImport(
+                ownedStage.stage,
+                targetPath,
+                parent,
+                {
+                  ...staging.rootBinding,
+                  objectName: ownedStage.stage.objectName,
+                  targetPath,
+                  sha256: proof.sha256,
+                  size: String(proof.size),
+                  targetMode: normalizeMode(options.mode, 0o600).toString(8),
+                  targetUid: '0',
+                  targetGid: '0',
+                  mustBeAbsent: '1',
+                  ...targetParentBindingArgs(parentPath, parent),
+                  targetDevice: '0',
+                  targetInode: '0'
+                },
+                signal
+              ), 'stage-import')
+            } catch (error) {
+              installedDescriptor = importClaimDescriptor(
+                error?.importResult?.targetClaim,
+                proof
+              )
+              throw error
+            }
+            installedDescriptor = importClaimDescriptor(
+              imported.targetClaim,
+              proof
+            )
+            if (!installedDescriptor || imported.sha256 !== proof.sha256 ||
+              imported.size !== proof.size) {
+              throw new Error('root 文件后端 upload import 摘要、大小或 target claim 不匹配')
+            }
+            const installedCurrent = await describeRecoveryState(
+              targetPath,
+              signal,
+              false
+            )
+            if (!sameRecoveryDescriptor(
+              installedCurrent,
+              installedDescriptor
+            )) {
+              throw recoveryProofMismatch(
+                'root 文件后端 upload target 安装后证明发生变化',
+                targetPath,
+                installedDescriptor,
+                installedCurrent
+              )
+            }
+            installVerified = true
+            if (displacement) {
+              try {
+                await cleanupUploadDisplacement(displacement, {
+                  path: targetPath,
+                  descriptor: installedDescriptor
+                }, signal)
+              } catch (error) {
+                staging.preserve(displacement.stage.path)
+                throw error
+              }
+            }
+          } catch (error) {
+            if (displacement && !installVerified) {
+              try {
+                await rollbackUploadDisplacement({
+                  targetPath,
+                  originalDescriptor,
+                  installedDescriptor,
+                  displacement,
+                  cause: error
+                })
+              } catch (rollbackError) {
+                if (rollbackError?.code ===
+                  'REMOTE_FILE_RECOVERY_PROOF_MISMATCH') {
+                  throw rollbackError
+                }
+                attachCleanupFailure(error, rollbackError)
+              }
+            } else if (!displacement && !installVerified) {
+              await cleanupFailedNewUploadTarget(
+                targetPath,
+                installedDescriptor,
+                error
+              )
+            }
+            throw error
           }
         }
       })
@@ -2579,6 +2894,21 @@ export async function createPrivilegedFileBackend ({
     },
     async mkdir (path) {
       const remotePath = canonicalFilePath(path)
+      const current = await lstatOrMissing(remotePath)
+      if (current) {
+        const entry = await boundMutationEntry(
+          remotePath,
+          'mkdir existing directory'
+        )
+        if (entry.metadata.type !== 'directory') {
+          const error = new Error(
+            `root 文件后端 mkdir target 已存在且不是目录：${remotePath}`
+          )
+          error.code = 'EEXIST'
+          throw error
+        }
+        return 1
+      }
       const { parent, parentPath } = await boundAbsentParent(
         remotePath,
         'mkdir'

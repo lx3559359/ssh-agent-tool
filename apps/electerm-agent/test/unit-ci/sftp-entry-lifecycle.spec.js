@@ -91,6 +91,70 @@ test('generation drain rejection still destroys once and latest drain wins', asy
   assert.equal(activateRemoteFileGeneration(entry, latestDrain.generation), true)
 })
 
+test('transfer quiescence joins the owner and prepared safety terminal before generation drain', async () => {
+  const { quiesceSftpEntryTransfers } = await loadModule()
+  const cancelGate = deferred()
+  const calls = []
+  const session = Object.freeze({ backend: { name: 'root' } })
+  const entry = {
+    props: { tab: { id: 'tab-root' } },
+    sftp: { name: 'native-still-attached' },
+    remoteFileGeneration: { accepting: true },
+    transferSafetySessionAliases: new Map([
+      ['prepared-operation', ['prepared-operation', 'sftp-transfer-prepared']]
+    ]),
+    transferSafetySessionPins: new Map([
+      ['prepared-operation', session],
+      ['sftp-transfer-prepared', session]
+    ]),
+    preparedTransferFileSessions: new Map([
+      ['prepared', { session }]
+    ]),
+    async cancelTransferSafetyOperation (id, pinned) {
+      assert.equal(entry.sftp?.name, 'native-still-attached')
+      assert.equal(pinned, session)
+      calls.push(`cancel-safety:${id}`)
+      entry.transferSafetySessionAliases.delete(id)
+      entry.transferSafetySessionPins.delete(id)
+      return { state: 'cancelled' }
+    },
+    async releasePreparedTransferFileSession (id) {
+      calls.push(`release-prepared:${id}`)
+      entry.preparedTransferFileSessions.delete(id)
+    }
+  }
+  let ownerReleased = false
+  const owner = {
+    tabId: 'tab-root',
+    async cancelAndWait () {
+      calls.push('cancel-owner')
+      await cancelGate.promise
+    },
+    transferSafety: {
+      async dispose () { calls.push('join-owner-safety') }
+    },
+    async releaseRemoteFileSession () {
+      if (!ownerReleased) calls.push('release-owner-session')
+      ownerReleased = true
+    }
+  }
+
+  const settlement = quiesceSftpEntryTransfers(entry, { owners: [owner] })
+  assert.equal(entry.remoteFileGeneration.accepting, false)
+  assert.equal(entry.sftp.name, 'native-still-attached')
+  assert.deepEqual(calls, ['cancel-owner'])
+
+  cancelGate.resolve()
+  await settlement
+  assert.deepEqual(calls, [
+    'cancel-owner',
+    'join-owner-safety',
+    'release-owner-session',
+    'cancel-safety:prepared-operation',
+    'release-prepared:prepared'
+  ])
+})
+
 test('unexpected SFTP packets retry once per connection attempt', async () => {
   const { shouldRetryUnexpectedSftpPacket } = await loadModule()
   const error = new Error('Unexpected packet before SFTP handshake')

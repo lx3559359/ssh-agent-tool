@@ -946,6 +946,31 @@ test('Task7 transfer file session acquires once and releases once after terminal
   )
 })
 
+test('Task7 adopts a pre-reserved sealed transfer session without changing its pin', async () => {
+  const { createTransferFileSessionController } = await import(transferSafetyUrl)
+  const backend = Object.freeze({ upload () {} })
+  const capability = Object.freeze({ getSftpSafetyEndpoint () {} })
+  const reserved = Object.freeze(Object.assign(Object.create(null), {
+    capability,
+    backend,
+    sftp: backend,
+    runtimeIdentity: Object.freeze({
+      channel: 'pty-root',
+      effectiveUid: '0',
+      effectiveUsername: 'root'
+    }),
+    release: async () => true
+  }))
+  const controller = createTransferFileSessionController({
+    acquire: async () => reserved
+  })
+
+  assert.strictEqual(await controller.ensure({ transferId: 'reserved-7' }),
+    reserved)
+  assert.strictEqual(controller.current, reserved)
+  assert.equal(await controller.release(), true)
+})
+
 test('cross-host step1 atomically pins one SFTP transport across ref replacement', async () => {
   const {
     buildCrossHostSourceIdentity,
@@ -1733,6 +1758,65 @@ test('file-transfer safety controller prepares once across retries and completes
   assert.match(calls[2][2].transferIdentity, /^transfer:/)
 })
 
+test('file-transfer safety pins one exact session through prepare begin verify and completion', async () => {
+  const { createTransferSafetyController } = await import(transferSafetyUrl)
+  const backend = Object.freeze(Object.assign(Object.create(null), {
+    kind: 'root-transfer-backend'
+  }))
+  const runtimeIdentity = Object.freeze({
+    channel: 'pty-root',
+    effectiveUid: '0',
+    effectiveUsername: 'root'
+  })
+  const calls = []
+  const capability = {
+    async prepareTransferSafetyOperation (plan, pinned) {
+      calls.push(['prepare', pinned, plan.metadata])
+      return { id: plan.operationId, effectKey: 'pinned-effect' }
+    },
+    async beginTransferSafetyOperation (id, options, pinned) {
+      calls.push(['begin', pinned])
+      return { id, effectKey: 'pinned-effect', executionId: 'pinned-execution' }
+    },
+    async completeTransferSafetyOperation (id, completion, pinned) {
+      calls.push(['complete', pinned])
+      return { id, state: 'rollback-available' }
+    }
+  }
+  const session = Object.freeze(Object.assign(Object.create(null), {
+    capability,
+    backend,
+    sftp: backend,
+    runtimeIdentity
+  }))
+  const controller = createTransferSafetyController({
+    getTransfer: () => ({
+      id: 'root-session-pin',
+      operationTaskId: 'sftp-transfer-task-root-session-pin',
+      typeFrom: 'local',
+      typeTo: 'remote',
+      fromPath: 'C:/release.bin',
+      toPath: '/root/release.bin',
+      fromFile: { isDirectory: false, size: 7 },
+      runtimeIdentity
+    }),
+    getSession: () => session,
+    getCapability: () => {
+      throw new Error('must not reacquire or fall back to raw capability')
+    },
+    cancelTransport: async () => {}
+  })
+
+  await controller.begin()
+  await controller.complete()
+
+  assert.deepEqual(calls.map(call => call[0]), ['prepare', 'begin', 'complete'])
+  assert.equal(calls.every(call => call[1] === session), true)
+  assert.strictEqual(calls[0][2].runtimeIdentity, runtimeIdentity)
+  assert.equal(calls[0][2].taskId,
+    'sftp-transfer-task-root-session-pin')
+})
+
 test('file-transfer safety controller retries begin with a new operation and keeps successful recovery', async () => {
   const { createTransferSafetyController } = await import(transferSafetyUrl)
   let prepareCalls = 0
@@ -2160,4 +2244,12 @@ test('SFTP capability exposes authoritative transfer transaction lifecycle', () 
   assert.match(source, /transfer:\s*plan\.transfer/)
   assert.match(source, /beginExternalExecution/)
   assert.match(source, /completeExternalExecution/)
+  assert.match(source, /transferSafetySessionPins\s*=\s*new Map\(\)/)
+  assert.match(source, /pinTransferSafetySession/)
+  assert.match(source, /runtimeIdentity:\s*plan\.metadata\?\.runtimeIdentity/)
+  assert.match(source, /transferTaskId:\s*plan\.metadata\?\.taskId/)
+  assert.doesNotMatch(
+    source,
+    /getSftp:\s*operation\s*=>[\s\S]{0,120}\|\|\s*this\.sftp/
+  )
 })

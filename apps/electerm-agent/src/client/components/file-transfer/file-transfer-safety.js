@@ -211,6 +211,12 @@ export function createTransferFileSessionController ({ acquire } = {}) {
         typeof acquired.release !== 'function') {
         throw new Error('transfer file session acquire 结果无效')
       }
+      if (Object.isFrozen(acquired) &&
+        Object.getPrototypeOf(acquired) === null &&
+        acquired.sftp === acquired.backend) {
+        session = acquired
+        return session
+      }
       session = Object.assign(Object.create(null), {
         capability: acquired.capability,
         backend: acquired.backend,
@@ -513,6 +519,7 @@ export function buildTransferSafetyPlan (transfer = {}) {
 export function createTransferSafetyController ({
   getTransfer,
   getCapability,
+  getSession,
   cancelTransport
 }) {
   let plan
@@ -523,6 +530,7 @@ export function createTransferSafetyController ({
   let terminalPromise
   let settled = false
   let operationCapability
+  let operationSession
   let traceContext
   let parentTraceContext
   let beginAttempt = 0
@@ -563,13 +571,16 @@ export function createTransferSafetyController ({
   }
 
   async function readPersistedOperation () {
-    const capability = getCapability() || operationCapability
+    const capability = operationSession?.capability || operationCapability
     if (!operation?.id ||
       typeof capability?.getTransferSafetyOperation !== 'function') {
       return null
     }
     try {
-      return await capability.getTransferSafetyOperation(operation.id)
+      return await capability.getTransferSafetyOperation(
+        operation.id,
+        operationSession
+      )
     } catch (error) {
       return null
     }
@@ -618,7 +629,8 @@ export function createTransferSafetyController ({
     if (execution) return execution
     if (beginPromise) return beginPromise
 
-    plan = buildTransferSafetyPlan(getTransfer())
+    const transfer = getTransfer()
+    plan = buildTransferSafetyPlan(transfer)
     if (!plan.required) return null
 
     parentTraceContext = parentTraceContext || createTraceContext({
@@ -639,33 +651,51 @@ export function createTransferSafetyController ({
       action: 'transfer'
     })
     qualityFinished = false
-    const runtimeIdentity = getTransfer().runtimeIdentity
+    const runtimeIdentity = transfer.runtimeIdentity
     plan = {
       ...plan,
       metadata: {
         traceId: traceContext.traceId,
-        ...(runtimeIdentity ? { runtimeIdentity } : {})
+        ...(runtimeIdentity ? { runtimeIdentity } : {}),
+        ...(transfer.operationTaskId
+          ? { taskId: String(transfer.operationTaskId) }
+          : {})
       }
     }
     recordTransferEvent('started')
 
     beginPromise = (async () => {
-      const capability = getCapability()
+      const session = typeof getSession === 'function'
+        ? getSession()
+        : null
+      const capability = session?.capability ||
+        (typeof getSession === 'function' ? null : getCapability?.())
       if (!capability ||
         typeof capability.prepareTransferSafetyOperation !== 'function' ||
         typeof capability.beginTransferSafetyOperation !== 'function') {
         throw new Error('当前 SFTP 会话不支持安全传输，已阻止远程写入')
       }
+      if (session && (
+        !session.backend ||
+        session.sftp !== session.backend
+      )) {
+        throw new Error('当前 SFTP 传输会话后端绑定无效，已阻止远程写入')
+      }
       operationCapability = capability
-      operation = await capability.prepareTransferSafetyOperation(plan)
+      operationSession = session
+      operation = await capability.prepareTransferSafetyOperation(plan, session)
       if (capability.sftpSafetyRunner &&
         operation.metadata?.traceId !== traceContext.traceId) {
         operation = await attachTraceToOperation(operation.id, traceContext)
       }
-      const startedExecution = await capability.beginTransferSafetyOperation(operation.id, {
-        transferIdentity: plan.transfer.identity,
-        cancelExternal: cancelTransport
-      })
+      const startedExecution = await capability.beginTransferSafetyOperation(
+        operation.id,
+        {
+          transferIdentity: plan.transfer.identity,
+          cancelExternal: cancelTransport
+        },
+        session
+      )
       const successful = Boolean(
         startedExecution?.executionId &&
         (!startedExecution.state || startedExecution.state === 'executing')
@@ -688,6 +718,7 @@ export function createTransferSafetyController ({
       operation = null
       execution = null
       operationCapability = null
+      operationSession = null
       throw error
     }
   }
@@ -697,33 +728,40 @@ export function createTransferSafetyController ({
     if (!execution || !operation || !plan?.required) return Promise.resolve(null)
 
     return claimTerminal('complete', async () => {
-      const capability = getCapability() || operationCapability
+      const capability = operationSession?.capability || operationCapability
       if (!capability ||
         typeof capability.completeTransferSafetyOperation !== 'function') {
         throw terminalCapabilityUnavailable(
           'SFTP 安全会话已断开，无法确认传输结果'
         )
       }
-      return capability.completeTransferSafetyOperation(operation.id, {
-        executionId: execution.executionId,
-        effectKey: execution.effectKey || operation.effectKey,
-        transferIdentity: plan.transfer.identity,
-        exitCode,
-        cancelled
-      })
+      return capability.completeTransferSafetyOperation(
+        operation.id,
+        {
+          executionId: execution.executionId,
+          effectKey: execution.effectKey || operation.effectKey,
+          transferIdentity: plan.transfer.identity,
+          exitCode,
+          cancelled
+        },
+        operationSession
+      )
     }, { exitCode, cancelled })
   }
 
   function runCancelTransition () {
     return claimTerminal('cancel', async () => {
-      const capability = getCapability() || operationCapability
+      const capability = operationSession?.capability || operationCapability
       if (!capability ||
         typeof capability.cancelTransferSafetyOperation !== 'function') {
         throw terminalCapabilityUnavailable(
           'SFTP 安全会话已断开，无法取消受保护传输'
         )
       }
-      return capability.cancelTransferSafetyOperation(operation.id)
+      return capability.cancelTransferSafetyOperation(
+        operation.id,
+        operationSession
+      )
     })
   }
 
@@ -746,14 +784,17 @@ export function createTransferSafetyController ({
         }
       }
       if (!execution || !operation || !plan?.required) return noTerminalResult
-      const capability = getCapability() || operationCapability
+      const capability = operationSession?.capability || operationCapability
       if (!capability ||
         typeof capability.cancelTransferSafetyOperation !== 'function') {
         throw terminalCapabilityUnavailable(
           'SFTP 安全会话已断开，无法取消受保护传输'
         )
       }
-      return capability.cancelTransferSafetyOperation(operation.id)
+      return capability.cancelTransferSafetyOperation(
+        operation.id,
+        operationSession
+      )
     })
   }
 

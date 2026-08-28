@@ -1356,6 +1356,59 @@ test('unmount waits for capability cleanup before destroying the detached transp
   ])
 })
 
+test('unmount keeps the endpoint attached until transfer safety terminal settlement', async () => {
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  const safetyGate = deferred()
+  const calls = []
+  const client = {
+    async destroy () { calls.push('destroy-client') }
+  }
+  const entry = {
+    id: 'sftp-tab-root',
+    sftp: client,
+    remoteFileUnmounted: false,
+    remoteFileOperations: new Set(),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationBackends: new Map(),
+    remoteFileGeneration: {
+      id: 1,
+      accepting: false,
+      capabilities: new Set(),
+      settlements: new Set(),
+      backends: new Map(),
+      tail: Promise.resolve()
+    },
+    quiesceActiveTransfers: () => {
+      calls.push('settle-transfer-safety')
+      return safetyGate.promise
+    },
+    clearTransferSafetySessionPins: () => calls.push('clear-pins'),
+    sftpSafetyProgressHandlers: { clear: () => {} },
+    sftpSafetyAdapter: { discardAllPreparedProofs: () => {} },
+    _sortCache: { clear: () => {} }
+  }
+  installClassMethod(entry, 'componentWillUnmount', {
+    refs: { remove: () => {} },
+    drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
+    disposeSftpEntryScheduling: () => {}
+  })
+
+  const disposal = entry.componentWillUnmount()
+  assert.equal(entry.sftp, client)
+  assert.deepEqual(calls, ['settle-transfer-safety'])
+
+  safetyGate.resolve()
+  await disposal
+  assert.equal(entry.sftp, null)
+  assert.deepEqual(calls, [
+    'settle-transfer-safety',
+    'destroy-client',
+    'clear-pins'
+  ])
+})
+
 test('unmount destroys the detached transport after rejected and synchronous releases', async () => {
   const lifecycle = await importModule(
     'src/client/components/sftp/sftp-entry-lifecycle.js'
