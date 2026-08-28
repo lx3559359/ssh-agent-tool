@@ -1783,6 +1783,44 @@ export async function createPrivilegedFileBackend ({
     removeEntry: removeTree,
     cp: copyTree,
     mv: (source, target, options) => rawFacade.rename(source, target, options),
+    async describeRecoveryEntry (path, options) {
+      const { signal } = normalizeCancellableOptions(options)
+      const remotePath = canonicalFilePath(path)
+      const manifest = await buildTreeManifest(remotePath, signal)
+      const root = manifest[0]
+      if (!root || root.path !== remotePath) {
+        throw new Error('root 文件后端恢复证明缺少根条目')
+      }
+      const metadata = root.metadata
+      const manifestProof = manifest.map(entry => ({
+        path: entry.path,
+        depth: entry.depth,
+        type: entry.metadata.type,
+        device: String(entry.metadata.device),
+        inode: String(entry.metadata.inode),
+        size: entry.metadata.size,
+        mode: entry.metadata.mode & 0o7777,
+        uid: entry.metadata.uid,
+        gid: entry.metadata.gid,
+        sha256: entry.proof?.sha256 || ''
+      }))
+      const sha256 = metadata.type === 'file'
+        ? root.proof?.sha256
+        : await sha256Hex(new TextEncoder().encode(JSON.stringify(manifestProof)))
+      if (!/^[a-f0-9]{64}$/.test(String(sha256 || ''))) {
+        throw new Error('root 文件后端恢复证明摘要无效')
+      }
+      return Object.freeze({
+        type: metadata.type,
+        device: String(metadata.device),
+        inode: String(metadata.inode),
+        size: metadata.size,
+        mode: metadata.mode & 0o7777,
+        uid: metadata.uid,
+        gid: metadata.gid,
+        sha256
+      })
+    },
     async describeResumeEntry (path, boundarySize = 64 * 1024) {
       const remotePath = canonicalFilePath(path)
       const limit = Math.min(

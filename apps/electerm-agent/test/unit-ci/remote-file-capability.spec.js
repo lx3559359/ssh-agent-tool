@@ -25,6 +25,7 @@ const productionRemoteFileMethods = Object.freeze([
   'removeEntry',
   'cp',
   'mv',
+  'describeRecoveryEntry',
   'describeResumeEntry'
 ])
 

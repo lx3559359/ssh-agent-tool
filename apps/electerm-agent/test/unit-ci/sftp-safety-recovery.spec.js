@@ -56,6 +56,43 @@ test('one-click SFTP backup copies files and folders without changing originals'
   assert.equal(records[0].username, 'root')
 })
 
+test('SFTP backup publishes each recovery record before starting the next copy', async () => {
+  const { backupRemoteFiles } = await import(moduleUrl)
+  const events = []
+  const secondCopyError = new Error('second copy failed')
+  const sftp = {
+    mkdir: async value => events.push(['mkdir', value]),
+    cp: async (from, to) => {
+      events.push(['cp', from, to])
+      if (from.endsWith('/second.conf')) throw secondCopyError
+    }
+  }
+
+  await assert.rejects(
+    backupRemoteFiles({
+      sftp,
+      files: [
+        { path: '/etc/app', name: 'first.conf', isDirectory: false },
+        { path: '/etc/app', name: 'second.conf', isDirectory: false }
+      ],
+      tab: { id: 'tab-1', host: '10.0.0.8' },
+      now: new Date('2026-07-12T08:09:10Z'),
+      onRecord: async record => {
+        events.push(['record', record.sourcePath, record.backupPath])
+        return { ...record, metadata: { persisted: true } }
+      }
+    }),
+    error => error === secondCopyError
+  )
+
+  assert.deepEqual(events, [
+    ['mkdir', '/etc/app/.shellpilot-backups'],
+    ['cp', '/etc/app/first.conf', '/etc/app/.shellpilot-backups/first.conf-20260712-080910'],
+    ['record', '/etc/app/first.conf', '/etc/app/.shellpilot-backups/first.conf-20260712-080910'],
+    ['cp', '/etc/app/second.conf', '/etc/app/.shellpilot-backups/second.conf-20260712-080910']
+  ])
+})
+
 test('SFTP backup chooses a collision-free path when the timestamped name already exists', async () => {
   const { backupRemoteFiles } = await import(moduleUrl)
   const calls = []
@@ -136,6 +173,135 @@ test('SFTP restore preserves current content before restoring a backup', async (
   assert.equal(result.status, 'restored')
   assert.equal(result.rollbackStatus, 'completed')
   assert.equal(result.displacedPath, '/etc/nginx/.shellpilot-before-restore/nginx.conf-20260712-091011')
+})
+
+test('SFTP restore persists displacement before moving current content and exposes double-failure uncertainty', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const persisted = []
+  const displacedPath = '/etc/nginx/.shellpilot-before-restore/nginx.conf-20260712-091011'
+  const descriptor = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '42',
+    size: 7,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const primaryCause = new Error('primary restore failed')
+  const rollbackCause = new Error('compensation failed')
+  const sftp = {
+    stat: async () => ({ isDirectory: false }),
+    mkdir: async () => {},
+    rename: async (from, to) => {
+      if (from === displacedPath && to === '/etc/nginx/nginx.conf') {
+        throw rollbackCause
+      }
+    },
+    cp: async () => { throw primaryCause }
+  }
+  const record = {
+    id: 'r-uncertain',
+    kind: 'backup',
+    sourcePath: '/etc/nginx/nginx.conf',
+    backupPath: '/etc/nginx/.shellpilot-backups/nginx.conf-20260712-080910',
+    status: 'available'
+  }
+
+  const error = await restoreSftpRecoveryRecord({
+    sftp,
+    record,
+    now: new Date('2026-07-12T09:10:11Z'),
+    describeEntry: async () => descriptor,
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_UNCERTAIN')
+  assert.equal(error.primaryCause, primaryCause)
+  assert.equal(error.rollbackCause, rollbackCause)
+  assert.equal(error.displacedPath, displacedPath)
+  assert.deepEqual(error.displacedDescriptor, descriptor)
+  assert.deepEqual(persisted.map(value => value.displacement?.status), [
+    'planned',
+    'displaced',
+    'uncertain'
+  ])
+  assert.equal(persisted[0].displacement.path, displacedPath)
+  assert.deepEqual(persisted[0].displacement.descriptor, descriptor)
+  assert.equal(persisted.at(-1).status, 'uncertain')
+  assert.equal(persisted.at(-1).rollbackStatus, 'uncertain')
+})
+
+test('SFTP restore retry reuses a persisted displacement instead of moving current content again', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const calls = []
+  const displacedPath = '/etc/nginx/.shellpilot-before-restore/nginx.conf-existing'
+  const record = {
+    id: 'r-retry',
+    kind: 'backup',
+    sourcePath: '/etc/nginx/nginx.conf',
+    backupPath: '/etc/nginx/.shellpilot-backups/nginx.conf-old',
+    status: 'uncertain',
+    displacement: {
+      path: displacedPath,
+      descriptor: { type: 'file', inode: '42' },
+      status: 'displaced'
+    }
+  }
+  const result = await restoreSftpRecoveryRecord({
+    sftp: {
+      stat: async () => ({ isDirectory: false }),
+      mkdir: async value => calls.push(['mkdir', value]),
+      rename: async (from, to) => calls.push(['rename', from, to]),
+      cp: async (from, to) => calls.push(['cp', from, to])
+    },
+    record,
+    persistRecord: async value => value
+  })
+
+  assert.deepEqual(calls, [[
+    'cp',
+    '/etc/nginx/.shellpilot-backups/nginx.conf-old',
+    '/etc/nginx/nginx.conf'
+  ]])
+  assert.equal(result.status, 'restored')
+  assert.equal(result.displacedPath, displacedPath)
+})
+
+test('successful restore compensation clears active displacement before a later retry', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const primaryCause = new Error('restore copy failed')
+  const persisted = []
+  const record = {
+    id: 'r-compensated',
+    kind: 'backup',
+    sourcePath: '/etc/app.conf',
+    backupPath: '/etc/.shellpilot-backups/app.conf-old',
+    status: 'available'
+  }
+  const error = await restoreSftpRecoveryRecord({
+    sftp: {
+      stat: async () => ({ mode: 0o600, uid: 0, gid: 0, size: 4 }),
+      mkdir: async () => {},
+      rename: async () => {},
+      cp: async () => { throw primaryCause }
+    },
+    record,
+    describeEntry: async () => ({ type: 'file', inode: '42' }),
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  }).catch(error => error)
+
+  assert.equal(error, primaryCause)
+  assert.equal(persisted.at(-1).status, 'failed')
+  assert.equal(persisted.at(-1).displacement, null)
+  assert.equal(persisted.at(-1).lastDisplacement.status, 'compensated')
 })
 
 test('SFTP permission recovery restores the previous mode directly', async () => {

@@ -26,6 +26,7 @@ const remoteFileMethodNames = Object.freeze([
   'removeEntry',
   'cp',
   'mv',
+  'describeRecoveryEntry',
   'describeResumeEntry'
 ])
 

@@ -2919,6 +2919,38 @@ test('privileged copyEntry copies a bounded tree without recursive shell operati
   await backend.release()
 })
 
+test('privileged recovery descriptor binds a bounded tree without exposing raw backend state', async () => {
+  const harness = createBackendHarness({
+    privilegedTree: {
+      '/root/source': { type: 'directory', mode: 0o751, uid: 21, gid: 22 },
+      '/root/source/file': {
+        type: 'file',
+        mode: 0o640,
+        uid: 23,
+        gid: 24,
+        content: 'alpha'
+      }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  const descriptor = await backend.sftp.describeRecoveryEntry('/root/source')
+
+  assert.equal(descriptor.type, 'directory')
+  assert.equal(descriptor.device, harness.privilegedNodes.get('/root/source').device)
+  assert.equal(descriptor.inode, harness.privilegedNodes.get('/root/source').inode)
+  assert.equal(descriptor.mode, 0o751)
+  assert.equal(descriptor.uid, 21)
+  assert.equal(descriptor.gid, 22)
+  assert.match(descriptor.sha256, /^[a-f0-9]{64}$/)
+  assert.equal(Object.isFrozen(descriptor), true)
+  assert.ok(harness.requests.some(request => request.operation === 'sha256-bound'))
+  assert.equal(descriptor.manifest, undefined)
+  assert.equal(descriptor.backend, undefined)
+
+  await backend.release()
+})
+
 test('privileged copyEntry rejects special files, nested targets, excessive depth, and raced targets', async () => {
   const special = createBackendHarness({
     privilegedTree: {
@@ -2945,6 +2977,10 @@ test('privileged copyEntry rejects special files, nested targets, excessive dept
   const deepBackend = await createRootBackend(deep)
   await assert.rejects(
     deepBackend.sftp.copyEntry('/root/deep', '/root/copy', {}),
+    /深度|budget|预算/i
+  )
+  await assert.rejects(
+    deepBackend.sftp.describeRecoveryEntry('/root/deep'),
     /深度|budget|预算/i
   )
   assert.equal(deep.privilegedNodes.has('/root/copy'), false)

@@ -41,7 +41,12 @@ import { createTerm } from '../terminal/terminal-apis'
 import message from '../common/message'
 import * as ls from '../../common/safe-local-storage'
 import {
+  assertRootSftpRecoveryBinding,
   backupRemoteFiles,
+  createRootSftpRecoveryBinding,
+  createSftpRecoveryBindingMismatchError,
+  createSftpRecoveryUnboundError,
+  createSftpRecoveryUncertainError,
   restoreSftpRecoveryRecord,
   findLatestSftpRecoveryRecord
 } from './sftp-safety'
@@ -87,7 +92,10 @@ import {
 import { createTransactionRunner } from '../../common/safety-transactions/transaction-runner.js'
 import { buildSideEffectSafetyRequest } from '../../common/safety-transactions/side-effect-model.js'
 import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
-import { buildSftpSafetyEndpoint } from './sftp-safety-endpoint.js'
+import {
+  assertSameSftpSafetyEndpoint,
+  buildSftpSafetyEndpoint
+} from './sftp-safety-endpoint.js'
 import * as sftpSafetyStore from '../../common/safety-transactions/transaction-store.js'
 import { formatShellPilotTranslation } from '../../common/shellpilot-i18n-overrides.js'
 import {
@@ -143,6 +151,17 @@ function remoteFileOperationStale () {
 function createRemoteFileRootRequiredError () {
   const error = new Error('该恢复记录由 root 文件操作创建；请先在当前终端重新进入 UID 0 Shell。')
   error.code = 'REMOTE_FILE_ROOT_REQUIRED'
+  return error
+}
+
+function createRemoteFileRecoveryPersistenceError (cause, evidence = {}) {
+  const error = createSftpRecoveryUncertainError({
+    message: '远端操作已完成，但本地恢复记录持久化失败；结果需要人工核对。',
+    primaryCause: cause,
+    record: evidence.record
+  })
+  error.cause = cause
+  if (evidence.records) error.recoveryRecords = evidence.records
   return error
 }
 
@@ -613,6 +632,7 @@ export default class Sftp extends Component {
   persistSftpRecoveryRecords = (records) => {
     const persisted = writeSafetyOperationRecords(ls, records)
     this.setState({ sftpRecoveryRecords: persisted })
+    return persisted
   }
 
   addSftpRecoveryRecords = (added) => {
@@ -898,6 +918,10 @@ export default class Sftp extends Component {
       signal: spec.signal,
       settlementOwnsCapability: true
     }, async (backend, capability) => {
+      options.onRuntimeIdentity?.(capability.runtimeIdentity || {
+        channel: capability.channel || 'sftp',
+        effectiveUsername: this.props.tab.username || this.props.tab.user || ''
+      })
       this.remoteFileOperationBackends.set(operationId, backend)
       this.remoteFileOperationBackendPins?.set(operationId, backend)
       try {
@@ -995,6 +1019,7 @@ export default class Sftp extends Component {
     const expected = await digestSftpText(text)
     const requestedMode = mode === undefined ? undefined : Number(mode) & 0o7777
     let result
+    let operationIdentity
     try {
       result = await this.runSftpSafetyOperation({
         action: 'editor-save',
@@ -1007,6 +1032,7 @@ export default class Sftp extends Component {
       }, {
         input: { text },
         signal: options.signal,
+        onRuntimeIdentity: identity => { operationIdentity = identity },
         buildConfirmationDetails: async (operation, backend) => {
           const resource = operation.plan?.resources?.[0]
           if (!resource) return { path }
@@ -1026,7 +1052,7 @@ export default class Sftp extends Component {
         }
       })
     } catch (error) {
-      const identity = this.state.remoteFileIdentity || {}
+      const identity = operationIdentity || {}
       throw formatSftpEditorSaveError(error, {
         path,
         loginUsername: this.props.tab.username,
@@ -1057,14 +1083,60 @@ export default class Sftp extends Component {
       const prepared = []
       const boundOperationIds = new Set()
       const terminalOperationIds = new Set()
+      const preserveCancellationFailure = (primaryError, cancelError) => {
+        if (Object.isExtensible(primaryError)) {
+          primaryError.cancelFailureHandled = true
+          primaryError.cancellationFailure = cancelError
+          primaryError.operationIds = cancelError.operationIds || []
+          primaryError.cancelErrors = [
+            primaryError,
+            ...(cancelError.cancelErrors || [cancelError])
+          ]
+        }
+        return primaryError
+      }
       const cancelPrepared = async items => {
         const cancellable = items.filter(item => (
           !terminalOperationIds.has(item.operation.id)
         ))
-        await Promise.allSettled(cancellable.map(item => (
+        const settled = await Promise.allSettled(cancellable.map(item => (
           this.sftpSafetyRunner.cancel(item.operation.id)
         )))
-        cancellable.forEach(item => terminalOperationIds.add(item.operation.id))
+        const failed = []
+        settled.forEach((result, index) => {
+          const item = cancellable[index]
+          if (result.status === 'fulfilled') {
+            terminalOperationIds.add(item.operation.id)
+            this.sftpSafetyAdapter.discardPreparedProof(item.operation.id)
+          } else {
+            failed.push({ item, firstError: result.reason })
+          }
+        })
+        const unresolved = []
+        for (const failure of failed) {
+          try {
+            await this.sftpSafetyRunner.cancel(failure.item.operation.id)
+            terminalOperationIds.add(failure.item.operation.id)
+            this.sftpSafetyAdapter.discardPreparedProof(
+              failure.item.operation.id
+            )
+          } catch (retryError) {
+            unresolved.push({ ...failure, retryError })
+          }
+        }
+        if (unresolved.length) {
+          const firstError = unresolved[0].firstError
+          if (Object.isExtensible(firstError)) {
+            firstError.cancelFailureHandled = true
+            firstError.operationIds = unresolved.map(value => (
+              value.item.operation.id
+            ))
+            firstError.cancelErrors = unresolved.flatMap(value => (
+              [value.firstError, value.retryError]
+            ))
+          }
+          throw firstError
+        }
       }
       try {
         for (let index = 0; index < files.length; index += 1) {
@@ -1160,10 +1232,14 @@ export default class Sftp extends Component {
             })
           }
         } catch (cause) {
-          await cancelPrepared(selected)
           const error = new Error('文件在审查后发生变化，已停止全部 AI 文件修改。')
           error.code = 'AI_FILE_CHANGED_SINCE_REVIEW'
           error.cause = cause
+          try {
+            await cancelPrepared(selected)
+          } catch (cancelError) {
+            throw preserveCancellationFailure(error, cancelError)
+          }
           throw error
         }
 
@@ -1189,7 +1265,11 @@ export default class Sftp extends Component {
               status: 'failed',
               message: error?.message || String(error)
             })
-            await cancelPrepared(selected.slice(index + 1))
+            try {
+              await cancelPrepared(selected.slice(index + 1))
+            } catch (cancelError) {
+              throw preserveCancellationFailure(error, cancelError)
+            }
             return {
               success: false,
               cancelled: false,
@@ -1208,7 +1288,13 @@ export default class Sftp extends Component {
           files: results
         }
       } catch (error) {
-        await cancelPrepared(prepared)
+        if (!error?.cancelFailureHandled) {
+          try {
+            await cancelPrepared(prepared)
+          } catch (cancelError) {
+            throw preserveCancellationFailure(error, cancelError)
+          }
+        }
         throw error
       } finally {
         boundOperationIds.forEach(id => {
@@ -1253,15 +1339,62 @@ export default class Sftp extends Component {
           signal: dialog.signal,
           settlementOwnsCapability: true
         }, async (backend, capability) => {
+          const terminalOperationIds = new Set()
+          const preserveCancellationFailure = (primaryError, cancelError) => {
+            if (Object.isExtensible(primaryError)) {
+              primaryError.cancelFailureHandled = true
+              primaryError.cancellationFailure = cancelError
+              primaryError.operationIds = cancelError.operationIds || []
+              primaryError.cancelErrors = [
+                primaryError,
+                ...(cancelError.cancelErrors || [cancelError])
+              ]
+            }
+            return primaryError
+          }
           const discardOperation = operation => {
+            terminalOperationIds.add(operation.id)
             this.sftpSafetyProgressHandlers.delete(operation.id)
             this.sftpSafetyAdapter.discardPreparedProof(operation.id)
           }
           const cancelOperations = async operations => {
-            await Promise.allSettled(operations.map(operation => (
+            const unsettled = operations.filter(operation => (
+              !terminalOperationIds.has(operation.id)
+            ))
+            const settled = await Promise.allSettled(unsettled.map(operation => (
               this.sftpSafetyRunner.cancel(operation.id)
             )))
-            operations.forEach(discardOperation)
+            const failed = []
+            settled.forEach((result, index) => {
+              const operation = unsettled[index]
+              if (result.status === 'fulfilled') {
+                discardOperation(operation)
+              } else {
+                failed.push({ operation, firstError: result.reason })
+              }
+            })
+            const unresolved = []
+            for (const failure of failed) {
+              try {
+                await this.sftpSafetyRunner.cancel(failure.operation.id)
+                discardOperation(failure.operation)
+              } catch (retryError) {
+                unresolved.push({ ...failure, retryError })
+              }
+            }
+            if (unresolved.length) {
+              const firstError = unresolved[0].firstError
+              if (Object.isExtensible(firstError)) {
+                firstError.cancelFailureHandled = true
+                firstError.operationIds = unresolved.map(value => (
+                  value.operation.id
+                ))
+                firstError.cancelErrors = unresolved.flatMap(value => (
+                  [value.firstError, value.retryError]
+                ))
+              }
+              throw firstError
+            }
           }
           try {
             const prepared = await Promise.allSettled(targets.map(
@@ -1297,7 +1430,11 @@ export default class Sftp extends Component {
             }
 
             if (failed) {
-              await cancelOperations(operations)
+              try {
+                await cancelOperations(operations)
+              } catch (cancelError) {
+                throw preserveCancellationFailure(failed.reason, cancelError)
+              }
               dialog.fail(failed.reason)
               return await dialog.decision === 'retry' ? 'retry' : false
             }
@@ -1307,7 +1444,11 @@ export default class Sftp extends Component {
                 this.sftpSafetyAdapter.bindPreparedProof(operation)
               })
             } catch (error) {
-              await cancelOperations(operations)
+              try {
+                await cancelOperations(operations)
+              } catch (cancelError) {
+                throw preserveCancellationFailure(error, cancelError)
+              }
               dialog.fail(error)
               return await dialog.decision === 'retry' ? 'retry' : false
             }
@@ -1334,7 +1475,11 @@ export default class Sftp extends Component {
                 })
                 discardOperation(operation)
               } catch (error) {
-                await cancelOperations(operations.slice(index))
+                try {
+                  await cancelOperations(operations.slice(index))
+                } catch (cancelError) {
+                  throw preserveCancellationFailure(error, cancelError)
+                }
                 if (!options.signal?.aborted && error?.name !== 'AbortError') {
                   dialog.fail(error, { retryable: false })
                   throw error
@@ -1505,20 +1650,58 @@ export default class Sftp extends Component {
       return false
     }
     try {
-      const backup = async (backend, capability) => {
-        const records = await backupRemoteFiles({
+      const backup = async (backend, capability, mutation) => {
+        const persistedById = new Map()
+        const persistCompletedBackup = async rawRecord => {
+          let record = rawRecord
+          try {
+            if (capability?.runtimeIdentity?.channel === 'pty-root') {
+              const endpoint = this.getSftpSafetyEndpoint()
+              const source = await backend.describeRecoveryEntry(
+                record.sourcePath,
+                { signal: options.signal }
+              )
+              const backup = await backend.describeRecoveryEntry(
+                record.backupPath,
+                { signal: options.signal }
+              )
+              record = {
+                ...record,
+                metadata: {
+                  ...record.metadata,
+                  runtimeIdentity: capability.runtimeIdentity,
+                  recoveryBinding: createRootSftpRecoveryBinding({
+                    endpoint,
+                    runtimeIdentity: capability.runtimeIdentity,
+                    source,
+                    backup
+                  })
+                }
+              }
+            }
+            this.addSftpRecoveryRecords([record])
+          } catch (error) {
+            throw createRemoteFileRecoveryPersistenceError(error, {
+              record,
+              records: [record]
+            })
+          }
+          persistedById.set(record.id, record)
+          return record
+        }
+        const rawRecords = await backupRemoteFiles({
           sftp: backend,
           files: targets,
-          tab: this.props.tab
+          tab: this.props.tab,
+          onRecord: persistCompletedBackup
         })
-        if (!capability?.runtimeIdentity) return records
-        return records.map(record => ({
-          ...record,
-          metadata: {
-            ...record.metadata,
-            runtimeIdentity: capability.runtimeIdentity
-          }
-        }))
+        const records = []
+        for (const record of rawRecords) {
+          records.push(persistedById.get(record.id) ||
+            await persistCompletedBackup(record))
+        }
+        mutation?.commit()
+        return records
       }
       const records = this.props.isFtp || this.type === 'ftp'
         ? await backup(this.sftp)
@@ -1527,7 +1710,6 @@ export default class Sftp extends Component {
           signal: options.signal,
           settlementOwnsCapability: true
         }, backup)
-      this.addSftpRecoveryRecords(records)
       if (!options.silent) {
         message.success(formatShellPilotTranslation(e, 'shellpilotSftpBackedUpWithRecovery', {
           count: records.length
@@ -1536,7 +1718,11 @@ export default class Sftp extends Component {
       return true
     } catch (err) {
       window.store.onError(err)
-      if (!options.silent) message.error('SFTP 备份失败，原文件未改动。')
+      if (!options.silent) {
+        message.error(err?.code === 'REMOTE_FILE_RECOVERY_UNCERTAIN'
+          ? '远端备份可能已完成，但恢复记录未能持久化；请先核对再继续。'
+          : 'SFTP 备份失败，原文件未改动。')
+      }
       return false
     }
   }
@@ -1550,14 +1736,19 @@ export default class Sftp extends Component {
   }
 
   restoreSftpRecord = async (record) => {
-    if (!record || !['available', 'failed'].includes(record.status)) return false
-    if (!matchesSafetyOperationEndpoint(record, this.props.tab || {}, true)) {
+    if (!record || !['available', 'failed', 'uncertain'].includes(record.status)) return false
+    const requiresRoot = record.metadata?.runtimeIdentity?.channel === 'pty-root'
+    if (requiresRoot && !record.metadata?.recoveryBinding) {
+      throw createSftpRecoveryUnboundError()
+    }
+    if (!requiresRoot &&
+      !matchesSafetyOperationEndpoint(record, this.props.tab || {}, true)) {
       message.warning(`请先连接服务器 ${record.host} 后再恢复。`)
       return false
     }
+    let restored
     try {
-      const restore = async (backend, capability) => {
-        const requiresRoot = record.metadata?.runtimeIdentity?.channel === 'pty-root'
+      const restore = async (backend, capability, mutation) => {
         const currentIdentity = capability?.runtimeIdentity || {}
         if (requiresRoot && (
           currentIdentity.channel !== 'pty-root' ||
@@ -1565,53 +1756,116 @@ export default class Sftp extends Component {
         )) {
           throw createRemoteFileRootRequiredError()
         }
+        if (requiresRoot) {
+          try {
+            assertSameSftpSafetyEndpoint(
+              record.metadata.recoveryBinding.endpoint,
+              this.getSftpSafetyEndpoint()
+            )
+          } catch (cause) {
+            throw createSftpRecoveryBindingMismatchError(cause)
+          }
+          let source
+          try {
+            source = await backend.describeRecoveryEntry(record.sourcePath)
+          } catch (error) {
+            if (!record.displacement?.path ||
+              !['planned', 'displaced', 'uncertain', 'preserved']
+                .includes(record.displacement.status) ||
+              !isAuthoritativeRemoteMissingError(error)) {
+              throw error
+            }
+            source = await backend.describeRecoveryEntry(
+              record.displacement.path
+            )
+          }
+          const backup = await backend.describeRecoveryEntry(
+            record.backupPath
+          )
+          assertRootSftpRecoveryBinding(record, {
+            endpoint: this.getSftpSafetyEndpoint(),
+            runtimeIdentity: currentIdentity,
+            source,
+            backup
+          })
+        }
         this.remoteFileOperationBackends?.set(record.id, backend)
         this.remoteFileOperationBackendPins?.set(record.id, backend)
         try {
-          return await restoreSftpRecoveryRecord({
+          const persistRecord = async value => {
+            const records = updateSafetyOperationRecord(
+              readSafetyOperationRecords(ls),
+              record.id,
+              value
+            )
+            try {
+              const persisted = this.persistSftpRecoveryRecords(records) || records
+              return persisted.find(item => item.id === record.id) || value
+            } catch (error) {
+              throw createRemoteFileRecoveryPersistenceError(error, {
+                record: value,
+                records
+              })
+            }
+          }
+          const result = await restoreSftpRecoveryRecord({
             sftp: backend,
-            record
+            record,
+            describeEntry: typeof backend.describeRecoveryEntry === 'function'
+              ? path => backend.describeRecoveryEntry(path)
+              : undefined,
+            persistRecord
           })
+          const persisted = await persistRecord(result)
+          mutation?.commit()
+          return persisted
         } finally {
           this.remoteFileOperationBackends?.delete(record.id)
           this.remoteFileOperationBackendPins?.delete(record.id)
         }
       }
-      const restored = this.props.isFtp || this.type === 'ftp'
+      restored = this.props.isFtp || this.type === 'ftp'
         ? await restore(this.sftp)
         : await this.withRemoteFileOperation({
           id: `restore:${record.id}:${generate()}`,
           settlementOwnsCapability: true
         }, restore)
-      const records = updateSafetyOperationRecord(
-        readSafetyOperationRecords(ls),
-        restored.id,
-        restored
-      )
-      this.persistSftpRecoveryRecords(records)
-      await this.remoteList()
-      message.success('恢复完成；恢复前的当前内容也已另行保留。')
-      return true
     } catch (err) {
-      if (err?.code === 'REMOTE_FILE_ROOT_REQUIRED') {
+      if (err?.code === 'REMOTE_FILE_ROOT_REQUIRED' ||
+        err?.code === 'REMOTE_FILE_RECOVERY_UNBOUND') {
         message.warning(err.message)
         throw err
       }
-      const records = updateSafetyOperationRecord(
-        readSafetyOperationRecords(ls),
-        record.id,
-        {
-          status: 'failed',
-          rollbackStatus: 'failed',
-          error: err?.message || String(err),
-          failedAt: new Date().toISOString()
-        }
-      )
-      this.persistSftpRecoveryRecords(records)
+      if (!err?.recoveryRecord &&
+        err?.code !== 'REMOTE_FILE_RECOVERY_BINDING_MISMATCH' &&
+        err?.code !== 'REMOTE_FILE_RECOVERY_UNCERTAIN') {
+        const records = updateSafetyOperationRecord(
+          readSafetyOperationRecords(ls),
+          record.id,
+          {
+            status: 'failed',
+            rollbackStatus: 'failed',
+            error: err?.message || String(err),
+            failedAt: new Date().toISOString()
+          }
+        )
+        this.persistSftpRecoveryRecords(records)
+      }
       window.store.onError(err)
-      message.error('恢复失败，原有内容未被删除。')
+      message.error(err?.code === 'REMOTE_FILE_RECOVERY_UNCERTAIN'
+        ? '恢复结果不确定；恢复前内容可能位于记录的 displaced 路径，请在安全中心核对。'
+        : '恢复失败；远端内容未宣告安全，请在重试前核对恢复记录。')
       return false
     }
+    try {
+      await this.remoteList()
+    } catch (error) {
+      if (!this.remoteFileUnmounted && error?.name !== 'AbortError') {
+        window.store.onError(error)
+      }
+    }
+    message.success('恢复完成；恢复前的当前内容也已另行保留。')
+    return Boolean(restored)
   }
 
   restoreLatestSftpBackup = async (sourcePath) => {
@@ -2032,11 +2286,20 @@ export default class Sftp extends Component {
       generation.capabilities.add(generationCapability)
       let result
       let workError
+      let committed = false
+      const mutation = Object.freeze({
+        commit: () => {
+          committed = true
+          return true
+        }
+      })
       try {
         abortRemoteFileOperation(options?.signal)
-        result = await work(capability.backend, capability)
-        abortRemoteFileOperation(options?.signal)
-        if (this.remoteFileUnmounted) throw remoteFileOperationUnmounted()
+        result = await work(capability.backend, capability, mutation)
+        if (!committed) {
+          abortRemoteFileOperation(options?.signal)
+          if (this.remoteFileUnmounted) throw remoteFileOperationUnmounted()
+        }
       } catch (error) {
         workError = error
       }
@@ -2055,7 +2318,10 @@ export default class Sftp extends Component {
         }
         throw workError
       }
-      if (releaseError) throw releaseError
+      if (releaseError) {
+        if (!committed) throw releaseError
+        try { window.store.onError(releaseError) } catch {}
+      }
       return result
     } finally {
       operationSettlements.delete(operationSettled)

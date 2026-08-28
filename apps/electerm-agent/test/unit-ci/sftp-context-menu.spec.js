@@ -2,8 +2,12 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
 const fs = require('node:fs')
+const vm = require('node:vm')
 const stylus = require('stylus')
 const { pathToFileURL } = require('node:url')
+const parser = require('@babel/parser')
+const traverse = require('@babel/traverse').default
+const generateCode = require('@babel/generator').default
 
 const projectRoot = path.resolve(__dirname, '../..')
 
@@ -28,10 +32,30 @@ const fileItemSource = fs.readFileSync(
   path.resolve(__dirname, '../../src/client/components/sftp/file-item.jsx'),
   'utf8'
 )
+const fileItemAst = parser.parse(fileItemSource, {
+  sourceType: 'module',
+  plugins: ['jsx', 'classProperties', 'optionalChaining']
+})
 const listTableSource = fs.readFileSync(
   path.resolve(__dirname, '../../src/client/components/sftp/list-table-ui.jsx'),
   'utf8'
 )
+
+function installFileItemField (entry, name, dependencies = {}) {
+  let initializer
+  traverse(fileItemAst, {
+    ClassProperty (nodePath) {
+      if (nodePath.node.key?.name === name) initializer = nodePath.node.value
+    }
+  })
+  assert.ok(initializer, `file-item.jsx must define ${name}`)
+  entry[name] = vm.runInNewContext(`
+    (function installClassField () {
+      return (${generateCode(initializer).code})
+    }).call(__entry)
+  `, { ...dependencies, __entry: entry })
+  return entry[name]
+}
 
 function createItems (count) {
   return Array.from({ length: count }, (_, index) => ({
@@ -215,7 +239,36 @@ test('existing destructive SFTP and tab actions are marked dangerous without cha
   assert.match(listSource, /this\.openContextMenuFile = this\.getClickedFile\(\)/)
   assert.match(listSource, /const inst = this\.openContextMenuFile \|\| this\.getClickedFile\(\)/)
   assert.match(listSource, /typeof inst\?\.\[key\] !== 'function'/)
-  assert.match(fileItemSource, /typeof this\[key\] === 'function'/)
+  assert.match(fileItemSource, /typeof this\[key\] !== 'function'/)
+})
+
+test('FileItem context restore observes rejection while explicit restore still rejects', async () => {
+  const reports = []
+  const rootRequired = new Error('root required')
+  rootRequired.code = 'REMOTE_FILE_ROOT_REQUIRED'
+  const entry = {
+    props: {
+      file: { path: '/root', name: 'app.conf' },
+      restoreLatestSftpBackup: async () => { throw rootRequired }
+    }
+  }
+  installFileItemField(entry, 'restoreLatestBackup', {
+    resolve: (parent, name) => `${parent}/${name}`
+  })
+  installFileItemField(entry, 'onContextMenu', {
+    window: { store: { onError: error => reports.push(error) } }
+  })
+
+  await assert.rejects(entry.restoreLatestBackup(), error => error === rootRequired)
+  const dispatched = entry.onContextMenu({ key: 'restoreLatestBackup' })
+  assert.equal(typeof dispatched?.then, 'function')
+  assert.equal(await dispatched, false)
+  assert.deepEqual(reports, [])
+
+  const otherFailure = new Error('restore exploded')
+  entry.restoreLatestBackup = async () => { throw otherFailure }
+  assert.equal(await entry.onContextMenu({ key: 'restoreLatestBackup' }), false)
+  assert.deepEqual(reports, [otherFailure])
 })
 
 test('shared and system menu styles compile with viewport-safe wrapping contracts', async () => {

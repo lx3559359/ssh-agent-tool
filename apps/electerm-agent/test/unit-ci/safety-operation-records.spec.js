@@ -113,6 +113,45 @@ test('updating a rollback record preserves it as completed history', async () =>
   assert.equal(records[0].restoredAt, '2026-07-12T09:10:11.000Z')
 })
 
+test('modern root recovery bindings remain JSON-safe and deeply frozen after normalization', async () => {
+  const { normalizeSafetyOperationRecord } = await import(moduleUrl)
+  const record = normalizeSafetyOperationRecord({
+    id: 'root-backup-1',
+    source: 'sftp',
+    sourcePath: '/root/app.conf',
+    backupPath: '/root/.shellpilot-backups/app.conf',
+    createdAt: '2026-07-12T08:00:00.000Z',
+    metadata: {
+      runtimeIdentity: {
+        channel: 'pty-root',
+        effectiveUid: '0',
+        effectiveUsername: 'root'
+      },
+      recoveryBinding: {
+        version: 1,
+        endpoint: {
+          host: 'prod.example.com',
+          port: 2222,
+          username: 'hik',
+          tabId: 'tab-1',
+          terminalId: 'terminal-uuid',
+          sshTerminalPid: 4242,
+          sshSessionGeneration: 'generation-1',
+          hostKeyFingerprint: 'SHA256:one'
+        },
+        source: { type: 'file', inode: '41', sha256: 'a'.repeat(64) },
+        backup: { type: 'file', inode: '42', sha256: 'a'.repeat(64) }
+      }
+    }
+  })
+
+  assert.doesNotThrow(() => JSON.stringify(record))
+  assert.equal(Object.isFrozen(record.metadata.recoveryBinding), true)
+  assert.equal(Object.isFrozen(record.metadata.recoveryBinding.endpoint), true)
+  assert.equal(Object.isFrozen(record.metadata.recoveryBinding.source), true)
+  assert.equal(Object.isFrozen(record.metadata.recoveryBinding.backup), true)
+})
+
 test('successful retry clears an earlier failure and receives a newer update version', async () => {
   const { updateSafetyOperationRecord } = await import(moduleUrl)
   const records = updateSafetyOperationRecord([

@@ -1137,7 +1137,15 @@ export default class FileSection extends React.Component {
   }
 
   onContextMenu = ({ key }) => {
-    if (typeof this[key] === 'function') this[key]()
+    if (typeof this[key] !== 'function') return Promise.resolve(false)
+    return Promise.resolve()
+      .then(() => this[key]())
+      .catch(error => {
+        if (error?.code !== 'REMOTE_FILE_ROOT_REQUIRED') {
+          window.store.onError(error)
+        }
+        return false
+      })
   }
 
   renderEditing (file) {

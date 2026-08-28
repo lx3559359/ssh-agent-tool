@@ -32,6 +32,41 @@ function stableLegacyHash (value) {
   return (hash >>> 0).toString(36)
 }
 
+function cloneAndFreezeJsonValue (value, seen = new Set()) {
+  if (value === null || typeof value === 'string' ||
+    typeof value === 'boolean') return value
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('安全恢复绑定包含无效数字。')
+    return value
+  }
+  if (!value || typeof value !== 'object' || seen.has(value)) {
+    throw new Error('安全恢复绑定必须是无循环 JSON 数据。')
+  }
+  seen.add(value)
+  let result
+  if (Array.isArray(value)) {
+    result = value.map(item => cloneAndFreezeJsonValue(item, seen))
+  } else {
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error('安全恢复绑定只能包含普通对象。')
+    }
+    result = Object.fromEntries(Object.entries(value).map(([key, item]) => {
+      if (item === undefined || typeof item === 'function' ||
+        typeof item === 'symbol' || typeof item === 'bigint') {
+        throw new Error(`安全恢复绑定字段 ${key} 不是 JSON 数据。`)
+      }
+      return [key, cloneAndFreezeJsonValue(item, seen)]
+    }))
+  }
+  seen.delete(value)
+  return Object.freeze(result)
+}
+
+export function freezeSafetyRecoveryBinding (binding) {
+  return cloneAndFreezeJsonValue(binding)
+}
+
 export function createLegacySafetyOperationId (record = {}, source = 'sftp') {
   if (record.id) return String(record.id)
   const identity = [
@@ -68,7 +103,7 @@ export function normalizeSafetyOperationRecord (record = {}, defaults = {}) {
   const createdAt = toIsoString(record.createdAt)
   const rollbackPath = record.rollbackPath || record.path || ''
   const target = record.target || record.sourcePath || record.title || ''
-  return {
+  const normalized = {
     ...defaults,
     ...record,
     id: record.id || `${source}-${new Date(createdAt).getTime()}-${String(target || rollbackPath).replace(/[^a-z0-9]+/gi, '-').slice(-32)}`,
@@ -88,6 +123,15 @@ export function normalizeSafetyOperationRecord (record = {}, defaults = {}) {
     status: normalizeStatus(record),
     rollbackStatus: record.rollbackStatus || (normalizeStatus(record) === 'available' ? 'available' : 'completed')
   }
+  if (normalized.metadata?.recoveryBinding) {
+    normalized.metadata = {
+      ...normalized.metadata,
+      recoveryBinding: freezeSafetyRecoveryBinding(
+        normalized.metadata.recoveryBinding
+      )
+    }
+  }
+  return normalized
 }
 
 export function normalizeLegacySafetyOperationRecord (record = {}, defaults = {}) {
