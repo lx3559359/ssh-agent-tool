@@ -26,7 +26,7 @@ function protocolMarker (token, phase, ...fields) {
   return `\u001b]698;SHELLPILOT_FILE;${token};${phase};${fields.join(';')}\u0007`
 }
 
-function parsedImportFailure ({ protocol, request, values }) {
+function parsedImportResult ({ protocol, request, markers, exitCode = 1, end = true }) {
   const token = protocol.createToken()
   const parser = protocol.createParser({ token, request })
   parser.push(protocolMarker(
@@ -36,15 +36,17 @@ function parsedImportFailure ({ protocol, request, values }) {
     encodeProtocolField('root'),
     encodeProtocolField(protocolCapabilities)
   ))
-  parser.push(protocolMarker(
-    token,
-    'data',
-    '1',
-    '1',
-    'installed',
-    ...values.map(encodeProtocolField)
-  ))
-  parser.push(protocolMarker(token, 'end', '1'))
+  for (const [kind, values] of markers) {
+    parser.push(protocolMarker(
+      token,
+      'data',
+      '1',
+      '1',
+      kind,
+      ...values.map(encodeProtocolField)
+    ))
+  }
+  if (end) parser.push(protocolMarker(token, 'end', String(exitCode)))
   return {
     exitCode: parser.exitCode(),
     identity: parser.identity(),
@@ -363,19 +365,23 @@ function createBackendHarness (options = {}) {
     if (request.operation === 'stage-import') {
       const bytes = nodes.get(`${args.rootPath}/${args.objectName}`).content
       if (options.importFailure) {
+        const tempPath = `${args.targetParentRealPath === '/'
+            ? ''
+            : args.targetParentRealPath}/.shellpilot-${args.objectName}.tmp`
+        let tempClaim
         if (options.privilegedTree && options.importResidual) {
           const residualPath = options.importResidual === 'temp'
-            ? `${args.targetParentRealPath === '/'
-                ? ''
-                : args.targetParentRealPath}/.shellpilot-${args.objectName}.tmp`
+            ? tempPath
             : args.targetPath
-          privilegedNodes.set(residualPath, ensurePrivilegedBinding({
+          const residual = ensurePrivilegedBinding({
             type: 'file',
             mode: Number.parseInt(args.targetMode, 8),
             uid: Number(args.targetUid),
             gid: Number(args.targetGid),
             content: Buffer.from(bytes)
-          }))
+          })
+          privilegedNodes.set(residualPath, residual)
+          if (options.importResidual === 'temp') tempClaim = { ...residual }
           if (options.importForeignTarget) {
             privilegedNodes.set(args.targetPath, ensurePrivilegedBinding({
               type: 'file',
@@ -395,23 +401,72 @@ function createBackendHarness (options = {}) {
             content: Buffer.from(bytes)
           }))
         }
+        if (options.importForeignTempOnly) {
+          privilegedNodes.set(tempPath, ensurePrivilegedBinding({
+            type: 'file',
+            mode: Number.parseInt(args.targetMode, 8),
+            uid: Number(args.targetUid),
+            gid: Number(args.targetGid),
+            content: Buffer.from(bytes)
+          }))
+        }
+        if (options.replaceClaimedTemp && tempClaim) {
+          privilegedNodes.set(tempPath, ensurePrivilegedBinding({
+            type: 'file',
+            mode: tempClaim.mode,
+            uid: tempClaim.uid,
+            gid: tempClaim.gid,
+            content: Buffer.from(bytes)
+          }))
+        }
         const error = new Error(options.importCancellation
           ? 'stage import cancelled after claim'
           : 'stage import failed')
         if (options.importCancellation) error.name = 'AbortError'
-        if (options.importReturnedClaim) {
-          const claimed = privilegedNodes.get(args.targetPath)
-          return parsedImportFailure({
+        if (options.importIncompleteParser) {
+          return parsedImportResult({
             protocol,
             request,
-            values: [
-              args.sha256,
-              args.size,
-              claimed.device,
-              claimed.inode,
-              args.targetMode,
-              args.targetUid,
-              args.targetGid
+            markers: tempClaim
+              ? [['temp-claim', [tempClaim.device, tempClaim.inode]]]
+              : [],
+            end: false
+          })
+        }
+        if (options.importCleanupSucceeded) {
+          return parsedImportResult({
+            protocol,
+            request,
+            markers: [['import-cleanup', ['1', 'none']]]
+          })
+        }
+        if (options.importTempClaim && tempClaim) {
+          return parsedImportResult({
+            protocol,
+            request,
+            markers: [
+              ['temp-claim', [tempClaim.device, tempClaim.inode]],
+              ['import-cleanup', ['0', 'temp']]
+            ]
+          })
+        }
+        if (options.importReturnedClaim) {
+          const claimed = privilegedNodes.get(args.targetPath)
+          return parsedImportResult({
+            protocol,
+            request,
+            markers: [
+              ['temp-claim', [claimed.device, claimed.inode]],
+              ['installed', [
+                args.sha256,
+                args.size,
+                claimed.device,
+                claimed.inode,
+                args.targetMode,
+                args.targetUid,
+                args.targetGid
+              ]],
+              ['import-cleanup', ['0', 'target']]
             ]
           })
         }
@@ -433,7 +488,11 @@ function createBackendHarness (options = {}) {
           throw new Error('stage import target parent binding changed')
         }
         if (privilegedNodes.has(args.targetPath)) {
-          throw new Error('stage import target already exists')
+          return parsedImportResult({
+            protocol,
+            request,
+            markers: [['import-cleanup', ['1', 'none']]]
+          })
         }
         if (options.failImportTarget === args.targetPath) {
           privilegedNodes.set(args.targetPath, {
@@ -443,7 +502,11 @@ function createBackendHarness (options = {}) {
             gid: 999,
             content: Buffer.from('foreign')
           })
-          throw new Error('stage import raced target')
+          return parsedImportResult({
+            protocol,
+            request,
+            markers: [['import-cleanup', ['1', 'none']]]
+          })
         }
         const installed = ensurePrivilegedBinding({
           type: 'file',
@@ -456,17 +519,35 @@ function createBackendHarness (options = {}) {
       } else {
         rootFiles.set(args.targetPath, Buffer.from(bytes))
       }
+      const targetDevice = options.privilegedTree
+        ? privilegedNodes.get(args.targetPath).device
+        : '1'
+      const targetInode = options.privilegedTree
+        ? privilegedNodes.get(args.targetPath).inode
+        : '101'
       return {
         exitCode: 0,
         kind: 'stage-import',
         sha256: sha256(bytes),
         size: bytes.length,
-        targetDevice: options.privilegedTree
-          ? privilegedNodes.get(args.targetPath).device
-          : '1',
-        targetInode: options.privilegedTree
-          ? privilegedNodes.get(args.targetPath).inode
-          : '101'
+        targetDevice,
+        targetInode,
+        targetClaim: Object.freeze({
+          targetPath: args.targetPath,
+          targetDevice,
+          targetInode,
+          targetType: 'file',
+          targetParentRealPath: args.targetParentRealPath,
+          targetParentDevice: args.targetParentDevice,
+          targetParentInode: args.targetParentInode,
+          sha256: args.sha256,
+          size: Number(args.size),
+          mode: Number.parseInt(args.targetMode, 8),
+          uid: Number(args.targetUid),
+          gid: Number(args.targetGid)
+        }),
+        cleanupSucceeded: true,
+        residualLocation: 'complete'
       }
     }
     if (request.operation === 'list' || request.operation === 'list-bound') {
@@ -1577,12 +1658,12 @@ test('bounded digest failures track scratch cleanup without preserving a fake st
     request.operation === 'digest-cleanup').length, 2)
 })
 
-test('cancelled stage-import defers target proof cleanup and release retries residuals', async () => {
+test('failed stage-import retries an exact temp cleanup during release', async () => {
   const targetPath = '/cancelled'
   const harness = createBackendHarness({
     importFailure: true,
-    importCancellation: true,
     importResidual: 'temp',
+    importTempClaim: true,
     importCleanupFailures: 1,
     importCleanupTarget: targetPath,
     privilegedTree: {}
@@ -1592,8 +1673,8 @@ test('cancelled stage-import defers target proof cleanup and release retries res
   await assert.rejects(
     backend.sftp.writeFile(targetPath, Buffer.from('safe')),
     error => {
-      assert.match(error.message, /stage import cancelled/)
-      assert.match(error.cleanupError?.message || '', /residual cleanup/)
+      assert.match(error.message, /stage-import/)
+      assert.match(error.cleanupError?.message || '', /cleanup failed/)
       return true
     }
   )
@@ -1614,12 +1695,12 @@ test('cancelled stage-import defers target proof cleanup and release retries res
     request.args.targetPath === residualPath).length, 2)
 })
 
-test('cancelled stage-import cleans its temp residual without touching a foreign target', async () => {
+test('failed stage-import cleans its claimed temp without touching a foreign target', async () => {
   const targetPath = '/root/foreign'
   const harness = createBackendHarness({
     importFailure: true,
-    importCancellation: true,
     importResidual: 'temp',
+    importTempClaim: true,
     importForeignTarget: true,
     privilegedTree: {
       '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
@@ -1630,8 +1711,8 @@ test('cancelled stage-import cleans its temp residual without touching a foreign
   await assert.rejects(
     backend.sftp.writeFile(targetPath, Buffer.from('safe')),
     error => {
-      assert.match(error.message, /stage import cancelled/)
-      assert.match(error.cleanupError?.message || '', /ambiguous|ownership|claim/i)
+      assert.match(error.message, /stage-import/)
+      assert.equal(error.cleanupError, undefined)
       return true
     }
   )
@@ -1640,7 +1721,7 @@ test('cancelled stage-import cleans its temp residual without touching a foreign
     harness.requests.find(request => request.operation === 'remove-bound')
       .args.targetPath
   ), false)
-  await assert.rejects(backend.release(), /ambiguous|ownership|claim/i)
+  assert.equal(await backend.release(), true)
   assert.equal(harness.privilegedNodes.get(targetPath).content.toString(), 'foreign')
 })
 
@@ -1671,6 +1752,133 @@ test('cancelled stage-import never rebinds a same-content foreign final target',
     request.operation === 'remove-bound' && request.args.targetPath === targetPath), false)
   await assert.rejects(backend.release(), /ambiguous|ownership|claim/i)
   assert.equal(harness.privilegedNodes.get(targetPath).content.toString(), 'safe')
+})
+
+test('cancelled stage-import never infers ownership of an unclaimed foreign temp', async () => {
+  const targetPath = '/root/unclaimed-temp-target'
+  const harness = createBackendHarness({
+    importFailure: true,
+    importCancellation: true,
+    importForeignTempOnly: true,
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.writeFile(targetPath, Buffer.from('safe')),
+    error => {
+      assert.match(error.message, /stage import cancelled/)
+      assert.match(error.cleanupError?.message || '', /unresolved|claim/i)
+      return true
+    }
+  )
+  const request = harness.requests.find(item => item.operation === 'stage-import')
+  const tempPath = `/root/.shellpilot-${request.args.objectName}.tmp`
+  assert.equal(harness.privilegedNodes.get(tempPath).content.toString(), 'safe')
+  assert.equal(harness.requests.some(item =>
+    item.operation === 'sha256-bound' && item.args.path === tempPath), false)
+  assert.equal(harness.requests.some(item =>
+    item.operation === 'remove-bound' && item.args.targetPath === tempPath), false)
+  await assert.rejects(backend.release(), /unresolved|claim/i)
+  assert.equal(harness.privilegedNodes.get(tempPath).content.toString(), 'safe')
+})
+
+test('stage-import exact temp claim preserves a same-content replacement', async () => {
+  const targetPath = '/root/replaced-temp-target'
+  const harness = createBackendHarness({
+    importFailure: true,
+    importResidual: 'temp',
+    importTempClaim: true,
+    replaceClaimedTemp: true,
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.writeFile(targetPath, Buffer.from('safe')),
+    error => {
+      assert.match(error.cleanupError?.message || '', /claim|binding|inode/i)
+      return true
+    }
+  )
+  const request = harness.requests.find(item => item.operation === 'stage-import')
+  const tempPath = `/root/.shellpilot-${request.args.objectName}.tmp`
+  assert.equal(harness.privilegedNodes.get(tempPath).content.toString(), 'safe')
+  assert.equal(harness.requests.some(item =>
+    item.operation === 'remove-bound' && item.args.targetPath === tempPath), false)
+  await assert.rejects(backend.release(), /claim|binding|inode/i)
+  assert.equal(harness.privilegedNodes.get(tempPath).content.toString(), 'safe')
+})
+
+test('stage-import keeps an exact temp claim pending when cleanup keeps failing', async () => {
+  const harness = createBackendHarness({
+    importFailure: true,
+    importResidual: 'temp',
+    importTempClaim: true,
+    importCleanupFailures: 3,
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.writeFile('/root/temp-cleanup-failure', Buffer.from('safe')),
+    error => {
+      assert.match(error.cleanupError?.message || '', /cleanup failed/)
+      return true
+    }
+  )
+  await assert.rejects(backend.release(), /cleanup failed/)
+  assert.ok(harness.requests.filter(item =>
+    item.operation === 'remove-bound' &&
+    item.args.targetPath.includes('/.shellpilot-upload-')).length >= 2)
+})
+
+test('stage-import requires authoritative cleanup status for every error', async () => {
+  for (const importIncompleteParser of [false, true]) {
+    const harness = createBackendHarness({
+      importFailure: true,
+      importIncompleteParser,
+      privilegedTree: {
+        '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
+      }
+    })
+    const backend = await createRootBackend(harness)
+    await assert.rejects(
+      backend.sftp.writeFile('/root/unconfirmed', Buffer.from('safe')),
+      error => {
+        assert.match(error.cleanupError?.message || '', /unresolved|status/i)
+        return true
+      }
+    )
+    await assert.rejects(backend.release(), /unresolved|status/i)
+  }
+})
+
+test('stage-import accepts parser-confirmed cleanup without inventing a claim', async () => {
+  const harness = createBackendHarness({
+    importFailure: true,
+    importCleanupSucceeded: true,
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.writeFile('/root/confirmed-clean', Buffer.from('safe')),
+    error => {
+      assert.equal(error.code, 'PRIVILEGED_FILE_OPERATION_FAILED')
+      assert.equal(error.cleanupError, undefined)
+      return true
+    }
+  )
+  assert.equal(await backend.release(), true)
 })
 
 test('failed stage-import parser feed preserves its exact claim for cleanup', async () => {
@@ -2002,12 +2210,13 @@ test('privileged writes upload exclusive bytes then import only digest size and 
 
   const failedHarness = createBackendHarness({
     importFailure: true,
+    importCleanupSucceeded: true,
     missingLstatResult: true
   })
   const failed = await createRootBackend(failedHarness)
   await assert.rejects(
     failed.sftp.writeFile('/root/missing-target', secret, 0o600),
-    /stage import failed/
+    /stage-import/
   )
   assert.equal(failedHarness.requests.some(request => request.operation === 'stage-cleanup'), true)
   await failed.release()

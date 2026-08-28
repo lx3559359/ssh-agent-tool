@@ -349,8 +349,8 @@ export async function createPrivilegedFileBackend ({
       const error = new Error(`root 文件操作失败：${operation}`)
       error.code = 'PRIVILEGED_FILE_OPERATION_FAILED'
       error.operation = operation
-      if (operation === 'stage-import' && result?.targetClaim) {
-        error.targetClaim = result.targetClaim
+      if (operation === 'stage-import') {
+        error.importResult = result
       }
       throw error
     }
@@ -785,52 +785,133 @@ export async function createPrivilegedFileBackend ({
     })
   }
 
+  function normalizeImportTempClaim (value, record) {
+    const keys = [
+      'tempPath', 'tempDevice', 'tempInode', 'tempType',
+      'tempParentRealPath', 'tempParentDevice', 'tempParentInode'
+    ]
+    if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(value)) ||
+      Object.keys(value).length !== keys.length ||
+      keys.some(key => !Object.hasOwn(value, key)) ||
+      value.tempPath !== record.tempPath ||
+      value.tempType !== 'file' ||
+      value.tempParentRealPath !== record.parentPath ||
+      String(value.tempParentDevice) !== String(record.parent.device) ||
+      String(value.tempParentInode) !== String(record.parent.inode) ||
+      !/^(?:0|[1-9]\d*)$/.test(String(value.tempDevice)) ||
+      !/^(?:0|[1-9]\d*)$/.test(String(value.tempInode))) {
+      throw new Error('root 文件后端 stage-import temp claim 无效')
+    }
+    return Object.freeze({
+      tempPath: value.tempPath,
+      tempDevice: String(value.tempDevice),
+      tempInode: String(value.tempInode),
+      tempType: value.tempType,
+      tempParentRealPath: value.tempParentRealPath,
+      tempParentDevice: String(value.tempParentDevice),
+      tempParentInode: String(value.tempParentInode)
+    })
+  }
+
+  function normalizeImportOutcome (value, record) {
+    if (!value || typeof value !== 'object' ||
+      typeof value.cleanupSucceeded !== 'boolean' ||
+      !['none', 'complete', 'temp', 'target', 'unknown'].includes(
+        value.residualLocation
+      )) {
+      throw new Error('root 文件后端 stage-import cleanup status unresolved')
+    }
+    const tempClaim = value.tempClaim
+      ? normalizeImportTempClaim(value.tempClaim, record)
+      : null
+    const targetClaim = value.targetClaim
+      ? normalizeImportTargetClaim(value.targetClaim, record)
+      : null
+    if ((value.cleanupSucceeded &&
+        !['none', 'complete'].includes(value.residualLocation)) ||
+      (!value.cleanupSucceeded &&
+        !['temp', 'target', 'unknown'].includes(value.residualLocation)) ||
+      (value.residualLocation === 'temp' && !tempClaim) ||
+      (value.residualLocation === 'target' && !targetClaim) ||
+      (value.residualLocation === 'complete' && !targetClaim)) {
+      throw new Error('root 文件后端 stage-import cleanup status 无效')
+    }
+    return Object.freeze({
+      cleanupSucceeded: value.cleanupSucceeded,
+      residualLocation: value.residualLocation,
+      tempClaim,
+      targetClaim
+    })
+  }
+
   async function cleanupImportResidual (record, signal) {
     staging.assertCurrent()
-    for (const candidate of [record.tempPath, record.targetPath]) {
-      const finalTarget = candidate === record.targetPath
-      let entry
-      try {
-        entry = await boundMutationEntry(
-          candidate,
-          'stage-import residual cleanup',
-          signal
-        )
-      } catch (error) {
-        if (error?.code === 'ENOENT') continue
-        throw error
-      }
-      if (finalTarget && !record.targetClaim) {
-        throw new Error(
-          'root 文件后端 stage-import final target ownership ambiguous without exact claim'
-        )
-      }
-      if (entry.metadata.type !== 'file' ||
-        entry.metadata.size !== record.proof.size ||
-        !parentBindingMatches(entry.parent, record.parent)) {
-        throw new Error('root 文件后端 stage-import residual proof 发生变化')
-      }
-      if (finalTarget && (
-        String(entry.metadata.device) !== record.targetClaim.targetDevice ||
-        String(entry.metadata.inode) !== record.targetClaim.targetInode ||
-        entry.metadata.type !== record.targetClaim.targetType ||
-        normalizeMode(entry.metadata.mode & 0o7777) !== record.targetClaim.mode ||
-        Number(entry.metadata.uid) !== record.targetClaim.uid ||
-        Number(entry.metadata.gid) !== record.targetClaim.gid)) {
-        throw new Error('root 文件后端 stage-import exact target claim 发生变化')
-      }
-      const proof = await boundDigest({
-        path: candidate,
-        metadata: entry.metadata,
-        maxSize: record.proof.size
-      }, 'sha256-bound', 0, readChunkBytes, signal)
-      if (proof.sha256 !== record.proof.sha256 ||
-        proof.size !== record.proof.size) {
-        throw new Error('root 文件后端 stage-import residual 内容证明发生变化')
-      }
-      await executeRequest('remove-bound',
-        boundRemovalArgs(candidate, entry, proof), { signal })
+    if (record.cleanupSucceeded === true) {
+      pendingImportCleanups.delete(record.objectName)
+      return true
     }
+    const claim = record.residualLocation === 'temp'
+      ? record.tempClaim
+      : record.residualLocation === 'target'
+        ? record.targetClaim
+        : null
+    if (!claim) {
+      throw new Error(
+        'root 文件后端 stage-import cleanup status unresolved without exact claim'
+      )
+    }
+    const candidate = record.residualLocation === 'temp'
+      ? record.tempPath
+      : record.targetPath
+    let entry
+    try {
+      entry = await boundMutationEntry(
+        candidate,
+        'stage-import residual cleanup',
+        signal
+      )
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        pendingImportCleanups.delete(record.objectName)
+        return true
+      }
+      throw error
+    }
+    const claimedDevice = record.residualLocation === 'temp'
+      ? claim.tempDevice
+      : claim.targetDevice
+    const claimedInode = record.residualLocation === 'temp'
+      ? claim.tempInode
+      : claim.targetInode
+    const claimedType = record.residualLocation === 'temp'
+      ? claim.tempType
+      : claim.targetType
+    if (entry.metadata.type !== 'file' ||
+      entry.metadata.size !== record.proof.size ||
+      !parentBindingMatches(entry.parent, record.parent) ||
+      String(entry.metadata.device) !== claimedDevice ||
+      String(entry.metadata.inode) !== claimedInode ||
+      entry.metadata.type !== claimedType) {
+      throw new Error('root 文件后端 stage-import exact claim 发生变化')
+    }
+    if (record.residualLocation === 'target' && (
+      normalizeMode(entry.metadata.mode & 0o7777) !== claim.mode ||
+      Number(entry.metadata.uid) !== claim.uid ||
+      Number(entry.metadata.gid) !== claim.gid)) {
+      throw new Error('root 文件后端 stage-import exact target claim 发生变化')
+    }
+    const proof = await boundDigest({
+      path: candidate,
+      metadata: entry.metadata,
+      maxSize: record.proof.size
+    }, 'sha256-bound', 0, readChunkBytes, signal)
+    if (proof.sha256 !== record.proof.sha256 ||
+      proof.size !== record.proof.size) {
+      throw new Error('root 文件后端 stage-import residual 内容证明发生变化')
+    }
+    await executeRequest('remove-bound',
+      boundRemovalArgs(candidate, entry, proof), { signal })
     pendingImportCleanups.delete(record.objectName)
     return true
   }
@@ -846,32 +927,39 @@ export async function createPrivilegedFileBackend ({
         sha256: args.sha256,
         size: Number(args.size)
       }),
+      cleanupSucceeded: null,
+      residualLocation: 'unknown',
+      tempClaim: null,
       targetClaim: null
     })
     pendingImportCleanups.set(record.objectName, record)
     try {
       const result = await executeRequest('stage-import', args, { signal })
+      const outcome = normalizeImportOutcome(result, record)
+      if (outcome.cleanupSucceeded !== true ||
+        outcome.residualLocation !== 'complete') {
+        throw new Error('root 文件后端 stage-import 成功状态无效')
+      }
       pendingImportCleanups.delete(record.objectName)
       return result
     } catch (error) {
-      const interrupted = signal?.aborted || [
-        'AbortError', 'TimeoutError', 'CancellationUnknownError'
-      ].includes(error?.name)
       let cleanupRecord = record
-      if (error?.targetClaim) {
+      if (error?.importResult) {
         try {
+          const outcome = normalizeImportOutcome(error.importResult, record)
           cleanupRecord = Object.freeze({
             ...record,
-            targetClaim: normalizeImportTargetClaim(error.targetClaim, record)
+            ...outcome
           })
           pendingImportCleanups.set(record.objectName, cleanupRecord)
-        } catch (claimError) {
-          attachCleanupFailure(error, claimError)
+          if (outcome.cleanupSucceeded === true) {
+            pendingImportCleanups.delete(record.objectName)
+            throw error
+          }
+        } catch (outcomeError) {
+          if (outcomeError === error) throw error
+          attachCleanupFailure(error, outcomeError)
         }
-      }
-      if (!interrupted && !error?.targetClaim) {
-        pendingImportCleanups.delete(record.objectName)
-        throw error
       }
       try {
         await cleanupImportResidual(cleanupRecord)

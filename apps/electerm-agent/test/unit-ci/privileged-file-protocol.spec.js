@@ -2074,8 +2074,18 @@ test('stage-import signal cleanup is constant-time and defers proof I/O', async 
   assert.match(command, /__sp_import_exit_trap\(\).*__sp_importSignalled.*-ne 1.*__sp_import_cleanup/)
   assert.match(exitHandler, /__sp_import_cleanup/)
   assert.doesNotMatch(exitHandler, /__sp_emit_install/)
-  assert.match(finalizer, /__sp_importCleanupStatus.*-ne 0/)
-  assert.match(finalizer, /__sp_importInstalled.*__sp_emit_install/)
+  assert.match(finalizer, /__sp_importCleanupStatus.*-eq 0/)
+  assert.match(command,
+    /__sp_import_emit_residual\(\).*__sp_importInstalled.*__sp_emit_install/)
+  const tempClaimIndex = command.indexOf(
+    '__sp_emit_temp_claim "$__sp_tempDevice" "$__sp_tempInode"'
+  )
+  const copyIndex = command.indexOf(
+    'dd bs=65536 iflag=count_bytes',
+    tempClaimIndex
+  )
+  assert.ok(tempClaimIndex >= 0 && tempClaimIndex < copyIndex)
+  assert.match(finalizer, /__sp_emit_import_cleanup/)
   assert.ok(command.indexOf('__sp_import_finalize "$__sp_status"') <
     command.indexOf(';end;%s'))
   assert.match(command, /__sp_importTempName="\.shellpilot-\$__sp_objectName\.tmp"/)
@@ -2153,6 +2163,33 @@ test('privileged parser normalizes every fixed result shape', async () => {
     return parser.result()
   }
 
+  function parseImport (markers, exitCode) {
+    const request = {
+      operation: 'stage-import',
+      args: targetStageBinding({
+        sha256: 'b'.repeat(64),
+        size: '12',
+        targetMode: '600',
+        targetUid: '0',
+        targetGid: '0'
+      })
+    }
+    const parser = createPrivilegedFileParser({ token, request })
+    parser.push(startMarker(token, allCapabilities))
+    for (const [kind, values] of markers) {
+      parser.push(fileMarker(
+        token,
+        'data',
+        '1',
+        '1',
+        kind,
+        ...values.map(encodeMarkerField)
+      ))
+    }
+    parser.push(fileMarker(token, 'end', String(exitCode)))
+    return parser.result()
+  }
+
   assert.deepEqual(parse('probe'), {
     kind: 'probe',
     capabilities: allCapabilityObject,
@@ -2212,9 +2249,13 @@ test('privileged parser normalizes every fixed result shape', async () => {
       size: 12
     })
   }
-  const installed = parse('stage-import', 'installed', [
-    'b'.repeat(64), '12', '4003', '4004', '600', '0', '0'
-  ])
+  const installed = parseImport([
+    ['temp-claim', ['4003', '4004']],
+    ['installed', [
+      'b'.repeat(64), '12', '4003', '4004', '600', '0', '0'
+    ]],
+    ['import-cleanup', ['1', 'complete']]
+  ], 0)
   assert.deepEqual(installed, {
     kind: 'stage-import',
     capabilities: allCapabilityObject,
@@ -2222,6 +2263,15 @@ test('privileged parser normalizes every fixed result shape', async () => {
     size: 12,
     targetDevice: '4003',
     targetInode: '4004',
+    tempClaim: {
+      tempPath: '/root/.shellpilot-operation-token.tmp',
+      tempDevice: '4003',
+      tempInode: '4004',
+      tempType: 'file',
+      tempParentRealPath: '/root',
+      tempParentDevice: '4001',
+      tempParentInode: '4002'
+    },
     targetClaim: {
       targetPath: '/root/target',
       targetDevice: '4003',
@@ -2235,19 +2285,44 @@ test('privileged parser normalizes every fixed result shape', async () => {
       mode: 0o600,
       uid: 0,
       gid: 0
-    }
+    },
+    cleanupSucceeded: true,
+    residualLocation: 'complete'
   })
   assert.equal(Object.isFrozen(installed), true)
+  assert.equal(Object.isFrozen(installed.tempClaim), true)
   assert.equal(Object.isFrozen(installed.targetClaim), true)
-  const failedInstalled = parse('stage-import', 'installed', [
-    'b'.repeat(64), '12', '4003', '4004', '600', '0', '0'
+  const failedInstalled = parseImport([
+    ['temp-claim', ['4003', '4004']],
+    ['installed', [
+      'b'.repeat(64), '12', '4003', '4004', '600', '0', '0'
+    ]],
+    ['import-cleanup', ['0', 'target']]
   ], 1)
   assert.deepEqual(failedInstalled, {
     ...installed,
+    cleanupSucceeded: false,
+    residualLocation: 'target',
     ok: false
   })
   assert.equal(Object.isFrozen(failedInstalled), true)
+  assert.equal(Object.isFrozen(failedInstalled.tempClaim), true)
   assert.equal(Object.isFrozen(failedInstalled.targetClaim), true)
+  assert.deepEqual(parseImport([
+    ['import-cleanup', ['1', 'none']]
+  ], 1), {
+    kind: 'stage-import',
+    capabilities: allCapabilityObject,
+    cleanupSucceeded: true,
+    residualLocation: 'none',
+    ok: false
+  })
+  assert.throws(() => parseImport([
+    ['installed', [
+      'b'.repeat(64), '12', '4003', '4004', '600', '0', '0'
+    ]],
+    ['import-cleanup', ['1', 'complete']]
+  ], 0), /temp claim|cleanup 状态/)
   assert.deepEqual(parse('mkdir-bound', 'binding', ['4003', '4004']), {
     kind: 'mkdir-bound',
     capabilities: allCapabilityObject,
@@ -2304,6 +2379,17 @@ test('stage parser rejects forged success when a required capability is false', 
         token,
         allCapabilities.replace(`${capability}=1`, `${capability}=0`)
       ))
+      if (operation === 'stage-import') {
+        parser.push(fileMarker(
+          token,
+          'data',
+          '1',
+          '1',
+          'temp-claim',
+          encodeMarkerField('4003'),
+          encodeMarkerField('4004')
+        ))
+      }
       if (data) {
         parser.push(fileMarker(
           token,
@@ -2312,6 +2398,17 @@ test('stage parser rejects forged success when a required capability is false', 
           '1',
           data[0],
           ...data.slice(1).map(encodeMarkerField)
+        ))
+      }
+      if (operation === 'stage-import') {
+        parser.push(fileMarker(
+          token,
+          'data',
+          '1',
+          '1',
+          'import-cleanup',
+          encodeMarkerField('1'),
+          encodeMarkerField('complete')
         ))
       }
       assert.throws(

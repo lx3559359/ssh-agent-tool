@@ -710,6 +710,9 @@ const stageImportBody = [
   '[ ! -e "./$__sp_importTempName" ] && [ ! -L "./$__sp_importTempName" ] || { exec 5<&-; return 1; }',
   '__sp_importTempCreated=0',
   '__sp_importInstalled=0',
+  '__sp_importClaimMayExist=0',
+  '__sp_importTempClaimEmitted=0',
+  '__sp_importTargetClaimEmitted=0',
   '__sp_tempDevice=',
   '__sp_tempInode=',
   '__sp_importMetadataKnown=0',
@@ -717,16 +720,18 @@ const stageImportBody = [
   '__sp_importMetadataGid=',
   '__sp_importMetadataMode=',
   '__sp_import_cleanup_candidate() { __sp_importCleanupPath="$1"; __sp_importCleanupUid="$2"; __sp_importCleanupGid="$3"; __sp_importCleanupMode="$4"; __sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || return 1; [ ! -L "$__sp_importCleanupPath" ] && [ -f "$__sp_importCleanupPath" ] || return 1; exec 3< "$__sp_importCleanupPath" || return $?; __sp_fd3="/proc/$$/fd/3"; __sp_fd_entry_matches "$__sp_fd3" "$__sp_tempDevice" "$__sp_tempInode" file || { exec 3<&-; return 1; }; [ "$(stat -L -c %s -- "$__sp_fd3")" = "$__sp_expectedSize" ] || { exec 3<&-; return 1; }; __sp_importCleanupDigest="$(__sp_bounded_digest 0 "$__sp_expectedSize")" || { exec 3<&-; return 1; }; __sp_importCleanupSize="$(stat -L -c %s -- "$__sp_fd3")" || { exec 3<&-; return 1; }; __sp_importCleanupActualUid="$(stat -L -c %u -- "$__sp_fd3")" || { exec 3<&-; return 1; }; __sp_importCleanupActualGid="$(stat -L -c %g -- "$__sp_fd3")" || { exec 3<&-; return 1; }; __sp_importCleanupActualMode="$(stat -L -c %a -- "$__sp_fd3")" || { exec 3<&-; return 1; }; [ "$__sp_importCleanupDigest" = "$__sp_expectedSha256" ] && [ "$__sp_importCleanupSize" = "$__sp_expectedSize" ] && [ "$__sp_importCleanupActualUid" = "$__sp_importCleanupUid" ] && [ "$__sp_importCleanupActualGid" = "$__sp_importCleanupGid" ] && [ "$__sp_importCleanupActualMode" = "$__sp_importCleanupMode" ] || { exec 3<&-; return 1; }; __sp_path_matches_fd "$__sp_importCleanupPath" "$__sp_tempDevice" "$__sp_tempInode" || { exec 3<&-; return 1; }; __sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || { exec 3<&-; return 1; }; rm -f -- "$__sp_importCleanupPath"; __sp_importCleanupStatus=$?; exec 3<&-; return "$__sp_importCleanupStatus"; }',
-  '__sp_import_cleanup() { exec 4>&- 2>/dev/null; [ -n "$__sp_tempDevice" ] && [ -n "$__sp_tempInode" ] && [ "$__sp_importMetadataKnown" = 1 ] || return 1; if [ -e "./$__sp_importTempName" ] || [ -L "./$__sp_importTempName" ]; then [ "$__sp_importTempCreated" = 1 ] || return 1; __sp_import_cleanup_candidate "./$__sp_importTempName" "$__sp_importMetadataUid" "$__sp_importMetadataGid" "$__sp_importMetadataMode"; return $?; fi; if [ -e "./$__sp_targetName" ] || [ -L "./$__sp_targetName" ]; then [ "$__sp_importInstalled" = 1 ] || return 1; __sp_import_cleanup_candidate "./$__sp_targetName" "$__sp_importMetadataUid" "$__sp_importMetadataGid" "$__sp_importMetadataMode"; return $?; fi; [ "$__sp_importTempCreated" = 0 ] && [ "$__sp_importInstalled" = 0 ]; }',
-  '__sp_import_finalize() { __sp_importFinalizeStatus="$1"; [ "$__sp_importFinalizeStatus" -ne 0 ] || return 0; trap - 0 HUP INT TERM; exec 3<&- 4>&- 5<&- 2>/dev/null; __sp_import_cleanup >/dev/null 2>&1; __sp_importCleanupStatus=$?; if [ "$__sp_importCleanupStatus" -ne 0 ] && [ "$__sp_importInstalled" = 1 ] && [ "$__sp_importMetadataKnown" = 1 ] && [ -n "$__sp_tempDevice" ] && [ -n "$__sp_tempInode" ]; then __sp_emit_install "$__sp_expectedSha256" "$__sp_expectedSize" "$__sp_tempDevice" "$__sp_tempInode" "$__sp_importMetadataMode" "$__sp_importMetadataUid" "$__sp_importMetadataGid" || :; fi; return "$__sp_importFinalizeStatus"; }',
+  '__sp_import_cleanup() { exec 4>&- 2>/dev/null; if [ "$__sp_importTempCreated" = 0 ] && [ "$__sp_importInstalled" = 0 ] && [ "$__sp_importClaimMayExist" = 0 ]; then return 0; fi; [ -n "$__sp_tempDevice" ] && [ -n "$__sp_tempInode" ] && [ "$__sp_importMetadataKnown" = 1 ] || return 1; if [ -e "./$__sp_importTempName" ] || [ -L "./$__sp_importTempName" ]; then [ "$__sp_importTempCreated" = 1 ] || return 1; __sp_import_cleanup_candidate "./$__sp_importTempName" "$__sp_importMetadataUid" "$__sp_importMetadataGid" "$__sp_importMetadataMode"; return $?; fi; if [ -e "./$__sp_targetName" ] || [ -L "./$__sp_targetName" ]; then [ "$__sp_importInstalled" = 1 ] || return 1; __sp_import_cleanup_candidate "./$__sp_targetName" "$__sp_importMetadataUid" "$__sp_importMetadataGid" "$__sp_importMetadataMode"; return $?; fi; [ "$__sp_importTempCreated" = 0 ] && [ "$__sp_importInstalled" = 0 ]; }',
+  '__sp_import_emit_residual() { if [ "$__sp_importInstalled" = 1 ] && [ "$__sp_importMetadataKnown" = 1 ] && [ -n "$__sp_tempDevice" ] && [ -n "$__sp_tempInode" ]; then if [ "$__sp_importTargetClaimEmitted" != 1 ]; then __sp_emit_install "$__sp_expectedSha256" "$__sp_expectedSize" "$__sp_tempDevice" "$__sp_tempInode" "$__sp_importMetadataMode" "$__sp_importMetadataUid" "$__sp_importMetadataGid" || return 1; __sp_importTargetClaimEmitted=1; fi; __sp_emit_import_cleanup 0 target; return $?; fi; if [ "$__sp_importTempCreated" = 1 ] && [ "$__sp_importTempClaimEmitted" = 1 ]; then __sp_emit_import_cleanup 0 temp; return $?; fi; __sp_emit_import_cleanup 0 unknown; }',
+  '__sp_import_finalize() { __sp_importFinalizeStatus="$1"; [ "$__sp_importFinalizeStatus" -ne 0 ] || return 0; trap - 0 HUP INT TERM; exec 3<&- 4>&- 5<&- 2>/dev/null; __sp_import_cleanup >/dev/null 2>&1; __sp_importCleanupStatus=$?; if [ "$__sp_importCleanupStatus" -eq 0 ]; then __sp_emit_import_cleanup 1 none || :; else __sp_import_emit_residual || :; fi; return "$__sp_importFinalizeStatus"; }',
   '__sp_importSignalled=0',
-  '__sp_import_signal_trap() { __sp_importTrapStatus=$?; [ "$__sp_importTrapStatus" -ne 0 ] || __sp_importTrapStatus=1; __sp_importSignalled=1; trap - HUP INT TERM; exec 3<&- 4>&- 5<&- 2>/dev/null; exit "$__sp_importTrapStatus"; }',
+  '__sp_import_signal_trap() { __sp_importTrapStatus=$?; [ "$__sp_importTrapStatus" -ne 0 ] || __sp_importTrapStatus=1; __sp_importSignalled=1; trap - HUP INT TERM; exec 3<&- 4>&- 5<&- 2>/dev/null; if [ "$__sp_importTempCreated" = 0 ] && [ "$__sp_importInstalled" = 0 ] && [ "$__sp_importClaimMayExist" = 0 ]; then __sp_emit_import_cleanup 1 none || :; else __sp_import_emit_residual || :; fi; exit "$__sp_importTrapStatus"; }',
   '__sp_import_exit_trap() { __sp_importTrapStatus=$?; [ "$__sp_importTrapStatus" -ne 0 ] || __sp_importTrapStatus=1; trap - 0 HUP INT TERM; exec 3<&- 4>&- 5<&- 2>/dev/null; if [ "$__sp_importSignalled" -ne 1 ]; then __sp_import_cleanup >/dev/null 2>&1; fi; exit "$__sp_importTrapStatus"; }',
   'trap __sp_import_exit_trap 0',
   'trap __sp_import_signal_trap HUP INT TERM',
   'umask 077',
   'set -C || { exec 5<&-; return 1; }',
   '__sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || { exec 5<&-; return 1; }',
+  '__sp_importClaimMayExist=1',
   'exec 4> "./$__sp_importTempName" || { exec 5<&-; return 1; }',
   '__sp_fd4="/proc/$$/fd/4"',
   '__sp_tempDevice="$(stat -L -c %d -- "$__sp_fd4")" || { exec 4>&- 5<&-; return 1; }',
@@ -736,6 +741,9 @@ const stageImportBody = [
   '[ "$(stat -L -c %u -- "$__sp_fd4")" = 0 ] && [ "$(stat -L -c %a -- "$__sp_fd4")" = 600 ] || { exec 4>&- 5<&-; return 1; }',
   '__sp_importMetadataUid=0; __sp_importMetadataGid="$__sp_importInitialGid"; __sp_importMetadataMode=600; __sp_importMetadataKnown=1',
   '__sp_path_matches_fd "./$__sp_importTempName" "$__sp_tempDevice" "$__sp_tempInode" || { exec 4>&- 5<&-; return 1; }',
+  '__sp_importClaimMayExist=0',
+  '__sp_emit_temp_claim "$__sp_tempDevice" "$__sp_tempInode" || { exec 4>&- 5<&-; return 1; }',
+  '__sp_importTempClaimEmitted=1',
   '__sp_copyReport="$(LC_ALL=C dd bs=65536 iflag=count_bytes count="$__sp_expectedSize" <&5 2>&1 >&4)"',
   '__sp_copyStatus=$?',
   '__sp_copyActualBytes="$(__sp_parse_dd_report_text "$__sp_copyReport")" || { exec 4>&- 5<&-; return 1; }',
@@ -782,6 +790,8 @@ const stageImportBody = [
   '__sp_path_matches_fd "./$__sp_targetName" "$__sp_tempDevice" "$__sp_tempInode" || { exec 4>&-; return 1; }',
   '__sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || { exec 4>&-; return 1; }',
   '__sp_emit_install "$__sp_finalDigest" "$__sp_finalSize" "$__sp_installedDevice" "$__sp_installedInode" "$__sp_finalMode" "$__sp_finalUid" "$__sp_finalGid" || { exec 4>&-; return 1; }',
+  '__sp_importTargetClaimEmitted=1',
+  '__sp_emit_import_cleanup 1 complete || { exec 4>&-; return 1; }',
   'trap - 0 HUP INT TERM',
   '__sp_importInstalled=0',
   'exec 4>&-'
@@ -1257,7 +1267,7 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     .map(name => `[ "$${capabilityShellVariables[name]}" = 1 ]`)
     .join(' && ') || ':'
   const operationFinalizer = normalized.operation === 'stage-import'
-    ? '__sp_import_finalize "$__sp_status"; __sp_status=$?;'
+    ? 'if command -v __sp_import_finalize >/dev/null 2>&1; then __sp_import_finalize "$__sp_status"; __sp_status=$?; else __sp_emit_import_cleanup 1 none || :; fi;'
     : ''
   const marker = '\\033]698;SHELLPILOT_FILE;%s'
   const functionalCapabilityProbe = [
@@ -1320,7 +1330,9 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     '__sp_emit_stat() { if [ "$2" = stat ]; then __sp_value="$(stat -L -c "%f;%s;%X;%Y;%u;%g" -- "$1")" || return $?; else __sp_value="$(stat -c "%f;%s;%X;%Y;%u;%g" -- "$1")" || return $?; fi; __sp_emit_data1 1 1 metadata "$(__sp_encode "$__sp_value")"; };',
     '__sp_emit_text() { __sp_value=$' + '{1%?}; __sp_value=$' + '{__sp_value%?}; [ -n "$__sp_value" ] || return 1; __sp_emit_data1 1 1 text "$(__sp_encode "$__sp_value")"; };',
     '__sp_emit_digest() { __sp_emit_data2 1 1 digest "$(__sp_encode "$1")" "$(__sp_encode "$2")"; };',
+    '__sp_emit_temp_claim() { __sp_emit_data2 1 1 temp-claim "$(__sp_encode "$1")" "$(__sp_encode "$2")"; };',
     '__sp_emit_install() { __sp_emit_data7 installed "$(__sp_encode "$1")" "$(__sp_encode "$2")" "$(__sp_encode "$3")" "$(__sp_encode "$4")" "$(__sp_encode "$5")" "$(__sp_encode "$6")" "$(__sp_encode "$7")"; };',
+    '__sp_emit_import_cleanup() { __sp_emit_data2 1 1 import-cleanup "$(__sp_encode "$1")" "$(__sp_encode "$2")"; };',
     '__sp_emit_binding() { __sp_emit_data2 1 1 binding "$(__sp_encode "$1")" "$(__sp_encode "$2")"; };',
     '__sp_emit_handshake() { __sp_emit_data7 handshake "$(__sp_encode "$1")" "$(__sp_encode "$2")" "$(__sp_encode "$3")" "$(__sp_encode "$4")" "$(__sp_encode "$5")" "$(__sp_encode "$6")" "$(__sp_encode "$7")"; };',
     `__sp_run_operation() { ${operationBodies[normalized.operation]}; };`,
@@ -1455,6 +1467,9 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
   let nextSequence = 1
   const entries = []
   let structuredData = null
+  let importTempClaim = null
+  let importTargetClaim = null
+  let importCleanupStatus = null
   let trustedMetadataBytes = 0
 
   const mutationOperations = new Set([
@@ -1488,12 +1503,19 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
     }
     const sequence = parseUnsignedInteger(fields[1], '数据序号')
     const total = parseUnsignedInteger(fields[2], '数据总数')
-    if (sequence !== nextSequence || sequence < 1 || total < 1 ||
-      sequence > total || (expectedTotal !== null && total !== expectedTotal)) {
-      throw new Error('root 文件协议数据顺序无效')
+    const importStateMarker = normalized.operation === 'stage-import'
+    if (importStateMarker) {
+      if (sequence !== 1 || total !== 1 || importCleanupStatus) {
+        throw new Error('root 文件协议 stage-import 状态顺序无效')
+      }
+    } else {
+      if (sequence !== nextSequence || sequence < 1 || total < 1 ||
+        sequence > total || (expectedTotal !== null && total !== expectedTotal)) {
+        throw new Error('root 文件协议数据顺序无效')
+      }
+      expectedTotal = total
+      nextSequence += 1
     }
-    expectedTotal = total
-    nextSequence += 1
     const kind = fields[3]
     const payload = fields.slice(4)
     if (['list', 'list-bound'].includes(normalized.operation)) {
@@ -1506,6 +1528,97 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
         throw new Error('root 文件协议文件名无效')
       }
       entries.push(Object.freeze({ name, ...parseMetadata(payload[1]) }))
+      return
+    }
+    if (normalized.operation === 'stage-import') {
+      if (kind === 'temp-claim') {
+        if (payload.length !== 2 || importTempClaim || importTargetClaim) {
+          throw new Error('root 文件协议 stage-import temp claim 无效')
+        }
+        const tempDevice = decodeUtf8Base64(payload[0], 'temp device')
+        const tempInode = decodeUtf8Base64(payload[1], 'temp inode')
+        assertUnsignedIdentifier(tempDevice, 'temp device')
+        assertUnsignedIdentifier(tempInode, 'temp inode')
+        const parent = normalized.args.targetParentRealPath
+        importTempClaim = Object.freeze({
+          tempPath: `${parent === '/' ? '' : parent}/.shellpilot-${normalized.args.objectName}.tmp`,
+          tempDevice,
+          tempInode,
+          tempType: 'file',
+          tempParentRealPath: parent,
+          tempParentDevice: normalized.args.targetParentDevice,
+          tempParentInode: normalized.args.targetParentInode
+        })
+      } else if (kind === 'installed') {
+        if (payload.length !== 7 || importTargetClaim || !importTempClaim) {
+          throw new Error('root 文件协议 stage-import installed temp claim 无效')
+        }
+        const sha256 = decodeUtf8Base64(payload[0], 'SHA-256')
+        const size = decodeUtf8Base64(payload[1], 'size')
+        const targetDevice = decodeUtf8Base64(payload[2], 'target device')
+        const targetInode = decodeUtf8Base64(payload[3], 'target inode')
+        const mode = decodeUtf8Base64(payload[4], 'target mode')
+        const uid = decodeUtf8Base64(payload[5], 'target uid')
+        const gid = decodeUtf8Base64(payload[6], 'target gid')
+        if (!/^[a-fA-F0-9]{64}$/.test(sha256)) {
+          throw new Error('root 文件协议 SHA-256 无效')
+        }
+        assertUnsignedIdentifier(targetDevice, 'target device')
+        assertUnsignedIdentifier(targetInode, 'target inode')
+        if (!/^(?:0|[1-7][0-7]{0,3})$/.test(mode)) {
+          throw new Error('root 文件协议 target mode 无效')
+        }
+        const parsedSize = parseUnsignedInteger(size, 'size')
+        const parsedUid = parseUnsignedInteger(uid, 'uid')
+        const parsedGid = parseUnsignedInteger(gid, 'gid')
+        importTargetClaim = Object.freeze({
+          targetPath: normalized.args.targetPath,
+          targetDevice,
+          targetInode,
+          targetType: 'file',
+          targetParentRealPath: normalized.args.targetParentRealPath,
+          targetParentDevice: normalized.args.targetParentDevice,
+          targetParentInode: normalized.args.targetParentInode,
+          sha256: sha256.toLowerCase(),
+          size: parsedSize,
+          mode: Number.parseInt(mode, 8),
+          uid: parsedUid,
+          gid: parsedGid
+        })
+      } else if (kind === 'import-cleanup') {
+        if (payload.length !== 2) {
+          throw new Error('root 文件协议 stage-import cleanup 无效')
+        }
+        const succeeded = decodeUtf8Base64(payload[0], 'cleanup status')
+        const residualLocation = decodeUtf8Base64(payload[1], 'residual location')
+        if (!['0', '1'].includes(succeeded) ||
+          (succeeded === '1' && !['none', 'complete'].includes(residualLocation)) ||
+          (succeeded === '0' && !['temp', 'target', 'unknown'].includes(residualLocation)) ||
+          (residualLocation === 'temp' && !importTempClaim) ||
+          (residualLocation === 'target' && !importTargetClaim) ||
+          (residualLocation === 'complete' && !importTargetClaim)) {
+          throw new Error('root 文件协议 stage-import cleanup 状态无效')
+        }
+        importCleanupStatus = Object.freeze({
+          cleanupSucceeded: succeeded === '1',
+          residualLocation
+        })
+      } else {
+        throw new Error('root 文件协议数据类型无效')
+      }
+      structuredData = Object.freeze({
+        ...(importTempClaim ? { tempClaim: importTempClaim } : {}),
+        ...(importTargetClaim
+          ? {
+              sha256: importTargetClaim.sha256,
+              size: importTargetClaim.size,
+              targetDevice: importTargetClaim.targetDevice,
+              targetInode: importTargetClaim.targetInode,
+              targetClaim: importTargetClaim
+            }
+          : {}),
+        ...(importCleanupStatus || {})
+      })
       return
     }
     if (total !== 1 || sequence !== 1 || structuredData !== null) {
@@ -1568,51 +1681,6 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
       })
       return
     }
-    if (normalized.operation === 'stage-import') {
-      if (kind !== 'installed' || payload.length !== 7) {
-        throw new Error('root 文件协议数据类型无效')
-      }
-      const sha256 = decodeUtf8Base64(payload[0], 'SHA-256')
-      const size = decodeUtf8Base64(payload[1], 'size')
-      const targetDevice = decodeUtf8Base64(payload[2], 'target device')
-      const targetInode = decodeUtf8Base64(payload[3], 'target inode')
-      const mode = decodeUtf8Base64(payload[4], 'target mode')
-      const uid = decodeUtf8Base64(payload[5], 'target uid')
-      const gid = decodeUtf8Base64(payload[6], 'target gid')
-      if (!/^[a-fA-F0-9]{64}$/.test(sha256)) {
-        throw new Error('root 文件协议 SHA-256 无效')
-      }
-      assertUnsignedIdentifier(targetDevice, 'target device')
-      assertUnsignedIdentifier(targetInode, 'target inode')
-      if (!/^(?:0|[1-7][0-7]{0,3})$/.test(mode)) {
-        throw new Error('root 文件协议 target mode 无效')
-      }
-      const parsedSize = parseUnsignedInteger(size, 'size')
-      const parsedUid = parseUnsignedInteger(uid, 'uid')
-      const parsedGid = parseUnsignedInteger(gid, 'gid')
-      const targetClaim = Object.freeze({
-        targetPath: normalized.args.targetPath,
-        targetDevice,
-        targetInode,
-        targetType: 'file',
-        targetParentRealPath: normalized.args.targetParentRealPath,
-        targetParentDevice: normalized.args.targetParentDevice,
-        targetParentInode: normalized.args.targetParentInode,
-        sha256: sha256.toLowerCase(),
-        size: parsedSize,
-        mode: Number.parseInt(mode, 8),
-        uid: parsedUid,
-        gid: parsedGid
-      })
-      structuredData = Object.freeze({
-        sha256: sha256.toLowerCase(),
-        size: parsedSize,
-        targetDevice,
-        targetInode,
-        targetClaim
-      })
-      return
-    }
     if (['stage-export', 'stage-export-range', 'sha256', 'sha256-bound',
       'sha256-range-bound'].includes(normalized.operation)) {
       if (kind !== 'digest' || payload.length !== 2) {
@@ -1657,9 +1725,18 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
     if (exitCode === 0 && missingCapability) {
       throw new Error('root 文件协议缺少必要能力')
     }
+    const invalidImportState = normalized.operation === 'stage-import' && (
+      !importCleanupStatus ||
+      (exitCode === 0 && (
+        importCleanupStatus.cleanupSucceeded !== true ||
+        importCleanupStatus.residualLocation !== 'complete' ||
+        !importTargetClaim)) ||
+      (exitCode !== 0 && importCleanupStatus.cleanupSucceeded === true &&
+        importCleanupStatus.residualLocation !== 'none'))
     if (!Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255 ||
       (expectedTotal !== null && nextSequence !== expectedTotal + 1) ||
-      (exitCode === 0 && requiresData && structuredData === null)) {
+      (exitCode === 0 && requiresData && structuredData === null) ||
+      invalidImportState) {
       throw new Error('root 文件协议结束边界无效')
     }
     completedExitCode = exitCode
@@ -1726,7 +1803,7 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
     const base = { kind: normalized.operation, capabilities }
     if (completedExitCode !== 0) {
       const failureData = normalized.operation === 'stage-import' &&
-        structuredData?.targetClaim
+        typeof structuredData?.cleanupSucceeded === 'boolean'
         ? structuredData
         : null
       return Object.freeze({ ...base, ...(failureData || {}), ok: false })
