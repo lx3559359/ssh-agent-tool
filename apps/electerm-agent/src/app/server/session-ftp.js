@@ -93,6 +93,7 @@ class Ftp extends TerminalBase {
   }
 
   kill () {
+    this.closing = true
     Object.values(this.transfers).forEach(transfer => {
       transfer?.destroy?.()
     })
@@ -102,6 +103,7 @@ class Ftp extends TerminalBase {
 
   async destroyGracefully () {
     if (this.destroyPromise) return this.destroyPromise
+    this.closing = true
     this.destroyPromise = (async () => {
       let primaryError
       try {

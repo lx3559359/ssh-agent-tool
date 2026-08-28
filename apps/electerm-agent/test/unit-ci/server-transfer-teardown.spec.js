@@ -35,8 +35,8 @@ async function loadClientSftp (ws) {
     )
     .replace("import initWs from './ws'", 'const initWs = async () => globalThis.__clientSftpWs')
     .replace(
-      "import wait from './wait'",
-      'const wait = async () => new Promise(() => {})'
+      'const sftpTeardownTimeoutMs = 1500',
+      'const sftpTeardownTimeoutMs = 20'
     )
     .replace(
       /import \{[\s\S]*?\} from '\.\/sftp-operation-cancellation'/,
@@ -112,6 +112,7 @@ test('SFTP graceful teardown waits for transfer cleanup before channel close and
   session.transfers = {
     active: {
       async destroy () {
+        assert.equal(session.closing, true)
         order.push('transfer-destroy')
         await gate.promise
         throw transferFailure
@@ -128,6 +129,7 @@ test('SFTP graceful teardown waits for transfer cleanup before channel close and
   session.onEndConn = () => { order.push('session-end') }
 
   const cleanup = session.destroyGracefully()
+  assert.equal(session.closing, true)
   await flush()
   assert.deepEqual(order, ['transfer-destroy'])
   gate.resolve()
@@ -150,6 +152,7 @@ test('FTP graceful teardown joins transfer destruction before ending session', a
   session.transfers = {
     active: {
       async destroy () {
+        assert.equal(session.closing, true)
         order.push('transfer-destroy')
         await gate.promise
       }
@@ -159,6 +162,7 @@ test('FTP graceful teardown joins transfer destruction before ending session', a
   session.onEndConn = () => { order.push('session-end') }
 
   const cleanup = session.destroyGracefully()
+  assert.equal(session.closing, true)
   await flush()
   assert.deepEqual(order, ['transfer-destroy'])
   gate.resolve()
@@ -226,6 +230,46 @@ test('SFTP client destroy preserves graceful teardown failure and still closes',
     assert.equal(ws.closed, true)
     assert.equal(client.ws, undefined)
   } finally {
+    delete globalThis.__clientSftpWs
+  }
+})
+
+test('SFTP client destroy rejects a bounded uncertain timeout, closes, and observes late acknowledgement', async () => {
+  const listeners = new Map()
+  const ws = {
+    closed: false,
+    sent: [],
+    s (message) { this.sent.push(message) },
+    once (listener, id) {
+      listeners.set(id, listener)
+      return Promise.resolve()
+    },
+    close () { this.closed = true }
+  }
+  const unhandled = []
+  const onUnhandled = error => unhandled.push(error)
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    const { default: createSftp } = await loadClientSftp(ws)
+    const client = await createSftp(
+      'terminal-id', 'sftp', 0, 'generation-timeout', 4343
+    )
+    const result = await Promise.race([
+      client.destroy().then(value => ({ value }), error => ({ error })),
+      new Promise(resolve => setTimeout(() => resolve({ hung: true }), 100))
+    ])
+
+    assert.equal(result.hung, undefined)
+    assert.equal(result.error?.code, 'TEARDOWN_TIMEOUT')
+    assert.equal(result.error?.uncertain, true)
+    assert.equal(ws.closed, true)
+    assert.equal(client.ws, undefined)
+    const request = ws.sent.find(message => message.action === 'sftp-destroy')
+    listeners.get(request.uid)?.({ data: true })
+    await flush()
+    assert.deepEqual(unhandled, [])
+  } finally {
+    process.removeListener('unhandledRejection', onUnhandled)
     delete globalThis.__clientSftpWs
   }
 })

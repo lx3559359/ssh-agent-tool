@@ -6,7 +6,6 @@ import generate from './uid'
 import Transfer from './transfer'
 import { transferTypeMap, instSftpKeys as keys } from './constants'
 import initWs from './ws'
-import wait from './wait'
 import {
   createSftpAbortError,
   prepareSftpCancelableCall
@@ -15,6 +14,28 @@ import { bindSftpTransportSession } from './sftp-session-generation.js'
 import { reconstructSftpError } from './sftp-error.js'
 
 const transferKeys = Object.keys(transferTypeMap)
+const sftpTeardownTimeoutMs = 1500
+
+function sftpTeardownTimeoutError () {
+  const error = new Error(
+    `SFTP teardown timed out after ${sftpTeardownTimeoutMs}ms`
+  )
+  error.code = 'TEARDOWN_TIMEOUT'
+  error.uncertain = true
+  return error
+}
+
+function boundSftpTeardown (serverSettlement) {
+  let timer
+  const timeout = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(sftpTeardownTimeoutError()),
+      sftpTeardownTimeoutMs)
+  })
+  Promise.resolve(serverSettlement).catch(() => {})
+  return Promise.race([serverSettlement, timeout]).finally(() => {
+    clearTimeout(timer)
+  })
+}
 
 class Sftp {
   async init (terminalId, port, sshSessionGeneration, sshTerminalPid) {
@@ -134,28 +155,26 @@ class Sftp {
     try {
       if (!ws.closed) {
         const uid = `sftp-destroy:${generate()}`
-        await Promise.race([
-          new Promise((resolve, reject) => {
-            Promise.resolve(ws.once(result => {
-              if (result?.error) {
-                reject(reconstructSftpError(
-                  result.error,
-                  'SFTP teardown failed'
-                ))
-                return
-              }
-              resolve(result?.data)
-            }, uid)).then(() => {
-              ws.s({
-                action: 'sftp-destroy',
-                id: this.id,
-                uid,
-                terminalId: this.terminalId
-              })
-            }).catch(reject)
-          }),
-          wait(1500)
-        ])
+        const serverTeardown = new Promise((resolve, reject) => {
+          Promise.resolve(ws.once(result => {
+            if (result?.error) {
+              reject(reconstructSftpError(
+                result.error,
+                'SFTP teardown failed'
+              ))
+              return
+            }
+            resolve(result?.data)
+          }, uid)).then(() => {
+            ws.s({
+              action: 'sftp-destroy',
+              id: this.id,
+              uid,
+              terminalId: this.terminalId
+            })
+          }).catch(reject)
+        })
+        await boundSftpTeardown(serverTeardown)
       }
     } catch (error) {
       primaryError = error

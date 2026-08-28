@@ -943,6 +943,10 @@ test('Transfer pins one effective session before remote checks and releases afte
     source.indexOf('cancelAndWait ='),
     source.indexOf('cancel = async')
   )
+  const cancelCoordinator = source.slice(
+    source.indexOf('this.transferCancellation ='),
+    source.indexOf('componentDidMount')
+  )
 
   assert.match(source, /createTransferFileSessionController/)
   assert.match(source, /acquireTransferFileCapability\(\{[\s\S]*transferId:/)
@@ -970,9 +974,10 @@ test('Transfer pins one effective session before remote checks and releases afte
   assert.doesNotMatch(mkdir, /sftp\.mkdir\(toPath\)[\s\S]*\.catch\(\(\) => false\)/)
   assert.match(source, /componentWillUnmount[\s\S]*releaseRemoteFileSession/)
   assert.match(unmount, /finally[\s\S]*releaseRemoteFileSession/)
-  assert.match(cancelProtected, /settleTransferCancellation/)
-  assert.match(cancelProtected, /release:\s*\(\) => this\.releaseRemoteFileSession/)
-  assert.match(cancelAndWait, /settleTransferCancellation/)
-  assert.match(cancelAndWait, /release:\s*\(\) => this\.releaseRemoteFileSession/)
+  assert.match(cancelProtected, /this\.transferCancellation\.cancel/)
+  assert.match(cancelProtected, /safetyAlreadyCancelling/)
+  assert.match(cancelAndWait, /this\.transferCancellation\.cancel/)
+  assert.match(cancelCoordinator, /createTransferCancellationCoordinator/)
+  assert.match(cancelCoordinator, /release:\s*\(\) => this\.releaseRemoteFileSession/)
   assert.match(cancellationLifecycle, /finally[\s\S]*release/)
 })

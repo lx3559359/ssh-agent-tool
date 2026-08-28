@@ -61,7 +61,9 @@ import {
   preserveTransferCleanupError,
   settleStaleTransferHandle
 } from './transfer-cleanup.js'
-import { settleTransferCancellation } from './transfer-cancellation-lifecycle.js'
+import {
+  createTransferCancellationCoordinator
+} from './transfer-cancellation-lifecycle.js'
 import './transfer.styl'
 
 const { assign } = Object
@@ -134,6 +136,35 @@ export default class TransportAction extends Component {
       getCapability: () => this.remoteFileSessionController.current?.capability,
       getSession: () => this.remoteFileSessionController.current,
       cancelTransport: this.cancelProtectedTransport
+    })
+    this.transferCancellation = createTransferCancellationCoordinator({
+      stopTransport: () => this.stopTransport('cancelled'),
+      cancelSafety: options => this.transferSafety.cancel(options),
+      finishTransfer: () => this.finishTransfer(),
+      markCancelled: async () => {
+        await this.notifyAgentRiskTerminal({
+          status: 'cancelled',
+          remoteState: 'unknown',
+          transferId: this.props.transfer.id
+        })
+        this.recordTransferBatchResult(this.props.transfer, {
+          status: 'cancelled'
+        })
+        await this.runTransferTask('onCancelled')
+      },
+      markFailed: async error => {
+        await this.notifyAgentRiskTerminal({
+          status: 'failed',
+          remoteState: 'unknown',
+          error: error?.message || 'SFTP cancellation failed',
+          transferId: this.props.transfer.id
+        })
+        await this.runTransferTask(
+          'onFailed',
+          error?.message || 'SFTP cancellation failed'
+        )
+      },
+      release: () => this.releaseRemoteFileSession()
     })
   }
 
@@ -770,57 +801,16 @@ export default class TransportAction extends Component {
     return this.agentRiskTerminalPromise
   }
 
-  cancelProtectedTransport = async () => {
-    return settleTransferCancellation({
-      stopTransport: () => this.stopTransport('cancelled'),
-      cancelSafety: null,
-      finishTransfer: () => this.finishTransfer(),
-      markCancelled: async () => {
-        this.recordTransferBatchResult(this.props.transfer, {
-          status: 'cancelled'
-        })
-        await this.runTransferTask('onCancelled')
-      },
-      markFailed: error => this.runTransferTask(
-        'onFailed',
-        error?.message || 'SFTP cancellation failed'
-      ),
-      release: () => this.releaseRemoteFileSession()
+  cancelProtectedTransport = (options = {}) => {
+    this.userCancelling = true
+    return this.transferCancellation.cancel({
+      safetyAlreadyCancelling: options.safetyAlreadyCancelling === true
     })
   }
 
   cancelAndWait = () => {
-    if (this.cancellationPromise) return this.cancellationPromise
     this.userCancelling = true
-    this.cancellationPromise = settleTransferCancellation({
-      stopTransport: () => this.stopTransport('cancelled'),
-      cancelSafety: () => this.transferSafety.cancel(),
-      finishTransfer: () => this.finishTransfer(),
-      markCancelled: async () => {
-        await this.notifyAgentRiskTerminal({
-          status: 'cancelled',
-          remoteState: 'unknown',
-          transferId: this.props.transfer.id
-        })
-        this.recordTransferBatchResult(this.props.transfer, {
-          status: 'cancelled'
-        })
-        await this.runTransferTask('onCancelled')
-      },
-      markFailed: async error => {
-        await this.notifyAgentRiskTerminal({
-          status: 'failed',
-          remoteState: 'unknown',
-          error: error?.message || 'SFTP cancellation failed',
-          transferId: this.props.transfer.id
-        })
-        await this.runTransferTask(
-          'onFailed',
-          error?.message || 'SFTP cancellation failed'
-        )
-      },
-      release: () => this.releaseRemoteFileSession()
-    })
+    this.cancellationPromise = this.transferCancellation.cancel()
     return this.cancellationPromise
   }
 

@@ -144,6 +144,18 @@ test('initWs rejects when a connecting websocket closes before open', async () =
   await assert.rejects(starting, /closed before startup|startup.*closed/i)
 })
 
+test('non-persistent websocket records closed after it was opened then closed', async () => {
+  const worker = createWorker()
+  const { default: initWs } = await loadWsModule(worker)
+  const starting = initWs('transfer', 'opened-then-closed', 'sftp-1')
+  worker.emit({ id: 'opened-then-closed', action: 'create', persist: false })
+  const ws = await starting
+
+  assert.equal(ws.closed, false)
+  worker.emit({ id: 'opened-then-closed', action: 'close' })
+  assert.equal(ws.closed, true)
+})
+
 test('worker registers and can close a websocket while it is still connecting', async () => {
   let onMessage
   const posted = []
@@ -321,4 +333,233 @@ test('transfer startup abort closes websocket while subscriptions are pending', 
   assert.match(result.error?.message || '', /unmounted during subscription/)
   assert.equal(ws.closed, true)
   assert.equal(ws.sent.some(message => message.action === 'transfer-new'), false)
+})
+
+test('transfer factory resolves only after an exact startup acknowledgement', async () => {
+  const listeners = new Map()
+  const ws = {
+    closed: false,
+    sent: [],
+    once (listener, id) {
+      listeners.set(id, listener)
+      return Promise.resolve()
+    },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    s (message) { this.sent.push(message) },
+    close () { this.closed = true }
+  }
+  const { default: createTransfer } = await loadTransferModule(async () => ws)
+  let settled = false
+  const starting = createTransfer({
+    sftpId: 'sftp-ack',
+    type: 'upload'
+  }).finally(() => { settled = true })
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.equal(ws.sent.some(message => message.action === 'transfer-new'), true)
+  assert.equal(settled, false)
+  listeners.get('transfer:started:transfer-1')({
+    ok: true,
+    id: 'transfer-1',
+    sftpId: 'wrong-session'
+  })
+  const result = await Promise.race([
+    starting.then(value => ({ value }), error => ({ error })),
+    new Promise(resolve => setTimeout(() => resolve({ hung: true }), 100))
+  ])
+  assert.equal(result.hung, undefined)
+  assert.match(result.error?.message || '', /identity|session|match/i)
+  assert.equal(ws.closed, true)
+})
+
+test('duplicate startup failure acknowledgement rejects promptly without waiting for timeout', async () => {
+  const listeners = new Map()
+  const ws = {
+    closed: false,
+    once (listener, id) {
+      listeners.set(id, listener)
+      return Promise.resolve()
+    },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    s (message) {
+      if (message.action === 'transfer-new') {
+        queueMicrotask(() => listeners.get('transfer:started:transfer-1')?.({
+          ok: false,
+          id: 'transfer-1',
+          sftpId: 'sftp-duplicate',
+          error: { message: 'Transfer is already active' }
+        }))
+      }
+    },
+    close () { this.closed = true }
+  }
+  const { default: createTransfer } = await loadTransferModule(async () => ws)
+
+  await assert.rejects(createTransfer({
+    sftpId: 'sftp-duplicate',
+    type: 'download'
+  }), /already active/)
+  assert.equal(ws.closed, true)
+})
+
+test('missing startup acknowledgement times out, closes, and ignores a late acknowledgement', async () => {
+  const listeners = new Map()
+  const unhandled = []
+  const onUnhandled = error => unhandled.push(error)
+  const ws = {
+    closed: false,
+    sent: [],
+    once (listener, id) {
+      listeners.set(id, listener)
+      return Promise.resolve()
+    },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    s (message) { this.sent.push(message) },
+    close () {
+      if (this.closed) return
+      this.closed = true
+      this.onclose?.()
+    }
+  }
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    const { default: createTransfer } = await loadTransferModule(async () => ws)
+    const result = await Promise.race([
+      createTransfer({
+        sftpId: 'sftp-no-start-ack',
+        type: 'upload'
+      }).then(value => ({ value }), error => ({ error })),
+      new Promise(resolve => setTimeout(() => resolve({ hung: true }), 100))
+    ])
+
+    assert.equal(result.hung, undefined)
+    assert.match(result.error?.message || '', /timed out|timeout/i)
+    assert.equal(ws.closed, true)
+    listeners.get('transfer:started:transfer-1')?.({
+      ok: true,
+      id: 'transfer-1',
+      sftpId: 'sftp-no-start-ack'
+    })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(unhandled, [])
+  } finally {
+    process.removeListener('unhandledRejection', onUnhandled)
+  }
+})
+
+test('transfer startup fails closed when socket closes between subscription and send', async () => {
+  let subscriptions = 0
+  const unhandled = []
+  const onUnhandled = error => unhandled.push(error)
+  const ws = {
+    closed: false,
+    sent: [],
+    once () {
+      subscriptions += 1
+      if (subscriptions === 4) {
+        this.closed = true
+        this.onclose?.()
+      }
+      return Promise.resolve()
+    },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    s (message) { this.sent.push(message) },
+    close () { this.closed = true }
+  }
+  const { default: createTransfer } = await loadTransferModule(async () => ws)
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    await assert.rejects(createTransfer({
+      sftpId: 'sftp-close-race',
+      type: 'upload'
+    }), /closed.*startup|startup.*closed/i)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(ws.sent.some(message => message.action === 'transfer-new'), false)
+    assert.deepEqual(unhandled, [])
+  } finally {
+    process.removeListener('unhandledRejection', onUnhandled)
+  }
+})
+
+test('transfer projects bounded residual fields from control and terminal errors', async () => {
+  const listeners = new Map()
+  const errors = []
+  const ws = {
+    closed: false,
+    sent: [],
+    once (listener, id) {
+      listeners.set(id, listener)
+      return Promise.resolve()
+    },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    s (message) {
+      this.sent.push(message)
+      if (message.action === 'transfer-new') {
+        queueMicrotask(() => listeners.get('transfer:started:transfer-1')?.({
+          ok: true,
+          id: 'transfer-1',
+          sftpId: 'sftp-residual'
+        }))
+      }
+    },
+    close () { this.closed = true }
+  }
+  const { default: createTransfer } = await loadTransferModule(async () => ws)
+  const transport = await createTransfer({
+    sftpId: 'sftp-residual',
+    type: 'upload',
+    onData: () => {},
+    onEnd: () => {},
+    onError: error => errors.push(error)
+  })
+  const remoteError = {
+    message: 'atomic partial unlink denied',
+    code: 'EACCES',
+    partialResidual: true,
+    residualPath: '/tmp/.upload.part',
+    cleanupPhase: 'atomic-upload-partial-unlink'
+  }
+
+  const cancelling = transport.cancel()
+  const control = ws.sent.find(message => message.action === 'transfer-func')
+  listeners.get(
+    `transfer:control:transfer-1:${control.controlId}`
+  )({ ok: false, error: remoteError })
+  await assert.rejects(cancelling, error => {
+    assert.equal(error.code, remoteError.code)
+    assert.equal(error.partialResidual, true)
+    assert.equal(error.residualPath, remoteError.residualPath)
+    assert.equal(error.cleanupPhase, remoteError.cleanupPhase)
+    return true
+  })
+
+  const terminalWs = {
+    ...ws,
+    closed: false,
+    sent: [],
+    close () { this.closed = true }
+  }
+  listeners.clear()
+  const { default: createTerminalTransfer } = await loadTransferModule(
+    async () => terminalWs
+  )
+  await createTerminalTransfer({
+    sftpId: 'sftp-residual',
+    type: 'upload',
+    onData: () => {},
+    onEnd: () => {},
+    onError: error => errors.push(error)
+  })
+  listeners.get('transfer:err:transfer-1')({ error: remoteError })
+
+  assert.equal(errors.length, 1)
+  assert.equal(errors[0].code, remoteError.code)
+  assert.equal(errors[0].partialResidual, true)
+  assert.equal(errors[0].residualPath, remoteError.residualPath)
+  assert.equal(errors[0].cleanupPhase, remoteError.cleanupPhase)
 })

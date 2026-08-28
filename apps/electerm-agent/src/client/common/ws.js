@@ -40,11 +40,15 @@ class Ws {
   constructor (id, persist) {
     this.id = id
     this.persist = !!persist
+    this.closed = false
   }
 
   onceIds = []
 
   s (data) {
+    if (this.closed) {
+      throw new Error('WebSocket is closed')
+    }
     send({
       action: 's',
       args: [data],
@@ -55,6 +59,9 @@ class Ws {
   async once (func, id) {
     const maxWait = 300
     let waited = 0
+    if (this.closed && !this.persist) {
+      throw new Error('WebSocket is closed')
+    }
     while (this.closed) {
       if (++waited >= maxWait) {
         console.warn('ws once timeout waiting for reconnection', id)
@@ -137,9 +144,10 @@ class Ws {
   }
 
   close () {
+    if (this.closed) return
+    this.closed = true
     this.onclose()
     if (this.persist) {
-      this.closed = true
       return
     }
     this.clearOnces()
@@ -169,10 +177,9 @@ function onEvent (e) {
   }
   if (wss[id] && action === 'close') {
     const ws = wss[id]
+    ws.closed = true
     ws.onclose()
-    if (ws.persist) {
-      ws.closed = true
-    } else {
+    if (!ws.persist) {
       ws.clearOnces()
       delete wss[id]
     }

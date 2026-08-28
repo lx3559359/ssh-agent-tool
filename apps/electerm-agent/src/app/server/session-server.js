@@ -432,7 +432,8 @@ if (type === 'rdp') {
         msg?.sftpId !== routeSftpId) {
         throw new Error('Transfer route identity does not match the message')
       }
-      if (!routeSession || sftp(routeSftpId) !== routeSession) {
+      if (!routeSession || sftp(routeSftpId) !== routeSession ||
+        routeSession.closing === true) {
         throw new Error('Transfer route session is no longer active')
       }
       return routeSession
@@ -442,6 +443,20 @@ if (type === 'rdp') {
       ws.s({
         id: `transfer:err:${routeId}`,
         error: { message: error?.message || String(error) }
+      })
+    }
+
+    const sendTransferStarted = error => {
+      ws.s({
+        id: `transfer:started:${routeId}`,
+        data: {
+          ok: !error,
+          id: routeId,
+          sftpId: routeSftpId,
+          ...(error
+            ? { error: { message: error?.message || String(error) } }
+            : {})
+        }
       })
     }
 
@@ -471,8 +486,7 @@ if (type === 'rdp') {
         try {
           const session = assertRouteBinding(msg)
           if (transfer(routeId, routeSftpId)) {
-            log.warn('ignored duplicate transfer startup', routeId)
-            return
+            throw new Error('Transfer is already active')
           }
           const isFtp = session instanceof Ftp || session.type === 'ftp'
           const encode = session.initOptions?.encode || 'utf8'
@@ -489,8 +503,9 @@ if (type === 'rdp') {
           }
           const Cls = isFtp ? FtpTransfer : Transfer
           transfer(routeId, routeSftpId, new Cls(opts))
+          sendTransferStarted()
         } catch (error) {
-          sendTransferError(error)
+          sendTransferStarted(error)
         }
       } else if (action === 'transfer-func') {
         const { func, args, controlId } = msg
@@ -504,6 +519,9 @@ if (type === 'rdp') {
               throw new Error('Transfer controls do not accept arguments')
             }
             const instance = transfer(routeId, routeSftpId)
+            if (!instance || instance.ws !== ws) {
+              throw new Error('Transfer control owner does not match the route')
+            }
             const operation = instance?.[func]
             if (typeof operation !== 'function') {
               throw new Error(`Transfer control is unavailable: ${func}`)
@@ -518,7 +536,17 @@ if (type === 'rdp') {
               id: `transfer:control:${routeId}:${controlId}`,
               data: {
                 ok: false,
-                error: { message: error?.message || String(error) }
+                error: {
+                  message: error?.message || String(error),
+                  ...(error?.code !== undefined ? { code: error.code } : {}),
+                  ...(error?.partialResidual === true
+                    ? {
+                        partialResidual: true,
+                        residualPath: error.residualPath,
+                        cleanupPhase: error.cleanupPhase
+                      }
+                    : {})
+                }
               }
             })
           }

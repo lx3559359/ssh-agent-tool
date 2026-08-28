@@ -67,6 +67,49 @@ function isRecoverableTransferError (error) {
     )
 }
 
+const authoritativeAtomicMissingCodes = new Set([
+  2,
+  'ENOENT',
+  'SFTP_NO_SUCH_FILE'
+])
+
+function isAuthoritativeAtomicMissingError (error) {
+  return authoritativeAtomicMissingCodes.has(error?.code)
+}
+
+function appendTransferServerCleanupError (primary, cleanupError) {
+  if (!primary) return cleanupError
+  if (!cleanupError || cleanupError === primary || !Object.isExtensible(primary)) {
+    return primary
+  }
+  const cleanupErrors = Array.isArray(primary.cleanupErrors)
+    ? [...primary.cleanupErrors]
+    : []
+  if (!cleanupErrors.includes(cleanupError)) cleanupErrors.push(cleanupError)
+  primary.cleanupErrors = Object.freeze(cleanupErrors)
+  if (cleanupError.partialResidual === true) {
+    primary.partialResidual = true
+    primary.residualPath = cleanupError.residualPath
+    primary.cleanupPhase = cleanupError.cleanupPhase
+  }
+  return primary
+}
+
+function markAtomicUploadResidual (error, residualPath) {
+  if (error && Object.isExtensible(error)) {
+    error.partialResidual = true
+    error.residualPath = residualPath
+    error.cleanupPhase = 'atomic-upload-partial-unlink'
+    return error
+  }
+  const failure = new Error('Atomic upload partial cleanup failed')
+  failure.cause = error
+  failure.partialResidual = true
+  failure.residualPath = residualPath
+  failure.cleanupPhase = 'atomic-upload-partial-unlink'
+  return failure
+}
+
 function waitForTerminalPromise (promise, deadline, message) {
   const observed = Promise.resolve(promise)
   const remaining = deadline - Date.now()
@@ -236,7 +279,7 @@ class Transfer {
     }
   }
 
-  callSftp = (method, ...args) => {
+  callSftp (method, ...args) {
     return new Promise((resolve, reject) => {
       if (typeof method !== 'function') {
         reject(new Error('SFTP operation is not supported by the server'))
@@ -249,16 +292,17 @@ class Transfer {
     })
   }
 
-  cleanupAtomicUpload = async () => {
+  async cleanupAtomicUpload () {
     if (!this.atomicUpload || this.atomicUploadCommitted || !this.dstPath || !this.dst) return
     if (!this.atomicCleanupPromise) {
       this.atomicCleanupPromise = (async () => {
         try {
           await this.callSftp(this.dst.unlink, this.dstPath)
         } catch (error) {
-          if (!/no such|not found/i.test(String(error?.message || error))) {
-            log.warn('cleanup atomic SFTP upload failed', error)
-          }
+          if (isAuthoritativeAtomicMissingError(error)) return
+          const failure = markAtomicUploadResidual(error, this.dstPath)
+          log.warn('cleanup atomic SFTP upload failed', failure)
+          throw failure
         }
       })()
     }
@@ -695,12 +739,22 @@ class Transfer {
     if (this.keepPartial && isRecoverableTransferError(err)) {
       this.stopReason = 'connection-lost'
     }
-    Promise.resolve(this.cleanupAfterStop()).finally(() => {
+    Promise.resolve(this.cleanupAfterStop()).then(
+      () => err,
+      cleanupError => appendTransferServerCleanupError(err, cleanupError)
+    ).then(terminalError => {
       ws && ws.s({
         id: 'transfer:err:' + id,
         error: {
-          message: err.message,
-          stack: err.stack
+          message: terminalError.message,
+          stack: terminalError.stack,
+          ...(terminalError.partialResidual
+            ? {
+                partialResidual: true,
+                residualPath: terminalError.residualPath,
+                cleanupPhase: terminalError.cleanupPhase
+              }
+            : {})
         }
       })
     })
@@ -814,7 +868,7 @@ class Transfer {
           'Timed out waiting for SCP transfer to stop'
         )
       } catch (error) {
-        primaryError = error
+        primaryError = appendTransferServerCleanupError(primaryError, error)
       }
       if (this.successfulFinalizationPromise) {
         try {
@@ -827,7 +881,7 @@ class Transfer {
           if (this.atomicUpload && !this.atomicUploadCommitted) {
             this.atomicFinalizationUncertain = true
           }
-          primaryError ||= error
+          primaryError = appendTransferServerCleanupError(primaryError, error)
         }
       }
       const closeDelay = Math.min(200, Math.max(0, deadline - Date.now()))
@@ -837,13 +891,13 @@ class Transfer {
       try {
         await this.waitForTransferQuiescence(deadline)
       } catch (error) {
-        primaryError ||= error
+        primaryError = appendTransferServerCleanupError(primaryError, error)
       }
       let cleanupPromise
       try {
         cleanupPromise = this.cleanupAfterStop()
       } catch (error) {
-        primaryError ||= error
+        primaryError = appendTransferServerCleanupError(primaryError, error)
       }
       if (cleanupPromise) {
         try {
@@ -853,14 +907,14 @@ class Transfer {
             'Timed out cleaning up a stopped transfer'
           )
         } catch (error) {
-          primaryError ||= error
+          primaryError = appendTransferServerCleanupError(primaryError, error)
         }
       }
       let killPromise
       try {
         killPromise = this.kill()
       } catch (error) {
-        primaryError ||= error
+        primaryError = appendTransferServerCleanupError(primaryError, error)
       }
       if (killPromise) {
         try {
@@ -870,10 +924,13 @@ class Transfer {
             'Timed out closing stopped transfer handles'
           )
         } catch (error) {
-          primaryError ||= error
+          primaryError = appendTransferServerCleanupError(primaryError, error)
         }
       }
-      primaryError ||= this.transferIoError
+      primaryError = appendTransferServerCleanupError(
+        primaryError,
+        this.transferIoError
+      )
       if (primaryError) throw primaryError
       return true
     })()

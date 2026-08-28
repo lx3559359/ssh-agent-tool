@@ -51,34 +51,28 @@ test('strict local source verification resolves prebound descriptors without res
 
 test('transfer cancellation publishes success only after queue teardown', () => {
   const source = read('src/client/components/file-transfer/transfer.jsx')
-  const cancelProtectedBody = sliceBody(
+  const coordinatorBody = sliceBody(
     source,
-    'cancelProtectedTransport = async () => {',
-    'cancelAndWait = () => {'
+    'this.transferCancellation = createTransferCancellationCoordinator({',
+    'componentDidMount () {'
   )
-  const cancelAndWaitBody = sliceBody(
+  const entrypoints = sliceBody(
     source,
-    'cancelAndWait = () => {',
+    'cancelProtectedTransport =',
     'cancel = async'
   )
 
   assert.match(
-    cancelProtectedBody,
-    /recordTransferBatchResult\(\s*this\.props\.transfer,\s*\{\s*status:\s*'cancelled'/s
-  )
-  assert.match(
-    cancelAndWaitBody,
+    coordinatorBody,
     /recordTransferBatchResult\(\s*this\.props\.transfer,\s*\{\s*status:\s*'cancelled'/s
   )
   assert.ok(
-    cancelProtectedBody.indexOf('finishTransfer') <
-      cancelProtectedBody.indexOf('recordTransferBatchResult')
+    coordinatorBody.indexOf('finishTransfer') <
+      coordinatorBody.indexOf('recordTransferBatchResult')
   )
-  assert.ok(
-    cancelAndWaitBody.indexOf('finishTransfer') <
-      cancelAndWaitBody.indexOf('recordTransferBatchResult')
-  )
-  assert.match(cancelAndWaitBody, /markFailed:[\s\S]*status:\s*'failed'/)
+  assert.match(coordinatorBody, /markFailed:[\s\S]*status:\s*'failed'/)
+  assert.match(entrypoints, /cancelProtectedTransport[\s\S]*transferCancellation\.cancel/)
+  assert.match(entrypoints, /cancelAndWait[\s\S]*transferCancellation\.cancel/)
 })
 
 test('batch result recording ignores legacy transfers before claiming the exactly-once flag', () => {

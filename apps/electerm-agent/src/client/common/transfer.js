@@ -28,6 +28,27 @@ function closeLateTransferSocket (ws) {
   }
 }
 
+function transferProtocolError (remote, fallback) {
+  const message = typeof remote?.message === 'string' && remote.message
+    ? remote.message
+    : fallback
+  const error = new Error(message)
+  if ((typeof remote?.code === 'string' && remote.code.length <= 128) ||
+    (typeof remote?.code === 'number' && Number.isFinite(remote.code))) {
+    error.code = remote.code
+  }
+  if (remote?.partialResidual === true) {
+    error.partialResidual = true
+    if (typeof remote.residualPath === 'string') {
+      error.residualPath = remote.residualPath.slice(0, 4096)
+    }
+    if (typeof remote.cleanupPhase === 'string') {
+      error.cleanupPhase = remote.cleanupPhase.slice(0, 128)
+    }
+  }
+  return error
+}
+
 function startTransferWebSocket (start, signal, onStop) {
   throwIfTransferStartAborted(signal)
   const startupController = new AbortController()
@@ -111,6 +132,31 @@ class Transfer {
             th.onDestroy(ws)
           }
         }
+        let startupAcknowledged = false
+        let settleStartupAcknowledgement
+        const startupAcknowledgement = new Promise((resolve, reject) => {
+          settleStartupAcknowledgement = (error, value) => {
+            if (startupAcknowledged) return
+            startupAcknowledged = true
+            if (error) reject(error)
+            else resolve(value)
+          }
+        })
+        startupAcknowledgement.catch(() => {})
+        const previousOnClose = ws.onclose
+        ws.onclose = () => {
+          try {
+            previousOnClose?.call(ws)
+          } finally {
+            if (!startupAcknowledged) {
+              settleStartupAcknowledgement(new Error(
+                'Transfer connection closed before startup acknowledgement'
+              ))
+            } else {
+              th.onDestroy(ws)
+            }
+          }
+        }
         keys.forEach(func => {
           th[func] = (...args) => {
             if (args.length !== 0) {
@@ -141,8 +187,9 @@ class Transfer {
               }
               Promise.resolve(ws.once((result) => {
                 if (result?.ok !== true) {
-                  settle(new Error(
-                    result?.error?.message || 'Transfer control failed'
+                  settle(transferProtocolError(
+                    result?.error,
+                    'Transfer control failed'
                   ))
                   return
                 }
@@ -188,23 +235,49 @@ class Transfer {
           ws.once((arg) => {
             th.terminalSeen = true
             console.debug('sftp transfer error')
-            console.debug(arg.error.stack)
+            console.debug(arg?.error?.stack)
             try {
-              onError(new Error(arg.error.message))
+              onError(transferProtocolError(
+                arg?.error,
+                'SFTP transfer failed'
+              ))
             } finally {
               maybeDestroy()
             }
           }, 'transfer:err:' + id),
           ws.once((arg) => {
             this.onPaused?.(arg)
-          }, 'transfer:paused:' + id)
+          }, 'transfer:paused:' + id),
+          ws.once((result) => {
+            if (result?.id !== id || result?.sftpId !== sftpId) {
+              settleStartupAcknowledgement(new Error(
+                'Transfer startup acknowledgement identity mismatch'
+              ))
+              return
+            }
+            if (result?.ok !== true) {
+              settleStartupAcknowledgement(new Error(
+                result?.error?.message || 'Transfer startup failed'
+              ))
+              return
+            }
+            settleStartupAcknowledgement(null, true)
+          }, 'transfer:started:' + id)
         ])
         throwIfTransferStartAborted(startupSignal)
+        if (ws.closed) {
+          settleStartupAcknowledgement(new Error(
+            'Transfer connection closed before startup send'
+          ))
+          await startupAcknowledgement
+        }
         ws.s({
           action: 'transfer-new',
           ...rest,
           id
         })
+        await startupAcknowledgement
+        throwIfTransferStartAborted(startupSignal)
         return ws
       } catch (error) {
         closeLateTransferSocket(ws)

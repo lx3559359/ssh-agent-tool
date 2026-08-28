@@ -2285,11 +2285,14 @@ export function createTransactionRunner (options = {}) {
     })
   }
 
-  async function cancel (id) {
+  async function cancel (id, options = {}) {
     const operationId = String(id)
     cancellationRequests.add(operationId)
     const active = activeExecutions.get(operationId)
-    let cancellationFailure
+    let cancellationFailure = options.externalAlreadyAttempted === true &&
+      options.externalError
+      ? sanitizeError(options.externalError)
+      : undefined
     if (active) {
       active.cancelRequested = true
       if (active.kind === 'side-effect') {
@@ -2297,7 +2300,11 @@ export function createTransactionRunner (options = {}) {
         await active.settled
       } else if (active.kind === 'external-side-effect') {
         try {
-          await active.cancelExternal()
+          if (options.externalAlreadyAttempted === true) {
+            // The single cancellation coordinator already owns this attempt.
+          } else {
+            await active.cancelExternal()
+          }
         } catch (error) {
           cancellationFailure = sanitizeError(error)
         } finally {

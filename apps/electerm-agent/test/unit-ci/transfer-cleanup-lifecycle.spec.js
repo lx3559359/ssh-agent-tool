@@ -82,7 +82,11 @@ test('failed cancellation never records cancelled or removes the queue', async (
       calls.push('stop')
       throw first
     },
-    cancelSafety: async () => { calls.push('safety') },
+    cancelSafety: async options => {
+      calls.push('safety')
+      assert.equal(options.externalAlreadyAttempted, true)
+      assert.equal(options.externalError, first)
+    },
     finishTransfer: async () => { calls.push('finish') },
     markCancelled: async () => { calls.push('cancelled') },
     markFailed: async error => {
@@ -103,6 +107,60 @@ test('failed cancellation never records cancelled or removes the queue', async (
     'failed:native cancel failed',
     'release'
   ])
+})
+
+test('cancellation coordinator has one owner and shares one settlement promise', async () => {
+  const { createTransferCancellationCoordinator } = await import(cancellationUrl)
+  const gate = {}
+  gate.promise = new Promise(resolve => { gate.resolve = resolve })
+  const first = new Error('transport cancel failed once')
+  const calls = []
+  const coordinator = createTransferCancellationCoordinator({
+    stopTransport: async () => {
+      calls.push('stop')
+      await gate.promise
+      throw first
+    },
+    cancelSafety: async options => {
+      calls.push('safety')
+      assert.equal(options.externalAlreadyAttempted, true)
+      assert.equal(options.externalError, first)
+    },
+    finishTransfer: async () => { calls.push('finish') },
+    markCancelled: async () => { calls.push('cancelled') },
+    markFailed: async error => calls.push(`failed:${error.message}`),
+    release: async () => { calls.push('release') }
+  })
+
+  const firstEntry = coordinator.cancel()
+  const secondEntry = coordinator.cancel({ safetyAlreadyCancelling: true })
+  assert.equal(firstEntry, secondEntry)
+  gate.resolve()
+  await assert.rejects(firstEntry, error => error === first)
+  assert.deepEqual(calls, [
+    'stop',
+    'safety',
+    'failed:transport cancel failed once',
+    'release'
+  ])
+})
+
+test('safety-owned cancellation does not recursively cancel safety', async () => {
+  const { createTransferCancellationCoordinator } = await import(cancellationUrl)
+  const calls = []
+  const coordinator = createTransferCancellationCoordinator({
+    stopTransport: async () => { calls.push('stop') },
+    cancelSafety: async () => { calls.push('safety') },
+    finishTransfer: async () => { calls.push('finish') },
+    markCancelled: async () => { calls.push('cancelled') },
+    markFailed: async () => { calls.push('failed') },
+    release: async () => { calls.push('release') }
+  })
+
+  assert.equal(await coordinator.cancel({
+    safetyAlreadyCancelling: true
+  }), true)
+  assert.deepEqual(calls, ['stop', 'finish', 'cancelled', 'release'])
 })
 
 test('successful cancellation removes queue before publishing cancelled', async () => {

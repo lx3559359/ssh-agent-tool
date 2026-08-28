@@ -271,6 +271,28 @@ test('remote reconnect destroys the stale SFTP transport before recreating it', 
   ])
 })
 
+test('uncertain transport teardown blocks reconnect and new generation startup', async () => {
+  const { reconnectSftpEntryRemote } = await loadModule()
+  const calls = []
+  const timeout = new Error('SFTP teardown timed out')
+  timeout.code = 'TEARDOWN_TIMEOUT'
+  timeout.uncertain = true
+  const entry = {
+    sftp: {
+      async destroy () {
+        calls.push('destroy')
+        throw timeout
+      }
+    },
+    initRemoteAll: () => { calls.push('init') }
+  }
+
+  await assert.rejects(reconnectSftpEntryRemote(entry), error => error === timeout)
+  await assert.rejects(reconnectSftpEntryRemote(entry), error => error === timeout)
+  assert.deepEqual(calls, ['destroy'])
+  assert.equal(entry.remoteFileGeneration.accepting, false)
+})
+
 test('remote reconnect drains active root cleanup before destroy and init', async () => {
   const { reconnectSftpEntryRemote } = await loadModule()
   const releaseGate = deferred()

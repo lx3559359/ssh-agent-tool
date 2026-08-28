@@ -692,7 +692,9 @@ export function createTransferSafetyController ({
         operation.id,
         {
           transferIdentity: plan.transfer.identity,
-          cancelExternal: cancelTransport
+          cancelExternal: () => cancelTransport({
+            safetyAlreadyCancelling: true
+          })
         },
         session
       )
@@ -749,7 +751,7 @@ export function createTransferSafetyController ({
     }, { exitCode, cancelled })
   }
 
-  function runCancelTransition () {
+  function runCancelTransition (options = {}) {
     return claimTerminal('cancel', async () => {
       const capability = operationSession?.capability || operationCapability
       if (!capability ||
@@ -760,15 +762,16 @@ export function createTransferSafetyController ({
       }
       return capability.cancelTransferSafetyOperation(
         operation.id,
-        operationSession
+        operationSession,
+        options
       )
     })
   }
 
-  function cancel () {
+  function cancel (options = {}) {
     if (terminalPromise) return terminalPromise
     if (!execution || !operation || !plan?.required) return Promise.resolve(null)
-    return runCancelTransition()
+    return runCancelTransition(options)
   }
 
   function dispose () {

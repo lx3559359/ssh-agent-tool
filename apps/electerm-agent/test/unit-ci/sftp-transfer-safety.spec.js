@@ -1358,6 +1358,28 @@ test('cancelling a running external transfer stops transport and keeps rollback 
   assert.match(persisted.error, /取消|cancel/i)
 })
 
+test('externally attempted cancellation records failure without invoking transport again', async () => {
+  const { runner, request, store } = await createExternalTransferRunner()
+  let cancelled = 0
+  const nativeFailure = new Error('native transfer cancellation failed')
+  await runner.prepare(request)
+  await runner.beginExternalExecution(request.id, {
+    confirmed: true,
+    transferIdentity: request.effect.transfer.identity,
+    cancelExternal: async () => { cancelled += 1 }
+  })
+
+  await assert.rejects(runner.cancel(request.id, {
+    externalAlreadyAttempted: true,
+    externalError: nativeFailure
+  }), /native transfer cancellation failed/)
+  const persisted = await store.get(request.id)
+
+  assert.equal(cancelled, 0)
+  assert.equal(persisted.state, 'failed')
+  assert.match(persisted.error, /native transfer cancellation failed/)
+})
+
 test('external transfer completion rejects mismatched transfer identity', async () => {
   const { runner, request } = await createExternalTransferRunner()
   await runner.prepare(request)

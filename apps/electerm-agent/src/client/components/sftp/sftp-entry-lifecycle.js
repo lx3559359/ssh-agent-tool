@@ -80,6 +80,9 @@ export async function destroySftpClient (client) {
     await client.destroy()
     return true
   } catch (error) {
+    if (error?.code === 'TEARDOWN_TIMEOUT' || error?.uncertain === true) {
+      throw error
+    }
     return false
   }
 }
@@ -266,7 +269,9 @@ export function drainRemoteFileGeneration (entry) {
   const promise = Promise.resolve(previousDrain)
     .then(() => settled)
     .then(() => destroySftpEntryClientOnce(entry, client))
-  entry.remoteFileGenerationDrainTail = promise.then(() => undefined)
+  const drainTail = promise.then(() => undefined)
+  drainTail.catch(() => {})
+  entry.remoteFileGenerationDrainTail = drainTail
   return Object.freeze({
     client,
     generation: nextGeneration,

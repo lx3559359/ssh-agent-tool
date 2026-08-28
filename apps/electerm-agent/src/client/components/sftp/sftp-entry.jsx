@@ -1078,10 +1078,10 @@ export default class Sftp extends Component {
     return result
   }
 
-  cancelTransferSafetyOperation = async (id, session) => {
+  cancelTransferSafetyOperation = async (id, session, options = {}) => {
     this.assertTransferSafetySessionPin(id, session)
     await this.assertSftpSafetyOperationEndpoint(id)
-    const result = await this.sftpSafetyRunner.cancel(id)
+    const result = await this.sftpSafetyRunner.cancel(id, options)
     if (transferSafetyTerminalStates.has(result?.state)) {
       this.unpinTransferSafetySession(id, session)
     }

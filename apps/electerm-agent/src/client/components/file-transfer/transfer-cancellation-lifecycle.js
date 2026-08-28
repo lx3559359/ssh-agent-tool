@@ -15,18 +15,32 @@ export async function settleTransferCancellation ({
   finishTransfer,
   markCancelled,
   markFailed,
-  release
+  release,
+  safetyAlreadyCancelling = false
 }) {
   let primaryError
+  let transportError
   try {
     primaryError = await captureCancellationError(
       primaryError,
-      stopTransport
+      async () => {
+        try {
+          await stopTransport?.()
+        } catch (error) {
+          transportError = error
+          throw error
+        }
+      }
     )
-    primaryError = await captureCancellationError(
-      primaryError,
-      cancelSafety
-    )
+    if (!safetyAlreadyCancelling) {
+      primaryError = await captureCancellationError(
+        primaryError,
+        () => cancelSafety?.({
+          externalAlreadyAttempted: true,
+          ...(transportError ? { externalError: transportError } : {})
+        })
+      )
+    }
     if (!primaryError) {
       primaryError = await captureCancellationError(
         primaryError,
@@ -49,4 +63,20 @@ export async function settleTransferCancellation ({
   }
   if (primaryError) throw primaryError
   return true
+}
+
+export function createTransferCancellationCoordinator (callbacks) {
+  let settlement
+  return Object.freeze({
+    cancel (options = {}) {
+      if (!settlement) {
+        settlement = settleTransferCancellation({
+          ...callbacks,
+          safetyAlreadyCancelling:
+            options.safetyAlreadyCancelling === true
+        })
+      }
+      return settlement
+    }
+  })
 }

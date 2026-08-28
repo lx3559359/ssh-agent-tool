@@ -576,3 +576,91 @@ test('failed atomic SFTP upload keeps the original destination and removes the p
 
   fs.rmSync(tmp, { recursive: true, force: true })
 })
+
+test('atomic partial cleanup only accepts authoritative missing and exposes residual failures', async () => {
+  const makeTransfer = error => {
+    const transfer = Object.create(Transfer.prototype)
+    transfer.atomicUpload = true
+    transfer.atomicUploadCommitted = false
+    transfer.dstPath = '/tmp/.target.shellpilot-upload-proof.part'
+    transfer.dst = {
+      unlink (remotePath, callback) {
+        assert.equal(remotePath, transfer.dstPath)
+        callback(error)
+      }
+    }
+    return transfer
+  }
+
+  for (const code of [2, 'ENOENT', 'SFTP_NO_SUCH_FILE']) {
+    const missing = new Error('arbitrary localized message')
+    missing.code = code
+    await assert.doesNotReject(makeTransfer(missing).cleanupAtomicUpload())
+  }
+
+  for (const failure of [
+    Object.assign(new Error('permission denied'), { code: 'EACCES' }),
+    Object.assign(new Error('not found text is not authoritative'), {
+      code: 'ECONNRESET'
+    }),
+    new Error('generic cleanup failure')
+  ]) {
+    const transfer = makeTransfer(failure)
+    await assert.rejects(transfer.cleanupAtomicUpload(), error => {
+      assert.equal(error, failure)
+      assert.equal(error.partialResidual, true)
+      assert.equal(error.residualPath, transfer.dstPath)
+      assert.equal(error.cleanupPhase, 'atomic-upload-partial-unlink')
+      return true
+    })
+  }
+})
+
+test('atomic upload I/O failure reports cleanup residual without losing the first cause', async () => {
+  const tmp = makeTmpDir()
+  const localPath = path.join(tmp, 'cleanup-primary-source.txt')
+  const remotePath = path.join(tmp, 'cleanup-primary-target.txt')
+  fs.writeFileSync(localPath, 'new-content')
+  fs.writeFileSync(remotePath, 'old-content')
+  let partialPath
+  const sftp = {
+    ...createFsLikeSftp(),
+    open (filePath, flags, callback) {
+      if (flags === 'w') partialPath = filePath
+      fs.open(filePath, flags, callback)
+    },
+    write (handle, buffer, offset, length, position, callback) {
+      const error = new Error('socket failed during atomic upload')
+      error.code = 'ECONNRESET'
+      callback(error)
+    },
+    unlink (filePath, callback) {
+      const error = new Error('partial unlink denied')
+      error.code = 'EACCES'
+      callback(error)
+    }
+  }
+
+  const { message, transfer } = await waitForTransferMessage(ws => new Transfer({
+    id: 'atomic-cleanup-residual',
+    type: 'upload',
+    localPath,
+    remotePath,
+    sftp,
+    options: {
+      atomicUpload: true,
+      chunkSize: 4,
+      concurrency: 1
+    },
+    ws
+  }), 'atomic-cleanup-residual')
+  await transfer.kill()
+
+  assert.equal(message.id, 'transfer:err:atomic-cleanup-residual')
+  assert.equal(message.error.message, 'socket failed during atomic upload')
+  assert.equal(message.error.partialResidual, true)
+  assert.equal(message.error.residualPath, partialPath)
+  assert.equal(message.error.cleanupPhase, 'atomic-upload-partial-unlink')
+  if (partialPath && fs.existsSync(partialPath)) fs.unlinkSync(partialPath)
+  fs.rmSync(tmp, { recursive: true, force: true })
+})

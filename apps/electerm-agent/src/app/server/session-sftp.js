@@ -218,6 +218,7 @@ class Sftp extends TerminalBase {
   }
 
   kill () {
+    this.closing = true
     const keys = Object.keys(this.transfers || {})
     for (const k of keys) {
       const jj = this.transfers[k]
@@ -232,6 +233,7 @@ class Sftp extends TerminalBase {
 
   async destroyGracefully () {
     if (this.destroyPromise) return this.destroyPromise
+    this.closing = true
     this.destroyPromise = (async () => {
       let primaryError
       try {
