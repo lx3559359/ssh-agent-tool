@@ -1724,7 +1724,13 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
       throw new Error('root 文件协议结果尚未完整')
     }
     const base = { kind: normalized.operation, capabilities }
-    if (completedExitCode !== 0) return Object.freeze({ ...base, ok: false })
+    if (completedExitCode !== 0) {
+      const failureData = normalized.operation === 'stage-import' &&
+        structuredData?.targetClaim
+        ? structuredData
+        : null
+      return Object.freeze({ ...base, ...(failureData || {}), ok: false })
+    }
     if (['list', 'list-bound'].includes(normalized.operation)) {
       return Object.freeze({
         ...base,

@@ -10,6 +10,48 @@ function sha256 (value) {
   return createHash('sha256').update(value).digest('hex')
 }
 
+const protocolCapabilities = [
+  'sh=1', 'cleanShell=1', 'printf=1', 'id=1', 'tr=1', 'stat=1',
+  'base64=1', 'sha256=1', 'procFd=1', 'noclobber=1', 'cat=1',
+  'gnuStat=1', 'gnuMv=1', 'realpath=1', 'readlink=1', 'chown=1',
+  'chmod=1', 'rm=1', 'rmdir=1', 'find=1', 'head=1', 'wc=1',
+  'gnuDd=1', 'mkfifo=1', 'touch=1'
+].join(',')
+
+function encodeProtocolField (value) {
+  return Buffer.from(String(value), 'utf8').toString('base64')
+}
+
+function protocolMarker (token, phase, ...fields) {
+  return `\u001b]698;SHELLPILOT_FILE;${token};${phase};${fields.join(';')}\u0007`
+}
+
+function parsedImportFailure ({ protocol, request, values }) {
+  const token = protocol.createToken()
+  const parser = protocol.createParser({ token, request })
+  parser.push(protocolMarker(
+    token,
+    'start',
+    encodeProtocolField('0'),
+    encodeProtocolField('root'),
+    encodeProtocolField(protocolCapabilities)
+  ))
+  parser.push(protocolMarker(
+    token,
+    'data',
+    '1',
+    '1',
+    'installed',
+    ...values.map(encodeProtocolField)
+  ))
+  parser.push(protocolMarker(token, 'end', '1'))
+  return {
+    exitCode: parser.exitCode(),
+    identity: parser.identity(),
+    ...protocol.readResult(parser)
+  }
+}
+
 function createTokenFactory () {
   let sequence = 0
   return () => (++sequence).toString(16).padStart(48, '0')
@@ -359,24 +401,19 @@ function createBackendHarness (options = {}) {
         if (options.importCancellation) error.name = 'AbortError'
         if (options.importReturnedClaim) {
           const claimed = privilegedNodes.get(args.targetPath)
-          return {
-            exitCode: 1,
-            kind: 'stage-import',
-            targetClaim: Object.freeze({
-              targetPath: args.targetPath,
-              targetDevice: claimed.device,
-              targetInode: claimed.inode,
-              targetType: 'file',
-              targetParentRealPath: args.targetParentRealPath,
-              targetParentDevice: args.targetParentDevice,
-              targetParentInode: args.targetParentInode,
-              sha256: args.sha256,
-              size: Number(args.size),
-              mode: Number.parseInt(args.targetMode, 8),
-              uid: Number(args.targetUid),
-              gid: Number(args.targetGid)
-            })
-          }
+          return parsedImportFailure({
+            protocol,
+            request,
+            values: [
+              args.sha256,
+              args.size,
+              claimed.device,
+              claimed.inode,
+              args.targetMode,
+              args.targetUid,
+              args.targetGid
+            ]
+          })
         }
         throw error
       }
@@ -1636,7 +1673,7 @@ test('cancelled stage-import never rebinds a same-content foreign final target',
   assert.equal(harness.privilegedNodes.get(targetPath).content.toString(), 'safe')
 })
 
-test('failed stage-import removes a final target only with its exact returned claim', async () => {
+test('failed stage-import parser feed preserves its exact claim for cleanup', async () => {
   const targetPath = '/root/claimed-final'
   const harness = createBackendHarness({
     importFailure: true,

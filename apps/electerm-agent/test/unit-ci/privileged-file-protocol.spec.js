@@ -2239,6 +2239,15 @@ test('privileged parser normalizes every fixed result shape', async () => {
   })
   assert.equal(Object.isFrozen(installed), true)
   assert.equal(Object.isFrozen(installed.targetClaim), true)
+  const failedInstalled = parse('stage-import', 'installed', [
+    'b'.repeat(64), '12', '4003', '4004', '600', '0', '0'
+  ], 1)
+  assert.deepEqual(failedInstalled, {
+    ...installed,
+    ok: false
+  })
+  assert.equal(Object.isFrozen(failedInstalled), true)
+  assert.equal(Object.isFrozen(failedInstalled.targetClaim), true)
   assert.deepEqual(parse('mkdir-bound', 'binding', ['4003', '4004']), {
     kind: 'mkdir-bound',
     capabilities: allCapabilityObject,
