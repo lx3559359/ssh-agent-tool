@@ -17,6 +17,7 @@ const allowedOperations = new Set([
   'touch-bound',
   'rename-bound',
   'remove-bound',
+  'remove-peer-bound',
   'stage-handshake',
   'stage-export',
   'stage-export-range',
@@ -102,6 +103,10 @@ const requiredOperationCapabilities = Object.freeze({
     'realpath', 'procFd', 'touch'
   ]),
   'remove-bound': Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'base64', 'stat', 'gnuStat',
+    'realpath', 'sha256', 'procFd', 'rm', 'rmdir', 'gnuDd', 'mkfifo', 'cat'
+  ]),
+  'remove-peer-bound': Object.freeze([
     'cleanShell', 'printf', 'id', 'tr', 'base64', 'stat', 'gnuStat',
     'realpath', 'sha256', 'procFd', 'rm', 'rmdir', 'gnuDd', 'mkfifo', 'cat'
   ]),
@@ -260,6 +265,14 @@ const operationArguments = Object.freeze({
     'targetParentInode', 'targetDevice', 'targetInode', 'targetType',
     'targetMode', 'targetUid', 'targetGid', 'sha256', 'size'
   ],
+  'remove-peer-bound': [
+    'targetPath', 'targetParentRealPath', 'targetParentDevice',
+    'targetParentInode', 'targetDevice', 'targetInode', 'targetType',
+    'targetMode', 'targetUid', 'targetGid', 'sha256', 'size',
+    'peerPath', 'peerParentRealPath', 'peerParentDevice',
+    'peerParentInode', 'peerDevice', 'peerInode', 'peerType',
+    'peerMode', 'peerUid', 'peerGid', 'peerSha256', 'peerSize'
+  ],
   'stage-handshake': [
     'rootPath', 'challengeName', 'responseName', 'challenge',
     'challengeSize', 'rootUid', 'rootGid', 'rootMode'
@@ -363,6 +376,18 @@ const argumentVariables = Object.freeze({
   targetDevice: '__sp_targetDevice',
   targetInode: '__sp_targetInode',
   targetType: '__sp_targetType',
+  peerPath: '__sp_peerPath',
+  peerParentRealPath: '__sp_peerParentRealPath',
+  peerParentDevice: '__sp_peerParentDevice',
+  peerParentInode: '__sp_peerParentInode',
+  peerDevice: '__sp_peerDevice',
+  peerInode: '__sp_peerInode',
+  peerType: '__sp_peerType',
+  peerMode: '__sp_peerMode',
+  peerUid: '__sp_peerUid',
+  peerGid: '__sp_peerGid',
+  peerSha256: '__sp_peerExpectedSha256',
+  peerSize: '__sp_peerExpectedSize',
   initialMode: '__sp_initialMode',
   initialUid: '__sp_initialUid',
   initialGid: '__sp_initialGid',
@@ -416,6 +441,18 @@ const argumentEnvironmentVariables = Object.freeze({
   targetDevice: 'SHELLPILOT_ARG_TARGET_DEVICE',
   targetInode: 'SHELLPILOT_ARG_TARGET_INODE',
   targetType: 'SHELLPILOT_ARG_TARGET_TYPE',
+  peerPath: 'SHELLPILOT_ARG_PEER_PATH',
+  peerParentRealPath: 'SHELLPILOT_ARG_PEER_PARENT_REAL_PATH',
+  peerParentDevice: 'SHELLPILOT_ARG_PEER_PARENT_DEVICE',
+  peerParentInode: 'SHELLPILOT_ARG_PEER_PARENT_INODE',
+  peerDevice: 'SHELLPILOT_ARG_PEER_DEVICE',
+  peerInode: 'SHELLPILOT_ARG_PEER_INODE',
+  peerType: 'SHELLPILOT_ARG_PEER_TYPE',
+  peerMode: 'SHELLPILOT_ARG_PEER_MODE',
+  peerUid: 'SHELLPILOT_ARG_PEER_UID',
+  peerGid: 'SHELLPILOT_ARG_PEER_GID',
+  peerSha256: 'SHELLPILOT_ARG_PEER_SHA256',
+  peerSize: 'SHELLPILOT_ARG_PEER_SIZE',
   initialMode: 'SHELLPILOT_ARG_INITIAL_MODE',
   initialUid: 'SHELLPILOT_ARG_INITIAL_UID',
   initialGid: 'SHELLPILOT_ARG_INITIAL_GID',
@@ -441,7 +478,9 @@ function assertRequestContract (request) {
     'sourceParentInode', 'sourceDevice', 'sourceInode',
     'targetParentDevice', 'targetParentInode', 'targetParentUid',
     'targetDevice', 'targetInode', 'tempParentDevice', 'tempParentInode',
-    'tempParentUid', 'initialUid', 'initialGid'
+    'tempParentUid', 'initialUid', 'initialGid',
+    'peerParentDevice', 'peerParentInode', 'peerDevice', 'peerInode',
+    'peerUid', 'peerGid'
   ]) {
     if (Object.hasOwn(request.args, key) &&
       !/^(?:0|[1-9]\d*)$/.test(request.args[key])) {
@@ -449,7 +488,7 @@ function assertRequestContract (request) {
     }
   }
   for (const key of ['rootMode', 'targetMode', 'sourceParentMode',
-    'targetParentMode', 'tempParentMode', 'initialMode']) {
+    'targetParentMode', 'tempParentMode', 'initialMode', 'peerMode']) {
     if (Object.hasOwn(request.args, key) &&
       !/^(?:0|[1-7][0-7]{0,3})$/.test(request.args[key])) {
       throw new Error(`root 文件操作参数值无效：${key}`)
@@ -459,13 +498,16 @@ function assertRequestContract (request) {
     request.args.mustBeAbsent !== '1') {
     throw new Error('root 文件操作参数值无效：mustBeAbsent')
   }
-  for (const key of ['sourceType', 'targetType']) {
+  for (const key of ['sourceType', 'targetType', 'peerType']) {
     if (Object.hasOwn(request.args, key) &&
       !['file', 'directory'].includes(request.args[key])) {
       throw new Error(`root 文件操作参数值无效：${key}`)
     }
   }
-  for (const key of ['size', 'challengeSize', 'expectedSize', 'maxSize', 'offset', 'maxBytes']) {
+  for (const key of [
+    'size', 'peerSize', 'challengeSize', 'expectedSize', 'maxSize',
+    'offset', 'maxBytes'
+  ]) {
     if (Object.hasOwn(request.args, key) &&
       !Number.isSafeInteger(Number(request.args[key]))) {
       throw new Error(`root 文件操作参数值无效：${key}`)
@@ -489,9 +531,13 @@ function assertRequestContract (request) {
     throw new Error('root 文件操作 offset 超过 expectedSize')
   }
   if (['stage-import', 'stage-import-cleanup', 'stage-cleanup',
-    'remove-bound'].includes(request.operation) &&
+    'remove-bound', 'remove-peer-bound'].includes(request.operation) &&
     Number(request.args.size) > maxPrivilegedTransferBytes) {
     throw new Error('root 文件操作 size 超过传输上限')
+  }
+  if (request.operation === 'remove-peer-bound' &&
+    Number(request.args.peerSize) > maxPrivilegedTransferBytes) {
+    throw new Error('root 文件操作 peerSize 超过传输上限')
   }
   if (request.operation === 'stage-import-cleanup' && (
     Number(request.args.size) > Number(request.args.maxSize) ||
@@ -510,7 +556,7 @@ function assertRequestContract (request) {
     request.args.rootMode !== '700') {
     throw new Error('root 文件操作握手 mode 必须为 700')
   }
-  for (const key of ['challenge', 'sha256']) {
+  for (const key of ['challenge', 'sha256', 'peerSha256']) {
     if (Object.hasOwn(request.args, key) &&
       !/^[a-fA-F0-9]{64}$/.test(request.args[key])) {
       throw new Error(`root 文件操作参数值无效：${key}`)
@@ -1098,6 +1144,42 @@ const removeBoundBody = [
   'return "$__sp_removeStatus"'
 ].join('; ')
 
+const removePeerBoundBody = [
+  '[ "$__sp_uid_effective" = 0 ] || return 1',
+  '__sp_bind_entry_parent "$__sp_targetPath" "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" || return $?',
+  '__sp_targetName="$__sp_boundName"',
+  '__sp_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" || return 1',
+  '__sp_entry_matches "./$__sp_targetName" "$__sp_targetDevice" "$__sp_targetInode" "$__sp_targetType" || return 1',
+  'exec 3< "./$__sp_targetName" || return $?',
+  '__sp_fd3="/proc/$$/fd/3"',
+  '__sp_fd_entry_matches "$__sp_fd3" "$__sp_targetDevice" "$__sp_targetInode" "$__sp_targetType" || { exec 3<&-; return 1; }',
+  '[ "$(stat -L -c %a -- "$__sp_fd3")" = "$__sp_targetMode" ] && [ "$(stat -L -c %u -- "$__sp_fd3")" = "$__sp_targetUid" ] && [ "$(stat -L -c %g -- "$__sp_fd3")" = "$__sp_targetGid" ] || { exec 3<&-; return 1; }',
+  'if [ "$__sp_targetType" = file ]; then [ "$(stat -L -c %s -- "$__sp_fd3")" = "$__sp_expectedSize" ] || { exec 3<&-; return 1; }; __sp_rootDevice="$__sp_targetParentDevice"; __sp_rootInode="$__sp_targetParentInode"; __sp_objectName="$__sp_token-remove"; __sp_removeDigest="$(__sp_bounded_digest 0 "$__sp_expectedSize")" || { exec 3<&-; return 1; }; [ "$__sp_removeDigest" = "$__sp_expectedSha256" ] && [ "$(stat -L -c %s -- "$__sp_fd3")" = "$__sp_expectedSize" ] || { exec 3<&-; return 1; }; fi',
+  'exec 8< . || { exec 3<&-; return $?; }',
+  '__sp_fd8="/proc/$$/fd/8"',
+  '__sp_fd_entry_matches "$__sp_fd8" "$__sp_targetParentDevice" "$__sp_targetParentInode" directory || { exec 3<&- 8<&-; return 1; }',
+  '__sp_targetRef="$__sp_fd8/$__sp_targetName"',
+  '__sp_bind_entry_parent "$__sp_peerPath" "$__sp_peerParentRealPath" "$__sp_peerParentDevice" "$__sp_peerParentInode" || { exec 3<&- 8<&-; return $?; }',
+  '__sp_peerName="$__sp_boundName"',
+  '__sp_parent_path_matches "$__sp_peerParentRealPath" "$__sp_peerParentDevice" "$__sp_peerParentInode" || { exec 3<&- 8<&-; return 1; }',
+  '__sp_entry_matches "./$__sp_peerName" "$__sp_peerDevice" "$__sp_peerInode" "$__sp_peerType" || { exec 3<&- 8<&-; return 1; }',
+  'exec 7< "./$__sp_peerName" || { exec 3<&- 8<&-; return $?; }',
+  '__sp_fd7="/proc/$$/fd/7"',
+  '__sp_fd_entry_matches "$__sp_fd7" "$__sp_peerDevice" "$__sp_peerInode" "$__sp_peerType" || { exec 3<&- 7<&- 8<&-; return 1; }',
+  '[ "$(stat -L -c %a -- "$__sp_fd7")" = "$__sp_peerMode" ] && [ "$(stat -L -c %u -- "$__sp_fd7")" = "$__sp_peerUid" ] && [ "$(stat -L -c %g -- "$__sp_fd7")" = "$__sp_peerGid" ] || { exec 3<&- 7<&- 8<&-; return 1; }',
+  'if [ "$__sp_peerType" = file ]; then [ "$(stat -L -c %s -- "$__sp_fd7")" = "$__sp_peerExpectedSize" ] || { exec 3<&- 7<&- 8<&-; return 1; }; __sp_rootDevice="$__sp_peerParentDevice"; __sp_rootInode="$__sp_peerParentInode"; __sp_objectName="$__sp_token-peer"; __sp_peerDigest="$(__sp_bounded_digest 0 "$__sp_peerExpectedSize" 7)" || { exec 3<&- 7<&- 8<&-; return 1; }; [ "$__sp_peerDigest" = "$__sp_peerExpectedSha256" ] && [ "$(stat -L -c %s -- "$__sp_fd7")" = "$__sp_peerExpectedSize" ] || { exec 3<&- 7<&- 8<&-; return 1; }; fi',
+  '__sp_fd_entry_matches "$__sp_fd7" "$__sp_peerDevice" "$__sp_peerInode" "$__sp_peerType" || { exec 3<&- 7<&- 8<&-; return 1; }',
+  '__sp_parent_path_matches "$__sp_peerParentRealPath" "$__sp_peerParentDevice" "$__sp_peerParentInode" || { exec 3<&- 7<&- 8<&-; return 1; }',
+  '__sp_entry_matches "./$__sp_peerName" "$__sp_peerDevice" "$__sp_peerInode" "$__sp_peerType" || { exec 3<&- 7<&- 8<&-; return 1; }',
+  '__sp_fd_entry_matches "$__sp_fd3" "$__sp_targetDevice" "$__sp_targetInode" "$__sp_targetType" || { exec 3<&- 7<&- 8<&-; return 1; }',
+  '__sp_fd_entry_matches "$__sp_fd8" "$__sp_targetParentDevice" "$__sp_targetParentInode" directory || { exec 3<&- 7<&- 8<&-; return 1; }',
+  '__sp_entry_matches "$__sp_targetRef" "$__sp_targetDevice" "$__sp_targetInode" "$__sp_targetType" || { exec 3<&- 7<&- 8<&-; return 1; }',
+  'if [ "$__sp_targetType" = file ]; then rm -- "$__sp_targetRef"; else rmdir -- "$__sp_targetRef"; fi',
+  '__sp_removeStatus=$?',
+  'exec 3<&- 7<&- 8<&-',
+  'return "$__sp_removeStatus"'
+].join('; ')
+
 const renameBoundBody = [
   '[ "$__sp_uid_effective" = 0 ] || return 1',
   '__sp_bind_entry_parent "$__sp_sourcePath" "$__sp_sourceParentRealPath" "$__sp_sourceParentDevice" "$__sp_sourceParentInode" || return $?',
@@ -1142,6 +1224,7 @@ const operationBodies = Object.freeze({
   'touch-bound': touchBoundBody,
   'rename-bound': renameBoundBody,
   'remove-bound': removeBoundBody,
+  'remove-peer-bound': removePeerBoundBody,
   'stage-handshake': stageHandshakeBody,
   'stage-export': stageExportBody,
   'stage-export-range': stageExportRangeBody,
@@ -1176,11 +1259,12 @@ export function createPrivilegedFileRequest ({ operation, args = {} } = {}) {
       throw new Error(`root 文件操作参数过长：${key}`)
     }
     if (['mode', 'rootMode', 'targetMode', 'sourceParentMode',
-      'targetParentMode', 'tempParentMode', 'initialMode'].includes(key) &&
+      'targetParentMode', 'tempParentMode', 'initialMode', 'peerMode']
+      .includes(key) &&
       /^[0-7]{1,4}$/.test(text)) {
       text = text.replace(/^0+(?=[0-7])/, '')
     }
-    if (['challenge', 'sha256'].includes(key) &&
+    if (['challenge', 'sha256', 'peerSha256'].includes(key) &&
       /^[a-fA-F0-9]{64}$/.test(text)) {
       text = text.toLowerCase()
     }
@@ -1190,7 +1274,8 @@ export function createPrivilegedFileRequest ({ operation, args = {} } = {}) {
     ['sourcePath', 'sourceParentRealPath'],
     ['path', 'sourceParentRealPath'],
     ['tempPath', 'tempParentRealPath'],
-    ['targetPath', 'targetParentRealPath']
+    ['targetPath', 'targetParentRealPath'],
+    ['peerPath', 'peerParentRealPath']
   ]) {
     if (Object.hasOwn(normalized, pathKey) &&
       Object.hasOwn(normalized, parentKey) &&
@@ -1200,7 +1285,10 @@ export function createPrivilegedFileRequest ({ operation, args = {} } = {}) {
       throw new Error(`root 文件操作 ${parentKey} 绑定无效`)
     }
   }
-  for (const key of ['size', 'challengeSize', 'expectedSize', 'maxSize', 'offset', 'maxBytes']) {
+  for (const key of [
+    'size', 'peerSize', 'challengeSize', 'expectedSize', 'maxSize',
+    'offset', 'maxBytes'
+  ]) {
     if (Object.hasOwn(normalized, key) &&
       (!/^(?:0|[1-9]\d*)$/.test(normalized[key]) ||
         !Number.isSafeInteger(Number(normalized[key])))) {
@@ -1225,9 +1313,13 @@ export function createPrivilegedFileRequest ({ operation, args = {} } = {}) {
     throw new Error('root 文件操作 offset 超过 expectedSize')
   }
   if (['stage-import', 'stage-import-cleanup', 'stage-cleanup',
-    'remove-bound'].includes(operation) &&
+    'remove-bound', 'remove-peer-bound'].includes(operation) &&
     Number(normalized.size) > maxPrivilegedTransferBytes) {
     throw new Error('root 文件操作 size 超过传输上限')
+  }
+  if (operation === 'remove-peer-bound' &&
+    Number(normalized.peerSize) > maxPrivilegedTransferBytes) {
+    throw new Error('root 文件操作 peerSize 超过传输上限')
   }
   if (operation === 'stage-import-cleanup' && (
     Number(normalized.size) > Number(normalized.maxSize) ||
@@ -1298,6 +1390,8 @@ const boundedDigestFunction = [
   '__sp_bounded_digest() { :',
   '__sp_digestOffset="$1"',
   '__sp_digestCount="$2"',
+  '__sp_digestInputFd="$3"',
+  'if [ -n "$__sp_digestInputFd" ]; then case "$__sp_digestInputFd" in [0-9]) : ;; *) return 1 ;; esac; exec 0<&"$__sp_digestInputFd" || return $?; __sp_digestFd=0; else __sp_digestFd=3; fi',
   '__sp_producerPid=',
   '__sp_consumerPid=',
   '__sp_digestCleanupReady=0',
@@ -1359,7 +1453,7 @@ const boundedDigestFunction = [
   '__sp_fd4="/dev/fd/4"',
   '__sp_fifo_fd_matches "$__sp_fd4" "$__sp_hashDevice" "$__sp_hashInode" || { exec 4>&- 5>&- 6<&- 7>&- 8>&- 9<&-; __sp_fail_digest; return 1; }',
   '__sp_scratch_matches && __sp_fifo_matches "$__sp_inputFifo" "$__sp_inputDevice" "$__sp_inputInode" && __sp_fifo_matches "$__sp_hashFifo" "$__sp_hashDevice" "$__sp_hashInode" || { exec 4>&- 5>&- 6<&- 7>&- 8>&- 9<&-; __sp_fail_digest; return 1; }',
-  '( exec 4>&- 5>&- 6<&- 8>&- 9<&-; LC_ALL=C dd bs=65536 iflag=skip_bytes,count_bytes skip="$__sp_digestOffset" count="$__sp_digestCount" <&3 >&7 2> "$__sp_producerReport" ) & __sp_producerPid=$!',
+  '( exec 4>&- 5>&- 6<&- 8>&- 9<&-; LC_ALL=C dd bs=65536 iflag=skip_bytes,count_bytes skip="$__sp_digestOffset" count="$__sp_digestCount" <&"$__sp_digestFd" >&7 2> "$__sp_producerReport" ) & __sp_producerPid=$!',
   '( exec 3<&- 5>&- 7>&- 8>&- 9<&-; LC_ALL=C dd bs=65536 iflag=count_bytes count="$__sp_digestCount" <&6 >&4 2> "$__sp_consumerReport" ) & __sp_consumerPid=$!',
   'exec 4>&- 5>&- 6<&- 7>&- 8>&-',
   '__sp_digestValue="$(__sp_sha256_stdin <&9)"',
@@ -1600,7 +1694,7 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
   let trustedMetadataBytes = 0
 
   const mutationOperations = new Set([
-    'probe', 'remove-bound',
+    'probe', 'remove-bound', 'remove-peer-bound',
     'rename-bound', 'metadata-bound', 'touch-bound',
     'stage-cleanup', 'digest-cleanup'
   ])

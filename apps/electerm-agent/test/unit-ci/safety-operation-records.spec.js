@@ -376,6 +376,39 @@ test('a stale available snapshot cannot reopen a completed rollback record', asy
   assert.equal(persisted[0].status, 'restored')
 })
 
+test('a failed recovery retry durably advances to newer uncertain exact evidence', async () => {
+  const { writeSafetyOperationRecords, safetyOperationStorageKey } = await import(moduleUrl)
+  let persisted = [{
+    id: 'root-retry',
+    source: 'sftp',
+    status: 'failed',
+    rollbackStatus: 'failed',
+    createdAt: '2026-07-12T09:00:00.000Z',
+    updatedAt: '2026-07-12T10:00:00.000Z'
+  }]
+  const storage = {
+    safeGetItemJSON: key => key === safetyOperationStorageKey ? persisted : [],
+    safeSetItemJSON: (key, value) => { persisted = value }
+  }
+  const proofMismatch = {
+    path: '/root/app.conf',
+    expectedDescriptor: { inode: '41', sha256: 'a'.repeat(64) },
+    actualDescriptor: { inode: '41', sha256: 'b'.repeat(64) }
+  }
+
+  writeSafetyOperationRecords(storage, [{
+    ...persisted[0],
+    status: 'uncertain',
+    rollbackStatus: 'uncertain',
+    proofMismatch,
+    updatedAt: '2026-07-12T11:00:00.000Z'
+  }])
+
+  assert.equal(persisted[0].status, 'uncertain')
+  assert.equal(persisted[0].rollbackStatus, 'uncertain')
+  assert.deepEqual(persisted[0].proofMismatch, proofMismatch)
+})
+
 test('quick rollback commands safely quote the recorded remote path', async () => {
   const { buildQuickCommandRollbackAction } = await import(moduleUrl)
   const command = buildQuickCommandRollbackAction({

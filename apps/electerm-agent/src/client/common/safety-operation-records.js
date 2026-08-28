@@ -8,6 +8,7 @@ const terminalSafetyOperationStatuses = new Set([
   'restored',
   'kept',
   'failed',
+  'uncertain',
   'completed',
   'cancelled'
 ])

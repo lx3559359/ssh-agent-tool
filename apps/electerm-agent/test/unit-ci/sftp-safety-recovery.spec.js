@@ -175,6 +175,1406 @@ test('SFTP restore preserves current content before restoring a backup', async (
   assert.equal(result.displacedPath, '/etc/nginx/.shellpilot-before-restore/nginx.conf-20260712-091011')
 })
 
+test('root recovery installs a deleted target with exact proof and no path-only mutation', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const backup = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '42',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const absent = Object.freeze({
+    type: 'bound-absent',
+    path: sourcePath,
+    basename: 'app.conf',
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: '/root',
+      device: '1',
+      inode: '10',
+      mode: 0o700,
+      uid: 0,
+      gid: 0
+    })
+  })
+  const calls = []
+  const result = await restoreSftpRecoveryRecord({
+    sftp: {
+      stat: async () => { throw new Error('No such file') },
+      cp: async () => { throw new Error('path-only cp forbidden') },
+      rename: async () => { throw new Error('path-only rename forbidden') },
+      copyEntry: async (source, target, options) => {
+        calls.push(['copyEntry', source, target, options])
+        return 1
+      },
+      removeEntry: async () => { throw new Error('deleted target must not be removed') }
+    },
+    record: {
+      id: 'root-deleted',
+      kind: 'backup',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    recoveryProof: { source: absent, backup },
+    describeEntry: async path => path === sourcePath ? absent : backup,
+    persistRecord: async value => value
+  })
+
+  assert.equal(result.status, 'restored')
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0].slice(0, 3), [
+    'copyEntry',
+    backupPath,
+    sourcePath
+  ])
+  assert.deepEqual(calls[0][3], {
+    expectedSource: backup,
+    expectedTarget: absent
+  })
+})
+
+test('root recovery proof never downgrades to path-only mutation methods', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const backup = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '42',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const absent = Object.freeze({
+    type: 'bound-absent',
+    path: sourcePath,
+    basename: 'app.conf',
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: '/root',
+      device: '1',
+      inode: '10',
+      mode: 0o755,
+      uid: 1000,
+      gid: 1000
+    })
+  })
+  let pathOnlyCalls = 0
+
+  const error = await restoreSftpRecoveryRecord({
+    sftp: {
+      stat: async () => { pathOnlyCalls += 1 },
+      cp: async () => { pathOnlyCalls += 1 },
+      rename: async () => { pathOnlyCalls += 1 }
+    },
+    record: {
+      id: 'root-no-downgrade',
+      kind: 'backup',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    recoveryProof: { source: absent, backup },
+    describeEntry: async path => path === sourcePath ? absent : backup
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_BINDING_MISMATCH')
+  assert.equal(pathOnlyCalls, 0)
+})
+
+test('root trash recovery consumes the backup with an exact remove after install', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-trash/app.conf-old'
+  const backup = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '42',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const absent = Object.freeze({
+    type: 'bound-absent',
+    path: sourcePath,
+    basename: 'app.conf',
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: '/root', device: '1', inode: '10', mode: 0o755, uid: 1000, gid: 1000
+    })
+  })
+  const calls = []
+
+  const result = await restoreSftpRecoveryRecord({
+    sftp: {
+      cp: async () => { throw new Error('path-only cp forbidden') },
+      rename: async () => { throw new Error('path-only rename forbidden') },
+      copyEntry: async (source, target, options) => {
+        calls.push(['copyEntry', source, target, options])
+        return 1
+      },
+      removeEntry: async (path, options) => {
+        calls.push(['removeEntry', path, options])
+        return 1
+      }
+    },
+    record: {
+      id: 'root-trash-deleted',
+      kind: 'trash',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    recoveryProof: { source: absent, backup },
+    describeEntry: async () => backup,
+    persistRecord: async value => value
+  })
+
+  assert.equal(result.status, 'restored')
+  assert.deepEqual(calls, [
+    ['copyEntry', backupPath, sourcePath, {
+      expectedSource: backup,
+      expectedTarget: absent
+    }],
+    ['removeEntry', backupPath, {
+      expectedSource: backup,
+      expectedPeer: { path: sourcePath, descriptor: backup }
+    }]
+  ])
+})
+
+test('root trash recovery records both copies when exact backup removal fails', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-trash/app.conf-old'
+  const backup = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '42',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const installed = Object.freeze({ ...backup, inode: '43' })
+  const changedBackup = Object.freeze({ ...backup, sha256: 'b'.repeat(64) })
+  const absent = Object.freeze({
+    type: 'bound-absent',
+    path: sourcePath,
+    basename: 'app.conf',
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: '/root', device: '1', inode: '10', mode: 0o755, uid: 1000, gid: 1000
+    })
+  })
+  const removeFailure = Object.assign(new Error('backup proof changed'), {
+    code: 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH',
+    path: backupPath,
+    expectedDescriptor: backup,
+    actualDescriptor: changedBackup
+  })
+  const persisted = []
+
+  const error = await restoreSftpRecoveryRecord({
+    sftp: {
+      copyEntry: async () => 1,
+      removeEntry: async () => { throw removeFailure }
+    },
+    record: {
+      id: 'root-trash-duplicated',
+      kind: 'trash',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    recoveryProof: { source: absent, backup },
+    describeEntry: async path => path === sourcePath ? installed : changedBackup,
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_UNCERTAIN')
+  assert.equal(error.primaryCause, removeFailure)
+  assert.equal(persisted.at(-1).status, 'uncertain')
+  assert.equal(persisted.at(-1).backupDisposition.status, 'duplicated')
+  assert.deepEqual(persisted.at(-1).backupDisposition.sourceDescriptor, installed)
+  assert.deepEqual(persisted.at(-1).backupDisposition.backupDescriptor, changedBackup)
+  assert.deepEqual(persisted.at(-1).proofMismatch, {
+    path: backupPath,
+    expectedDescriptor: backup,
+    actualDescriptor: changedBackup
+  })
+})
+
+test('root trash recovery does not claim success if installed content changes during backup removal', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-trash/app.conf-old'
+  const backup = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '42',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const installed = Object.freeze({ ...backup, inode: '43' })
+  const foreign = Object.freeze({ ...installed, sha256: 'f'.repeat(64) })
+  const absentAt = path => Object.freeze({
+    type: 'bound-absent',
+    path,
+    basename: path.slice(path.lastIndexOf('/') + 1),
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: path.slice(0, path.lastIndexOf('/')) || '/',
+      device: '1',
+      inode: '10',
+      mode: 0o755,
+      uid: 1000,
+      gid: 1000
+    })
+  })
+  const sourceAbsent = absentAt(sourcePath)
+  const backupAbsent = absentAt(backupPath)
+  let backupRemoved = false
+  let sourceReads = 0
+  const persisted = []
+
+  const error = await restoreSftpRecoveryRecord({
+    sftp: {
+      copyEntry: async () => installed,
+      removeEntry: async path => {
+        assert.equal(path, backupPath)
+        backupRemoved = true
+        return 1
+      }
+    },
+    record: {
+      id: 'root-trash-remove-window-race',
+      kind: 'trash',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    recoveryProof: { source: sourceAbsent, backup },
+    describeEntry: async path => {
+      if (path === sourcePath) {
+        sourceReads += 1
+        return sourceReads === 1 ? installed : foreign
+      }
+      return backupRemoved ? backupAbsent : backup
+    },
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_UNCERTAIN')
+  assert.equal(persisted.at(-1).backupDisposition.status, 'removed-uncertain')
+  assert.deepEqual(persisted.at(-1).backupDisposition.sourceDescriptor, foreign)
+  assert.deepEqual(persisted.at(-1).backupDisposition.backupDescriptor, backupAbsent)
+})
+
+test('root recovery displaces an existing target with proof-bound copy and exact remove', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const displacedPath = '/root/.shellpilot-before-restore/app.conf-20260712-091011'
+  const current = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const backup = Object.freeze({ ...current, inode: '42' })
+  const displaced = Object.freeze({ ...current, inode: '43' })
+  const absentAt = (path, basename, parentPath) => Object.freeze({
+    type: 'bound-absent',
+    path,
+    basename,
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: parentPath,
+      device: '1',
+      inode: parentPath === '/root' ? '10' : '11',
+      mode: 0o700,
+      uid: 0,
+      gid: 0
+    })
+  })
+  const displacedAbsent = absentAt(
+    displacedPath,
+    'app.conf-20260712-091011',
+    '/root/.shellpilot-before-restore'
+  )
+  const sourceAbsent = absentAt(sourcePath, 'app.conf', '/root')
+  const calls = []
+  let displacedCreated = false
+  let sourceRemoved = false
+  const persisted = []
+  const result = await restoreSftpRecoveryRecord({
+    sftp: {
+      mkdir: async path => calls.push(['mkdir', path]),
+      rename: async () => { throw new Error('path-only rename forbidden') },
+      cp: async () => { throw new Error('path-only cp forbidden') },
+      copyEntry: async (source, target, options) => {
+        calls.push(['copyEntry', source, target, options])
+        if (target === displacedPath) displacedCreated = true
+        return 1
+      },
+      removeEntry: async (path, options) => {
+        calls.push(['removeEntry', path, options])
+        sourceRemoved = true
+        return 1
+      }
+    },
+    record: {
+      id: 'root-existing',
+      kind: 'backup',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    now: new Date('2026-07-12T09:10:11Z'),
+    recoveryProof: { source: current, backup },
+    describeEntry: async (path, options) => {
+      if (path === sourcePath) return sourceRemoved ? sourceAbsent : current
+      if (path === displacedPath) {
+        return displacedCreated ? displaced : displacedAbsent
+      }
+      if (path === backupPath) return backup
+      throw new Error(`unexpected describe ${path} ${JSON.stringify(options)}`)
+    },
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  })
+
+  assert.deepEqual(calls, [
+    ['mkdir', '/root/.shellpilot-before-restore'],
+    ['copyEntry', sourcePath, displacedPath, {
+      expectedSource: current,
+      expectedTarget: displacedAbsent
+    }],
+    ['removeEntry', sourcePath, {
+      expectedSource: current,
+      expectedPeer: { path: displacedPath, descriptor: displaced }
+    }],
+    ['copyEntry', backupPath, sourcePath, {
+      expectedSource: backup,
+      expectedTarget: sourceAbsent
+    }]
+  ])
+  assert.deepEqual(persisted.map(value => value.displacement?.status), [
+    'planned',
+    'displaced'
+  ])
+  assert.deepEqual(persisted[1].displacement.descriptor, displaced)
+  assert.deepEqual(persisted[1].displacement.sourceState, sourceAbsent)
+  assert.equal(result.status, 'restored')
+  assert.equal(result.displacement.status, 'preserved')
+})
+
+test('root recovery persists a displaced target replacement before source removal', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const displacedPath = '/root/.shellpilot-before-restore/app.conf-20260712-091011'
+  const original = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const backup = Object.freeze({ ...original, inode: '42' })
+  const foreign = Object.freeze({
+    ...original,
+    inode: '99',
+    sha256: 'f'.repeat(64)
+  })
+  const displacedAbsent = Object.freeze({
+    type: 'bound-absent',
+    path: displacedPath,
+    basename: 'app.conf-20260712-091011',
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: '/root/.shellpilot-before-restore',
+      device: '1',
+      inode: '11',
+      mode: 0o700,
+      uid: 0,
+      gid: 0
+    })
+  })
+  const proofFailure = Object.assign(new Error('displaced target raced'), {
+    code: 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH',
+    path: displacedPath,
+    expectedDescriptor: displacedAbsent,
+    actualDescriptor: foreign
+  })
+  const persisted = []
+  let removeCalls = 0
+
+  const error = await restoreSftpRecoveryRecord({
+    sftp: {
+      mkdir: async () => {},
+      copyEntry: async () => { throw proofFailure },
+      removeEntry: async () => { removeCalls += 1 }
+    },
+    record: {
+      id: 'root-displaced-target-race',
+      kind: 'backup',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    now: new Date('2026-07-12T09:10:11Z'),
+    recoveryProof: { source: original, backup },
+    describeEntry: async path => path === displacedPath
+      ? displacedAbsent
+      : path === sourcePath ? original : backup,
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_UNCERTAIN')
+  assert.equal(error.primaryCause, proofFailure)
+  assert.equal(removeCalls, 0)
+  assert.equal(persisted.at(-1).status, 'uncertain')
+  assert.deepEqual(persisted.at(-1).proofMismatch, {
+    path: displacedPath,
+    expectedDescriptor: displacedAbsent,
+    actualDescriptor: foreign
+  })
+})
+
+test('root recovery does not remove the source after the displaced copy is replaced', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const displacedPath = '/root/.shellpilot-before-restore/app.conf-20260712-091011'
+  const original = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const backup = Object.freeze({ ...original, inode: '42' })
+  const copied = Object.freeze({ ...original, inode: '43' })
+  const foreign = Object.freeze({
+    ...copied,
+    sha256: 'f'.repeat(64)
+  })
+  const displacedAbsent = Object.freeze({
+    type: 'bound-absent',
+    path: displacedPath,
+    basename: 'app.conf-20260712-091011',
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: '/root/.shellpilot-before-restore',
+      device: '1',
+      inode: '11',
+      mode: 0o700,
+      uid: 0,
+      gid: 0
+    })
+  })
+  const persisted = []
+  let removeCalls = 0
+  let displacedReads = 0
+
+  const error = await restoreSftpRecoveryRecord({
+    sftp: {
+      mkdir: async () => {},
+      copyEntry: async () => copied,
+      removeEntry: async () => { removeCalls += 1 }
+    },
+    record: {
+      id: 'root-displaced-post-copy-race',
+      kind: 'backup',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    now: new Date('2026-07-12T09:10:11Z'),
+    recoveryProof: { source: original, backup },
+    describeEntry: async path => {
+      if (path === displacedPath) {
+        displacedReads += 1
+        return displacedReads === 1 ? displacedAbsent : foreign
+      }
+      return path === sourcePath ? original : backup
+    },
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_UNCERTAIN')
+  assert.equal(removeCalls, 0)
+  assert.equal(persisted.at(-1).status, 'uncertain')
+  assert.deepEqual(persisted.at(-1).proofMismatch, {
+    path: displacedPath,
+    expectedDescriptor: copied,
+    actualDescriptor: foreign
+  })
+})
+
+test('root recovery stops before install if the displaced copy changes during exact remove', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const displacedPath = '/root/.shellpilot-before-restore/app.conf-20260712-091011'
+  const original = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const backup = Object.freeze({ ...original, inode: '42' })
+  const copied = Object.freeze({ ...original, inode: '43' })
+  const foreign = Object.freeze({ ...copied, sha256: 'f'.repeat(64) })
+  const displacedAbsent = Object.freeze({
+    type: 'bound-absent',
+    path: displacedPath,
+    basename: 'app.conf-20260712-091011',
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: '/root/.shellpilot-before-restore',
+      device: '1',
+      inode: '11',
+      mode: 0o700,
+      uid: 0,
+      gid: 0
+    })
+  })
+  const sourceAbsent = Object.freeze({
+    type: 'bound-absent',
+    path: sourcePath,
+    basename: 'app.conf',
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: '/root', device: '1', inode: '10', mode: 0o700, uid: 0, gid: 0
+    })
+  })
+  let displacedReads = 0
+  let sourceRemoved = false
+  let installCalls = 0
+  const persisted = []
+
+  const error = await restoreSftpRecoveryRecord({
+    sftp: {
+      mkdir: async () => {},
+      copyEntry: async source => {
+        if (source === backupPath) installCalls += 1
+        return copied
+      },
+      removeEntry: async path => {
+        assert.equal(path, sourcePath)
+        sourceRemoved = true
+        return 1
+      }
+    },
+    record: {
+      id: 'root-displaced-remove-window-race',
+      kind: 'backup',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    now: new Date('2026-07-12T09:10:11Z'),
+    recoveryProof: { source: original, backup },
+    describeEntry: async path => {
+      if (path === displacedPath) {
+        displacedReads += 1
+        if (displacedReads === 1) return displacedAbsent
+        if (displacedReads === 2) return copied
+        return foreign
+      }
+      if (path === sourcePath) return sourceRemoved ? sourceAbsent : original
+      return backup
+    },
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_UNCERTAIN')
+  assert.equal(installCalls, 0)
+  assert.equal(persisted.at(-1).displacement.status, 'uncertain')
+  assert.deepEqual(persisted.at(-1).proofMismatch.actualDescriptor, foreign)
+})
+
+test('root recovery persists duplicated uncertainty when exact source removal fails', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const displacedPath = '/root/.shellpilot-before-restore/app.conf-20260712-091011'
+  const original = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const changedSource = Object.freeze({
+    ...original,
+    sha256: 'b'.repeat(64)
+  })
+  const displaced = Object.freeze({ ...original, inode: '43' })
+  const backup = Object.freeze({ ...original, inode: '42' })
+  const displacedAbsent = Object.freeze({
+    type: 'bound-absent',
+    path: displacedPath,
+    basename: 'app.conf-20260712-091011',
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: '/root/.shellpilot-before-restore',
+      device: '1',
+      inode: '11',
+      mode: 0o700,
+      uid: 0,
+      gid: 0
+    })
+  })
+  let copied = false
+  const persisted = []
+  const removeFailure = Object.assign(new Error('source proof changed'), {
+    code: 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH',
+    expectedDescriptor: original,
+    actualDescriptor: changedSource
+  })
+
+  const error = await restoreSftpRecoveryRecord({
+    sftp: {
+      mkdir: async () => {},
+      copyEntry: async () => { copied = true },
+      removeEntry: async () => { throw removeFailure }
+    },
+    record: {
+      id: 'root-duplicated',
+      kind: 'backup',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    now: new Date('2026-07-12T09:10:11Z'),
+    recoveryProof: { source: original, backup },
+    describeEntry: async path => {
+      if (path === displacedPath) return copied ? displaced : displacedAbsent
+      if (path === sourcePath) return changedSource
+      return backup
+    },
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_UNCERTAIN')
+  assert.equal(error.primaryCause, removeFailure)
+  assert.deepEqual(error.sourceDescriptor, changedSource)
+  assert.deepEqual(error.displacedDescriptor, displaced)
+  assert.equal(persisted.at(-1).status, 'uncertain')
+  assert.equal(persisted.at(-1).rollbackStatus, 'uncertain')
+  assert.equal(persisted.at(-1).displacement.status, 'duplicated')
+  assert.deepEqual(
+    persisted.at(-1).displacement.sourceDescriptor,
+    changedSource
+  )
+  assert.deepEqual(persisted.at(-1).displacement.descriptor, displaced)
+})
+
+test('root recovery records an unavailable observation instead of stale expected evidence', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const displacedPath = '/root/.shellpilot-before-restore/app.conf-20260712-091011'
+  const original = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const backup = Object.freeze({ ...original, inode: '42' })
+  const displaced = Object.freeze({ ...original, inode: '43' })
+  const displacedAbsent = Object.freeze({
+    type: 'bound-absent',
+    path: displacedPath,
+    basename: 'app.conf-20260712-091011',
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: '/root/.shellpilot-before-restore',
+      device: '1',
+      inode: '11',
+      mode: 0o700,
+      uid: 0,
+      gid: 0
+    })
+  })
+  const observeFailure = Object.assign(new Error('cannot observe source'), {
+    code: 'EACCES'
+  })
+  const persisted = []
+  let copied = false
+
+  const error = await restoreSftpRecoveryRecord({
+    sftp: {
+      mkdir: async () => {},
+      copyEntry: async () => {
+        copied = true
+        return displaced
+      },
+      removeEntry: async () => { throw new Error('remove failed') }
+    },
+    record: {
+      id: 'root-observation-failed',
+      kind: 'backup',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    now: new Date('2026-07-12T09:10:11Z'),
+    recoveryProof: { source: original, backup },
+    describeEntry: async path => {
+      if (path === displacedPath) return copied ? displaced : displacedAbsent
+      if (path === sourcePath) throw observeFailure
+      return backup
+    },
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_UNCERTAIN')
+  assert.equal(persisted.at(-1).displacement.sourceDescriptor, null)
+  assert.deepEqual(
+    persisted.at(-1).displacement.sourceObservationFailure,
+    {
+      path: sourcePath,
+      code: 'EACCES',
+      message: 'cannot observe source'
+    }
+  )
+})
+
+test('root recovery retry preserves both sides of a duplicated displacement and converges', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const oldDisplacedPath = '/root/.shellpilot-before-restore/app.conf-old-copy'
+  const newDisplacedPath = '/root/.shellpilot-before-restore/app.conf-20260713-091011'
+  const original = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const changed = Object.freeze({
+    ...original, sha256: 'b'.repeat(64)
+  })
+  const backup = Object.freeze({ ...original, inode: '42' })
+  const newDisplaced = Object.freeze({ ...changed, inode: '44' })
+  const absentAt = path => Object.freeze({
+    type: 'bound-absent',
+    path,
+    basename: path.slice(path.lastIndexOf('/') + 1),
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: path.slice(0, path.lastIndexOf('/')) || '/',
+      device: '1',
+      inode: path === sourcePath ? '10' : '11',
+      mode: 0o700,
+      uid: 0,
+      gid: 0
+    })
+  })
+  const newAbsent = absentAt(newDisplacedPath)
+  const sourceAbsent = absentAt(sourcePath)
+  const calls = []
+  let copied = false
+  let removed = false
+  const persisted = []
+  const record = {
+    id: 'root-duplicated-retry',
+    kind: 'backup',
+    sourcePath,
+    backupPath,
+    status: 'uncertain',
+    rollbackStatus: 'uncertain',
+    displacement: {
+      path: oldDisplacedPath,
+      descriptor: original,
+      sourceDescriptor: changed,
+      status: 'duplicated'
+    }
+  }
+
+  const result = await restoreSftpRecoveryRecord({
+    sftp: {
+      mkdir: async () => {},
+      copyEntry: async (source, target, options) => {
+        calls.push(['copyEntry', source, target, options])
+        if (target === newDisplacedPath) copied = true
+        return 1
+      },
+      removeEntry: async (path, options) => {
+        calls.push(['removeEntry', path, options])
+        removed = true
+        return 1
+      }
+    },
+    record,
+    now: new Date('2026-07-13T09:10:11Z'),
+    recoveryProof: { source: changed, backup, displaced: original },
+    describeEntry: async path => {
+      if (path === oldDisplacedPath) return original
+      if (path === newDisplacedPath) return copied ? newDisplaced : newAbsent
+      if (path === sourcePath) return removed ? sourceAbsent : changed
+      return backup
+    },
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  })
+
+  assert.equal(result.status, 'restored')
+  assert.equal(result.displacement.path, newDisplacedPath)
+  assert.equal(result.displacement.status, 'preserved')
+  assert.equal(result.retainedDisplacements.length, 1)
+  assert.equal(result.retainedDisplacements[0].path, oldDisplacedPath)
+  assert.equal(result.retainedDisplacements[0].status, 'preserved-duplicate')
+  assert.equal(calls.some(call => call[1] === oldDisplacedPath), false)
+  assert.deepEqual(calls[0], [
+    'copyEntry', sourcePath, newDisplacedPath,
+    { expectedSource: changed, expectedTarget: newAbsent }
+  ])
+  assert.deepEqual(calls[1], [
+    'removeEntry', sourcePath, {
+      expectedSource: changed,
+      expectedPeer: { path: newDisplacedPath, descriptor: newDisplaced }
+    }
+  ])
+  assert.deepEqual(persisted[0].retainedDisplacements[0].descriptor, original)
+})
+
+test('root recovery fails closed on an uncommitted planned displacement without path-only stat', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const displacedPath = '/root/.shellpilot-before-restore/app.conf-copy'
+  const original = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const backup = Object.freeze({ ...original, inode: '42' })
+  const displaced = Object.freeze({ ...original, inode: '43' })
+  const absent = Object.freeze({
+    type: 'bound-absent',
+    path: sourcePath,
+    basename: 'app.conf',
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: '/root', device: '1', inode: '10', mode: 0o755, uid: 1000, gid: 1000
+    })
+  })
+  const calls = []
+  const persisted = []
+
+  const error = await restoreSftpRecoveryRecord({
+    sftp: {
+      stat: async () => { throw new Error('path-only stat forbidden') },
+      copyEntry: async (source, target, options) => {
+        calls.push(['copyEntry', source, target, options])
+        return 1
+      },
+      removeEntry: async () => { throw new Error('unexpected remove') }
+    },
+    record: {
+      id: 'root-planned-retry',
+      kind: 'backup',
+      sourcePath,
+      backupPath,
+      status: 'uncertain',
+      displacement: {
+        path: displacedPath,
+        descriptor: original,
+        targetState: Object.freeze({
+          type: 'bound-absent',
+          path: displacedPath,
+          basename: 'app.conf-copy',
+          mustBeAbsent: true,
+          parent: Object.freeze({
+            path: '/root/.shellpilot-before-restore',
+            device: '1',
+            inode: '11',
+            mode: 0o700,
+            uid: 0,
+            gid: 0
+          })
+        }),
+        status: 'planned'
+      }
+    },
+    recoveryProof: { source: absent, backup, displaced },
+    describeEntry: async path => {
+      if (path === displacedPath) return displaced
+      if (path === backupPath) return backup
+      return absent
+    },
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_UNCERTAIN')
+  assert.equal(error.primaryCause.code, 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH')
+  assert.equal(persisted.at(-1).status, 'uncertain')
+  assert.deepEqual(persisted.at(-1).proofMismatch.actualDescriptor, displaced)
+  assert.deepEqual(calls, [])
+})
+
+test('root recovery persists exact descriptors when backup proof changes during install', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const backup = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '42',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const changedBackup = Object.freeze({
+    ...backup,
+    sha256: 'b'.repeat(64)
+  })
+  const absent = Object.freeze({
+    type: 'bound-absent',
+    path: sourcePath,
+    basename: 'app.conf',
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: '/root', device: '1', inode: '10', mode: 0o700, uid: 0, gid: 0
+    })
+  })
+  const proofFailure = Object.assign(new Error('backup proof changed'), {
+    code: 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH',
+    path: backupPath,
+    expectedDescriptor: backup,
+    actualDescriptor: changedBackup
+  })
+  const persisted = []
+
+  const error = await restoreSftpRecoveryRecord({
+    sftp: {
+      copyEntry: async () => { throw proofFailure },
+      removeEntry: async () => { throw new Error('unexpected remove') }
+    },
+    record: {
+      id: 'root-backup-race',
+      kind: 'backup',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    recoveryProof: { source: absent, backup },
+    describeEntry: async path => path === backupPath ? changedBackup : absent,
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_UNCERTAIN')
+  assert.equal(error.primaryCause, proofFailure)
+  assert.equal(persisted.length, 1)
+  assert.equal(persisted[0].status, 'uncertain')
+  assert.equal(persisted[0].rollbackStatus, 'uncertain')
+  assert.deepEqual(persisted[0].proofMismatch, {
+    path: backupPath,
+    expectedDescriptor: backup,
+    actualDescriptor: changedBackup
+  })
+})
+
+test('root recovery keeps a raced creator and records proof-bound compensation failure', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const displacedPath = '/root/.shellpilot-before-restore/app.conf-20260712-091011'
+  const original = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const backup = Object.freeze({ ...original, inode: '42' })
+  const displaced = Object.freeze({ ...original, inode: '43' })
+  const foreign = Object.freeze({
+    ...original,
+    inode: '99',
+    sha256: 'f'.repeat(64)
+  })
+  const absentAt = (path, basename, parentPath, inode) => Object.freeze({
+    type: 'bound-absent',
+    path,
+    basename,
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: parentPath, device: '1', inode, mode: 0o700, uid: 0, gid: 0
+    })
+  })
+  const displacedAbsent = absentAt(
+    displacedPath,
+    'app.conf-20260712-091011',
+    '/root/.shellpilot-before-restore',
+    '11'
+  )
+  const sourceAbsent = absentAt(sourcePath, 'app.conf', '/root', '10')
+  const primaryCause = Object.assign(new Error('restore target raced'), {
+    code: 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH',
+    path: sourcePath,
+    expectedDescriptor: sourceAbsent,
+    actualDescriptor: foreign
+  })
+  const rollbackCause = Object.assign(new Error('compensation target raced'), {
+    code: 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH',
+    path: sourcePath,
+    expectedDescriptor: sourceAbsent,
+    actualDescriptor: foreign
+  })
+  const copyCalls = []
+  let displacedCreated = false
+  let sourceRemoved = false
+  const persisted = []
+
+  const error = await restoreSftpRecoveryRecord({
+    sftp: {
+      mkdir: async () => {},
+      rename: async () => { throw new Error('path-only rename forbidden') },
+      cp: async () => { throw new Error('path-only cp forbidden') },
+      copyEntry: async (source, target, options) => {
+        copyCalls.push([source, target, options])
+        if (source === sourcePath) {
+          displacedCreated = true
+          return 1
+        }
+        if (source === backupPath) throw primaryCause
+        throw rollbackCause
+      },
+      removeEntry: async path => {
+        assert.equal(path, sourcePath)
+        sourceRemoved = true
+        return 1
+      }
+    },
+    record: {
+      id: 'root-target-race',
+      kind: 'backup',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    now: new Date('2026-07-12T09:10:11Z'),
+    recoveryProof: { source: original, backup },
+    describeEntry: async path => {
+      if (path === displacedPath) return displacedCreated ? displaced : displacedAbsent
+      if (path === sourcePath) return sourceRemoved ? sourceAbsent : original
+      return backup
+    },
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_UNCERTAIN')
+  assert.equal(error.primaryCause, primaryCause)
+  assert.equal(error.rollbackCause, rollbackCause)
+  assert.equal(copyCalls.length, 3)
+  assert.deepEqual(copyCalls[2], [
+    displacedPath,
+    sourcePath,
+    { expectedSource: displaced, expectedTarget: sourceAbsent }
+  ])
+  assert.equal(persisted.at(-1).status, 'uncertain')
+  assert.equal(persisted.at(-1).displacement.status, 'uncertain')
+  assert.deepEqual(persisted.at(-1).proofMismatch.actualDescriptor, foreign)
+})
+
+test('root recovery records both sides when compensation copy exact-remove fails', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const displacedPath = '/root/.shellpilot-before-restore/app.conf-20260712-091011'
+  const original = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const backup = Object.freeze({ ...original, inode: '42' })
+  const displaced = Object.freeze({ ...original, inode: '43' })
+  const restoredSource = Object.freeze({ ...original, inode: '44' })
+  const changedDisplaced = Object.freeze({
+    ...displaced,
+    sha256: 'b'.repeat(64)
+  })
+  const absentAt = (path, parentPath, inode) => Object.freeze({
+    type: 'bound-absent',
+    path,
+    basename: path.slice(path.lastIndexOf('/') + 1),
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: parentPath, device: '1', inode, mode: 0o700, uid: 0, gid: 0
+    })
+  })
+  const displacedAbsent = absentAt(
+    displacedPath,
+    '/root/.shellpilot-before-restore',
+    '11'
+  )
+  const sourceAbsent = absentAt(sourcePath, '/root', '10')
+  const primaryCause = new Error('backup install failed')
+  const removeFailure = Object.assign(new Error('displaced proof changed'), {
+    code: 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH',
+    path: displacedPath,
+    expectedDescriptor: displaced,
+    actualDescriptor: changedDisplaced
+  })
+  let displacedCreated = false
+  let sourceRemoved = false
+  let compensationCopied = false
+  const persisted = []
+
+  const error = await restoreSftpRecoveryRecord({
+    sftp: {
+      mkdir: async () => {},
+      copyEntry: async (source, target) => {
+        if (source === sourcePath) displacedCreated = true
+        else if (source === backupPath) throw primaryCause
+        else if (source === displacedPath && target === sourcePath) {
+          compensationCopied = true
+        }
+        return 1
+      },
+      removeEntry: async path => {
+        if (path === sourcePath) {
+          sourceRemoved = true
+          return 1
+        }
+        throw removeFailure
+      }
+    },
+    record: {
+      id: 'root-compensation-duplicated',
+      kind: 'backup',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    now: new Date('2026-07-12T09:10:11Z'),
+    recoveryProof: { source: original, backup },
+    describeEntry: async path => {
+      if (path === displacedPath) {
+        if (!displacedCreated) return displacedAbsent
+        return compensationCopied ? changedDisplaced : displaced
+      }
+      if (path === sourcePath) {
+        if (compensationCopied) return restoredSource
+        return sourceRemoved ? sourceAbsent : original
+      }
+      return backup
+    },
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_UNCERTAIN')
+  assert.equal(error.primaryCause, primaryCause)
+  assert.equal(error.rollbackCause, removeFailure)
+  assert.equal(persisted.at(-1).status, 'uncertain')
+  assert.equal(persisted.at(-1).displacement.status, 'duplicated')
+  assert.deepEqual(
+    persisted.at(-1).displacement.sourceDescriptor,
+    restoredSource
+  )
+  assert.deepEqual(
+    persisted.at(-1).displacement.descriptor,
+    changedDisplaced
+  )
+})
+
+test('root recovery does not claim compensation if its target changes during exact remove', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const sourcePath = '/root/app.conf'
+  const backupPath = '/root/.shellpilot-backups/app.conf-old'
+  const displacedPath = '/root/.shellpilot-before-restore/app.conf-20260712-091011'
+  const original = Object.freeze({
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  })
+  const backup = Object.freeze({ ...original, inode: '42' })
+  const displaced = Object.freeze({ ...original, inode: '43' })
+  const restored = Object.freeze({ ...original, inode: '44' })
+  const foreign = Object.freeze({ ...restored, sha256: 'f'.repeat(64) })
+  const absentAt = (path, parentPath, inode) => Object.freeze({
+    type: 'bound-absent',
+    path,
+    basename: path.slice(path.lastIndexOf('/') + 1),
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: parentPath, device: '1', inode, mode: 0o700, uid: 0, gid: 0
+    })
+  })
+  const displacedAbsent = absentAt(
+    displacedPath,
+    '/root/.shellpilot-before-restore',
+    '11'
+  )
+  const sourceAbsent = absentAt(sourcePath, '/root', '10')
+  const primaryCause = new Error('backup install failed')
+  let displacedCreated = false
+  let sourceRemoved = false
+  let compensationCopied = false
+  let displacedRemoved = false
+  let compensationSourceReads = 0
+  const persisted = []
+
+  const error = await restoreSftpRecoveryRecord({
+    sftp: {
+      mkdir: async () => {},
+      copyEntry: async source => {
+        if (source === sourcePath) {
+          displacedCreated = true
+          return displaced
+        }
+        if (source === backupPath) throw primaryCause
+        compensationCopied = true
+        return restored
+      },
+      removeEntry: async path => {
+        if (path === sourcePath) sourceRemoved = true
+        else displacedRemoved = true
+        return 1
+      }
+    },
+    record: {
+      id: 'root-compensation-remove-window-race',
+      kind: 'backup',
+      sourcePath,
+      backupPath,
+      status: 'available'
+    },
+    now: new Date('2026-07-12T09:10:11Z'),
+    recoveryProof: { source: original, backup },
+    describeEntry: async path => {
+      if (path === displacedPath) {
+        return displacedRemoved
+          ? displacedAbsent
+          : displacedCreated ? displaced : displacedAbsent
+      }
+      if (path === sourcePath) {
+        if (compensationCopied) {
+          compensationSourceReads += 1
+          return compensationSourceReads === 1 ? restored : foreign
+        }
+        return sourceRemoved ? sourceAbsent : original
+      }
+      return backup
+    },
+    persistRecord: async value => {
+      persisted.push(structuredClone(value))
+      return value
+    }
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_UNCERTAIN')
+  assert.equal(error.primaryCause, primaryCause)
+  assert.equal(persisted.at(-1).displacement.status, 'uncertain')
+  assert.deepEqual(persisted.at(-1).displacement.sourceDescriptor, foreign)
+  assert.deepEqual(persisted.at(-1).displacement.descriptor, displacedAbsent)
+  assert.deepEqual(persisted.at(-1).proofMismatch.actualDescriptor, foreign)
+})
+
 test('SFTP restore persists displacement before moving current content and exposes double-failure uncertainty', async () => {
   const { restoreSftpRecoveryRecord } = await import(moduleUrl)
   const persisted = []

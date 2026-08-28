@@ -1462,7 +1462,9 @@ test('bounded digest isolates both FIFO endpoints and independently meters hash 
   assert.match(helper, /__sp_inputInode=.*stat -c %i -- "\$__sp_inputFifo"/)
   assert.ok(helper.indexOf('__sp_inputInode=') <
     helper.indexOf('exec 5<> "$__sp_inputFifo"'))
-  assert.match(helper, /dd .*<&3 .*>&7 2> "\$__sp_producerReport"/)
+  assert.match(helper, /else __sp_digestFd=3; fi/)
+  assert.match(helper,
+    /dd .*<&"\$__sp_digestFd" .*>&7 2> "\$__sp_producerReport"/)
   assert.match(helper, /dd .*<&6 .*>&4 2> "\$__sp_consumerReport"/)
   assert.match(helper, /__sp_sha256_stdin <&9/)
   assert.match(helper, /__sp_fd4="\/dev\/fd\/4"/)
@@ -1706,6 +1708,61 @@ test('remove-bound accepts a fixed non-root parent and requires exact file conte
       }
     }
   }), /sha256|size|参数合同|缺少必要参数/i)
+})
+
+test('remove-peer-bound verifies the exact peer inside the source removal command', async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const args = {
+    targetPath: '/root/source',
+    targetParentRealPath: '/root',
+    targetParentDevice: '4001',
+    targetParentInode: '4002',
+    targetDevice: '4003',
+    targetInode: '4004',
+    targetType: 'file',
+    targetMode: '640',
+    targetUid: '0',
+    targetGid: '0',
+    sha256: 'a'.repeat(64),
+    size: '12',
+    peerPath: '/root/copy',
+    peerParentRealPath: '/root',
+    peerParentDevice: '4001',
+    peerParentInode: '4002',
+    peerDevice: '4003',
+    peerInode: '4005',
+    peerType: 'file',
+    peerMode: '640',
+    peerUid: '0',
+    peerGid: '0',
+    peerSha256: 'a'.repeat(64),
+    peerSize: '12'
+  }
+  const command = buildPrivilegedFileCommand({
+    token: 'ec'.repeat(24),
+    request: { operation: 'remove-peer-bound', args }
+  })
+
+  assert.match(command, /__sp_peerPath/)
+  assert.match(command, /__sp_peerDevice/)
+  assert.match(command, /__sp_peerExpectedSha256/)
+  assert.match(command, /__sp_bounded_digest 0 "\$__sp_peerExpectedSize" 7/)
+  assert.doesNotMatch(command, /__sp_sha256_raw "\$__sp_fd7"/)
+  assert.match(command, /__sp_digestInputFd="\$3"/)
+  assert.match(command, /exec 0<&"\$__sp_digestInputFd"/)
+  assert.match(command, /count="\$__sp_digestCount" <&"\$__sp_digestFd"/)
+  const peerProofIndex = command.lastIndexOf(
+    '[ "$__sp_peerDigest" = "$__sp_peerExpectedSha256" ]'
+  )
+  const removeIndex = command.indexOf('rm -- "$__sp_targetRef"')
+  assert.ok(peerProofIndex > 0 && removeIndex > peerProofIndex)
+  assert.throws(() => buildPrivilegedFileCommand({
+    token: 'ed'.repeat(24),
+    request: {
+      operation: 'remove-peer-bound',
+      args: { ...args, peerSha256: '' }
+    }
+  }), /peerSha256|缺少必要参数|参数合同/i)
 })
 
 test('stage-import trap cleanup preserves same-inode content changed after chmod', async () => {

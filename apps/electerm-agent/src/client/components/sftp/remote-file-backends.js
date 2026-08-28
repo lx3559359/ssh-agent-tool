@@ -135,6 +135,105 @@ function normalizeCancellableOptions (value) {
   return Object.freeze({ signal })
 }
 
+function normalizeRecoveryDescribeOptions (value) {
+  if (value === undefined) {
+    return Object.freeze({ signal: undefined, allowAbsent: false })
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value)) ||
+    Object.keys(value).some(key => !['signal', 'allowAbsent'].includes(key)) ||
+    (value.allowAbsent !== undefined && typeof value.allowAbsent !== 'boolean')) {
+    throw new Error('root 文件后端恢复证明 options 无效')
+  }
+  const { signal } = normalizeCancellableOptions(
+    Object.hasOwn(value, 'signal') ? { signal: value.signal } : undefined
+  )
+  return Object.freeze({ signal, allowAbsent: value.allowAbsent === true })
+}
+
+function normalizeRecoveryCopyOptions (value, targetPath) {
+  if (value === undefined) {
+    return Object.freeze({
+      signal: undefined,
+      expectedSource: undefined,
+      expectedTarget: undefined
+    })
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value)) ||
+    Object.keys(value).some(key => ![
+      'signal', 'expectedSource', 'expectedTarget'
+    ].includes(key))) {
+    throw new Error('root 文件后端 copy options 无效')
+  }
+  const { signal } = normalizeCancellableOptions(
+    Object.hasOwn(value, 'signal') ? { signal: value.signal } : undefined
+  )
+  const hasExpectedSource = Object.hasOwn(value, 'expectedSource')
+  const hasExpectedTarget = Object.hasOwn(value, 'expectedTarget')
+  if (hasExpectedSource !== hasExpectedTarget) {
+    throw new Error('root 文件后端 copy 恢复证明必须同时绑定源和目标')
+  }
+  return Object.freeze({
+    signal,
+    expectedSource: hasExpectedSource
+      ? normalizeRecoveryDescriptor(value.expectedSource, 'copy source')
+      : undefined,
+    expectedTarget: hasExpectedTarget
+      ? normalizeBoundAbsentDescriptor(
+        value.expectedTarget,
+        targetPath,
+        'copy target'
+      )
+      : undefined
+  })
+}
+
+function normalizeRecoveryRemoveOptions (value) {
+  if (value === undefined) {
+    return Object.freeze({
+      signal: undefined,
+      expectedSource: undefined,
+      expectedPeer: undefined
+    })
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value)) ||
+    Object.keys(value).some(key => ![
+      'signal', 'expectedSource', 'expectedPeer'
+    ].includes(key))) {
+    throw new Error('root 文件后端 remove options 无效')
+  }
+  const { signal } = normalizeCancellableOptions(
+    Object.hasOwn(value, 'signal') ? { signal: value.signal } : undefined
+  )
+  let expectedPeer
+  if (Object.hasOwn(value, 'expectedPeer')) {
+    const peer = value.expectedPeer
+    if (!peer || typeof peer !== 'object' || Array.isArray(peer) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(peer)) ||
+      Object.keys(peer).length !== 2 ||
+      !Object.hasOwn(peer, 'path') ||
+      !Object.hasOwn(peer, 'descriptor')) {
+      throw new Error('root 文件后端 remove peer 恢复证明无效')
+    }
+    expectedPeer = Object.freeze({
+      path: canonicalFilePath(peer.path, 'remove peer'),
+      descriptor: normalizeRecoveryDescriptor(
+        peer.descriptor,
+        'remove peer'
+      )
+    })
+  }
+  return Object.freeze({
+    signal,
+    expectedSource: Object.hasOwn(value, 'expectedSource')
+      ? normalizeRecoveryDescriptor(value.expectedSource, 'remove source')
+      : undefined,
+    expectedPeer
+  })
+}
+
 function throwIfAborted (signal) {
   if (!signal?.aborted) return
   if (signal.reason instanceof Error) throw signal.reason
@@ -161,6 +260,92 @@ function isSameOrChildPath (candidate, parent) {
 function parentFilePath (value) {
   const index = value.lastIndexOf('/')
   return index <= 0 ? '/' : value.slice(0, index)
+}
+
+const recoveryDescriptorFields = Object.freeze([
+  'type', 'device', 'inode', 'size', 'mode', 'uid', 'gid', 'sha256'
+])
+
+function normalizeRecoveryDescriptor (value, label = 'recovery source') {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value)) ||
+    Object.keys(value).length !== recoveryDescriptorFields.length ||
+    recoveryDescriptorFields.some(key => !Object.hasOwn(value, key)) ||
+    !['file', 'directory'].includes(value.type) ||
+    !/^(?:0|[1-9]\d{0,19})$/.test(String(value.device ?? '')) ||
+    !/^(?:0|[1-9]\d{0,19})$/.test(String(value.inode ?? '')) ||
+    !Number.isSafeInteger(value.size) || value.size < 0 ||
+    !Number.isInteger(value.mode) || value.mode < 0 || value.mode > 0o7777 ||
+    !Number.isSafeInteger(value.uid) || !Number.isSafeInteger(value.gid) ||
+    !/^[a-f0-9]{64}$/.test(String(value.sha256 || ''))) {
+    throw new Error(`root 文件后端 ${label} 恢复证明无效`)
+  }
+  return Object.freeze(Object.fromEntries(recoveryDescriptorFields.map(key => [
+    key,
+    ['device', 'inode'].includes(key) ? String(value[key]) : value[key]
+  ])))
+}
+
+function normalizeBoundAbsentDescriptor (value, path, label = 'recovery target') {
+  const remotePath = canonicalFilePath(path)
+  const parentPath = parentFilePath(remotePath)
+  const basename = remotePath.slice(remotePath.lastIndexOf('/') + 1)
+  const parent = value?.parent
+  const outerKeys = ['type', 'path', 'basename', 'mustBeAbsent', 'parent']
+  const parentKeys = ['path', 'device', 'inode', 'mode', 'uid', 'gid']
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value)) ||
+    Object.keys(value).length !== outerKeys.length ||
+    outerKeys.some(key => !Object.hasOwn(value, key)) ||
+    value.type !== 'bound-absent' || value.path !== remotePath ||
+    value.basename !== basename || value.mustBeAbsent !== true ||
+    !parent || typeof parent !== 'object' || Array.isArray(parent) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(parent)) ||
+    Object.keys(parent).length !== parentKeys.length ||
+    parentKeys.some(key => !Object.hasOwn(parent, key)) ||
+    parent.path !== parentPath ||
+    !/^(?:0|[1-9]\d{0,19})$/.test(String(parent.device ?? '')) ||
+    !/^(?:0|[1-9]\d{0,19})$/.test(String(parent.inode ?? '')) ||
+    !Number.isInteger(parent.mode) || parent.mode < 0 || parent.mode > 0o7777 ||
+    !Number.isSafeInteger(parent.uid) || !Number.isSafeInteger(parent.gid)) {
+    throw new Error(`root 文件后端 ${label} 缺失证明无效`)
+  }
+  return Object.freeze({
+    type: 'bound-absent',
+    path: remotePath,
+    basename,
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: parentPath,
+      device: String(parent.device),
+      inode: String(parent.inode),
+      mode: parent.mode,
+      uid: parent.uid,
+      gid: parent.gid
+    })
+  })
+}
+
+function sameRecoveryDescriptor (left, right) {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function recoveryParentMatches (metadata, expected) {
+  return String(metadata.device) === String(expected.device) &&
+    String(metadata.inode) === String(expected.inode) &&
+    (metadata.mode & 0o7777) === expected.mode &&
+    metadata.uid === expected.uid &&
+    metadata.gid === expected.gid
+}
+
+function recoveryProofMismatch (message, path, expected, actual, cause) {
+  const error = new Error(message)
+  error.code = 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH'
+  error.path = path
+  error.expectedDescriptor = expected
+  error.actualDescriptor = actual
+  if (cause) error.cause = cause
+  return error
 }
 
 function requireBoundMetadata (metadata, path, label = 'entry') {
@@ -687,6 +872,23 @@ export async function createPrivilegedFileBackend ({
     }
   }
 
+  function peerRemovalArgs (entry) {
+    return {
+      peerPath: entry.path,
+      peerParentRealPath: entry.metadata.parentRealPath,
+      peerParentDevice: String(entry.metadata.parentDevice),
+      peerParentInode: String(entry.metadata.parentInode),
+      peerDevice: String(entry.metadata.device),
+      peerInode: String(entry.metadata.inode),
+      peerType: entry.metadata.type,
+      peerMode: normalizeMode(entry.metadata.mode & 0o7777).toString(8),
+      peerUid: String(entry.metadata.uid),
+      peerGid: String(entry.metadata.gid),
+      peerSha256: entry.proof?.sha256 ?? directoryRemovalDigest,
+      peerSize: String(entry.proof?.size ?? 0)
+    }
+  }
+
   function removalMetadataMatches (current, expected) {
     const keys = ['device', 'inode', 'type', 'mode', 'uid', 'gid']
     if (current.type === 'file') {
@@ -701,7 +903,8 @@ export async function createPrivilegedFileBackend ({
     expectedMetadata,
     expectedProof,
     label,
-    signal
+    signal,
+    peerEntry
   ) {
     const entry = await boundMutationEntry(path, label, signal)
     const candidates = Array.isArray(expectedMetadata)
@@ -726,7 +929,10 @@ export async function createPrivilegedFileBackend ({
         throw new Error(`root 文件后端 ${label} content proof 发生变化`)
       }
     }
-    return boundRemovalArgs(path, entry, proof)
+    return {
+      ...boundRemovalArgs(path, entry, proof),
+      ...(peerEntry ? peerRemovalArgs(peerEntry) : {})
+    }
   }
 
   function importTempPath (targetPath, objectName) {
@@ -1148,6 +1354,116 @@ export async function createPrivilegedFileBackend ({
     return manifest
   }
 
+  async function recoveryDescriptorFromManifest (manifest, rootPath) {
+    const root = manifest[0]
+    if (!root || root.path !== rootPath) {
+      throw new Error('root 文件后端恢复证明缺少根条目')
+    }
+    const metadata = root.metadata
+    const manifestProof = manifest.map(entry => ({
+      path: entry.path,
+      depth: entry.depth,
+      type: entry.metadata.type,
+      device: String(entry.metadata.device),
+      inode: String(entry.metadata.inode),
+      size: entry.metadata.size,
+      mode: entry.metadata.mode & 0o7777,
+      uid: entry.metadata.uid,
+      gid: entry.metadata.gid,
+      sha256: entry.proof?.sha256 || ''
+    }))
+    const sha256 = metadata.type === 'file'
+      ? root.proof?.sha256
+      : await sha256Hex(new TextEncoder().encode(JSON.stringify(manifestProof)))
+    return normalizeRecoveryDescriptor({
+      type: metadata.type,
+      device: String(metadata.device),
+      inode: String(metadata.inode),
+      size: metadata.size,
+      mode: metadata.mode & 0o7777,
+      uid: metadata.uid,
+      gid: metadata.gid,
+      sha256
+    })
+  }
+
+  async function recoveryDescriptorFromCreated (
+    sourceManifest,
+    created,
+    sourceRoot,
+    targetRoot
+  ) {
+    if (created.length !== sourceManifest.length) {
+      throw new Error('root 文件后端 copy 完成证明条目数不匹配')
+    }
+    const createdManifest = created.map((createdEntry, index) => {
+      const sourceEntry = sourceManifest[index]
+      const expectedPath = targetForManifestEntry(
+        sourceEntry,
+        sourceRoot,
+        targetRoot
+      )
+      if (createdEntry.path !== expectedPath) {
+        throw new Error('root 文件后端 copy 完成证明路径不匹配')
+      }
+      return {
+        path: expectedPath,
+        depth: sourceEntry.depth,
+        metadata: {
+          ...sourceEntry.metadata,
+          device: String(createdEntry.binding.device),
+          inode: String(createdEntry.binding.inode),
+          size: createdEntry.binding.size ?? sourceEntry.metadata.size,
+          mode: createdEntry.desiredMetadata?.mode ?? sourceEntry.metadata.mode,
+          uid: createdEntry.desiredMetadata?.uid ?? sourceEntry.metadata.uid,
+          gid: createdEntry.desiredMetadata?.gid ?? sourceEntry.metadata.gid
+        },
+        proof: createdEntry.binding.proof || sourceEntry.proof
+      }
+    })
+    return recoveryDescriptorFromManifest(createdManifest, targetRoot)
+  }
+
+  async function describeRecoveryState (path, signal, allowAbsent = false) {
+    const remotePath = canonicalFilePath(path)
+    let manifest
+    try {
+      manifest = await buildTreeManifest(remotePath, signal)
+    } catch (error) {
+      if (!allowAbsent || error?.code !== 'ENOENT') throw error
+      const parentPath = parentFilePath(remotePath)
+      const parent = requireBoundMetadata(
+        await rawFacade.lstat(parentPath, { signal }),
+        parentPath,
+        'recovery absent parent'
+      )
+      if (parent.type !== 'directory') {
+        throw new Error('root 文件后端恢复缺失目标 parent 不是目录')
+      }
+      try {
+        await boundLstat(remotePath, parent, signal)
+      } catch (boundError) {
+        if (boundError?.code !== 'ENOENT') throw boundError
+        return normalizeBoundAbsentDescriptor({
+          type: 'bound-absent',
+          path: remotePath,
+          basename: remotePath.slice(remotePath.lastIndexOf('/') + 1),
+          mustBeAbsent: true,
+          parent: {
+            path: parentPath,
+            device: String(parent.device),
+            inode: String(parent.inode),
+            mode: parent.mode & 0o7777,
+            uid: parent.uid,
+            gid: parent.gid
+          }
+        }, remotePath)
+      }
+      manifest = await buildTreeManifest(remotePath, signal)
+    }
+    return recoveryDescriptorFromManifest(manifest, remotePath)
+  }
+
   function targetForManifestEntry (entry, sourceRoot, targetRoot) {
     return entry.path === sourceRoot
       ? targetRoot
@@ -1246,15 +1562,44 @@ export async function createPrivilegedFileBackend ({
   }
 
   async function copyTree (source, target, options) {
-    const { signal } = normalizeCancellableOptions(options)
     const sourcePath = canonicalFilePath(source, 'source')
     const targetPath = canonicalFilePath(target, 'target')
+    const {
+      signal,
+      expectedSource,
+      expectedTarget
+    } = normalizeRecoveryCopyOptions(options, targetPath)
     if (isSameOrChildPath(targetPath, sourcePath)) {
       throw new Error('root 文件后端复制目标不能位于复制源内部')
     }
     throwIfAborted(signal)
     const manifest = await buildTreeManifest(sourcePath, signal)
-    if (await lstatOrMissing(targetPath, signal)) {
+    const sourceDescriptor = await recoveryDescriptorFromManifest(
+      manifest,
+      sourcePath
+    )
+    if (expectedSource &&
+      !sameRecoveryDescriptor(sourceDescriptor, expectedSource)) {
+      throw recoveryProofMismatch(
+        'root 文件后端 copy source 恢复证明发生变化',
+        sourcePath,
+        expectedSource,
+        sourceDescriptor
+      )
+    }
+    const targetState = expectedTarget
+      ? await describeRecoveryState(targetPath, signal, true)
+      : null
+    if (expectedTarget &&
+      !sameRecoveryDescriptor(targetState, expectedTarget)) {
+      throw recoveryProofMismatch(
+        'root 文件后端 copy target 缺失证明发生变化',
+        targetPath,
+        expectedTarget,
+        targetState
+      )
+    }
+    if (!expectedTarget && await lstatOrMissing(targetPath, signal)) {
       const error = new Error(`root 文件后端复制目标已存在：${targetPath}`)
       error.code = 'EEXIST'
       throw error
@@ -1268,6 +1613,16 @@ export async function createPrivilegedFileBackend ({
     if (targetParentMetadata.type !== 'directory') {
       throw new Error('root 文件后端复制目标 parent 不是目录')
     }
+    if (expectedTarget &&
+      !recoveryParentMatches(targetParentMetadata, expectedTarget.parent)) {
+      const currentTarget = await describeRecoveryState(targetPath, signal, true)
+      throw recoveryProofMismatch(
+        'root 文件后端 copy target parent 恢复证明发生变化',
+        targetPath,
+        expectedTarget,
+        currentTarget
+      )
+    }
     await invalidateReadStreams(targetPath)
     const created = []
     const createdDirectories = new Map([[
@@ -1275,6 +1630,7 @@ export async function createPrivilegedFileBackend ({
       targetParentMetadata
     ]])
     let primaryError
+    let completedTargetDescriptor
     try {
       for (const entry of manifest) {
         throwIfAborted(signal)
@@ -1360,6 +1716,43 @@ export async function createPrivilegedFileBackend ({
         entry.binding.uid = entry.desiredMetadata.uid
         entry.binding.gid = entry.desiredMetadata.gid
       }
+      if (expectedSource) {
+        const finalSource = await describeRecoveryState(
+          sourcePath,
+          signal,
+          true
+        )
+        if (!sameRecoveryDescriptor(finalSource, expectedSource)) {
+          throw recoveryProofMismatch(
+            'root 文件后端 copy source 在安装期间发生变化',
+            sourcePath,
+            expectedSource,
+            finalSource
+          )
+        }
+        completedTargetDescriptor = await recoveryDescriptorFromCreated(
+          manifest,
+          created,
+          sourcePath,
+          targetPath
+        )
+        const finalTarget = await describeRecoveryState(
+          targetPath,
+          signal,
+          false
+        )
+        if (!sameRecoveryDescriptor(
+          finalTarget,
+          completedTargetDescriptor
+        )) {
+          throw recoveryProofMismatch(
+            'root 文件后端 copy target 在完成前发生变化',
+            targetPath,
+            completedTargetDescriptor,
+            finalTarget
+          )
+        }
+      }
     } catch (error) {
       primaryError = error
     }
@@ -1385,27 +1778,185 @@ export async function createPrivilegedFileBackend ({
           primaryError.rollbackError ||= rollbackError
         }
       }
+      if (primaryError.code !== 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH') {
+        if (expectedSource) {
+          try {
+            const actualSource = await describeRecoveryState(
+              sourcePath,
+              undefined,
+              true
+            )
+            if (!sameRecoveryDescriptor(actualSource, expectedSource)) {
+              const mismatch = recoveryProofMismatch(
+                'root 文件后端 copy source 实际执行证明发生变化',
+                sourcePath,
+                expectedSource,
+                actualSource,
+                primaryError
+              )
+              mismatch.rollbackError = primaryError.rollbackError
+              primaryError = mismatch
+            }
+          } catch {}
+        }
+        if (expectedTarget &&
+          primaryError.code !== 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH') {
+          try {
+            const actualTarget = await describeRecoveryState(
+              targetPath,
+              undefined,
+              true
+            )
+            if (!sameRecoveryDescriptor(actualTarget, expectedTarget)) {
+              const mismatch = recoveryProofMismatch(
+                'root 文件后端 copy target 实际执行证明发生变化',
+                targetPath,
+                expectedTarget,
+                actualTarget,
+                primaryError
+              )
+              mismatch.rollbackError = primaryError.rollbackError
+              primaryError = mismatch
+            }
+          } catch {}
+        }
+      }
       throw primaryError
     }
-    return 1
+    return completedTargetDescriptor || 1
   }
 
   async function removeTree (path, options) {
-    const { signal } = normalizeCancellableOptions(options)
+    const {
+      signal,
+      expectedSource,
+      expectedPeer
+    } = normalizeRecoveryRemoveOptions(options)
     const remotePath = canonicalFilePath(path)
+    if (expectedPeer && (
+      isSameOrChildPath(expectedPeer.path, remotePath) ||
+      isSameOrChildPath(remotePath, expectedPeer.path)
+    )) {
+      throw new Error('root 文件后端 remove peer 不能与源路径重叠')
+    }
     throwIfAborted(signal)
     const manifest = await buildTreeManifest(remotePath, signal)
-    await invalidateReadStreams(remotePath)
-    for (const entry of manifest.reverse()) {
-      throwIfAborted(signal)
-      const args = await prepareBoundRemoval(
-        entry.path,
-        entry.metadata,
-        entry.proof,
-        'removeEntry',
-        signal
+    const sourceDescriptor = await recoveryDescriptorFromManifest(
+      manifest,
+      remotePath
+    )
+    if (expectedSource &&
+      !sameRecoveryDescriptor(sourceDescriptor, expectedSource)) {
+      throw recoveryProofMismatch(
+        'root 文件后端 remove source 恢复证明发生变化',
+        remotePath,
+        expectedSource,
+        sourceDescriptor
       )
-      await executeRequest('remove-bound', args, { signal })
+    }
+    let peerManifest
+    let peerEntriesByPath
+    if (expectedPeer) {
+      peerManifest = await buildTreeManifest(expectedPeer.path, signal)
+      const peerDescriptor = await recoveryDescriptorFromManifest(
+        peerManifest,
+        expectedPeer.path
+      )
+      if (!sameRecoveryDescriptor(
+        peerDescriptor,
+        expectedPeer.descriptor
+      )) {
+        throw recoveryProofMismatch(
+          'root 文件后端 remove peer 恢复证明发生变化',
+          expectedPeer.path,
+          expectedPeer.descriptor,
+          peerDescriptor
+        )
+      }
+      peerEntriesByPath = new Map(peerManifest.map(entry => [entry.path, entry]))
+      if (peerManifest.length !== manifest.length) {
+        throw recoveryProofMismatch(
+          'root 文件后端 remove peer 目录结构发生变化',
+          expectedPeer.path,
+          expectedPeer.descriptor,
+          peerDescriptor
+        )
+      }
+    }
+    await invalidateReadStreams(remotePath)
+    try {
+      for (const entry of [...manifest].reverse()) {
+        throwIfAborted(signal)
+        const peerPath = expectedPeer
+          ? canonicalFilePath(
+              `${expectedPeer.path}${entry.path.slice(remotePath.length)}`
+          )
+          : null
+        const peerEntry = peerPath ? peerEntriesByPath.get(peerPath) : null
+        if (expectedPeer && !peerEntry) {
+          throw recoveryProofMismatch(
+            'root 文件后端 remove peer 对应条目缺失',
+            peerPath,
+            expectedPeer.descriptor,
+            null
+          )
+        }
+        const args = await prepareBoundRemoval(
+          entry.path,
+          entry.metadata,
+          entry.proof,
+          'removeEntry',
+          signal,
+          peerEntry
+        )
+        await executeRequest(
+          peerEntry ? 'remove-peer-bound' : 'remove-bound',
+          args,
+          { signal }
+        )
+      }
+    } catch (error) {
+      if (!expectedSource ||
+        error.code === 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH') throw error
+      if (expectedPeer) {
+        try {
+          const actualPeer = await describeRecoveryState(
+            expectedPeer.path,
+            undefined,
+            true
+          )
+          if (!sameRecoveryDescriptor(
+            actualPeer,
+            expectedPeer.descriptor
+          )) {
+            throw recoveryProofMismatch(
+              'root 文件后端 remove peer 实际执行证明发生变化',
+              expectedPeer.path,
+              expectedPeer.descriptor,
+              actualPeer,
+              error
+            )
+          }
+        } catch (peerError) {
+          if (peerError?.code === 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH') {
+            throw peerError
+          }
+        }
+      }
+      let actualSource
+      try {
+        actualSource = await describeRecoveryState(remotePath, undefined, true)
+      } catch {
+        throw error
+      }
+      if (sameRecoveryDescriptor(actualSource, expectedSource)) throw error
+      throw recoveryProofMismatch(
+        'root 文件后端 remove source 实际执行证明发生变化',
+        remotePath,
+        expectedSource,
+        actualSource,
+        error
+      )
     }
     return 1
   }
@@ -1784,42 +2335,8 @@ export async function createPrivilegedFileBackend ({
     cp: copyTree,
     mv: (source, target, options) => rawFacade.rename(source, target, options),
     async describeRecoveryEntry (path, options) {
-      const { signal } = normalizeCancellableOptions(options)
-      const remotePath = canonicalFilePath(path)
-      const manifest = await buildTreeManifest(remotePath, signal)
-      const root = manifest[0]
-      if (!root || root.path !== remotePath) {
-        throw new Error('root 文件后端恢复证明缺少根条目')
-      }
-      const metadata = root.metadata
-      const manifestProof = manifest.map(entry => ({
-        path: entry.path,
-        depth: entry.depth,
-        type: entry.metadata.type,
-        device: String(entry.metadata.device),
-        inode: String(entry.metadata.inode),
-        size: entry.metadata.size,
-        mode: entry.metadata.mode & 0o7777,
-        uid: entry.metadata.uid,
-        gid: entry.metadata.gid,
-        sha256: entry.proof?.sha256 || ''
-      }))
-      const sha256 = metadata.type === 'file'
-        ? root.proof?.sha256
-        : await sha256Hex(new TextEncoder().encode(JSON.stringify(manifestProof)))
-      if (!/^[a-f0-9]{64}$/.test(String(sha256 || ''))) {
-        throw new Error('root 文件后端恢复证明摘要无效')
-      }
-      return Object.freeze({
-        type: metadata.type,
-        device: String(metadata.device),
-        inode: String(metadata.inode),
-        size: metadata.size,
-        mode: metadata.mode & 0o7777,
-        uid: metadata.uid,
-        gid: metadata.gid,
-        sha256
-      })
+      const { signal, allowAbsent } = normalizeRecoveryDescribeOptions(options)
+      return describeRecoveryState(path, signal, allowAbsent)
     },
     async describeResumeEntry (path, boundarySize = 64 * 1024) {
       const remotePath = canonicalFilePath(path)

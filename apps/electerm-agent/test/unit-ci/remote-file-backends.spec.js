@@ -1096,7 +1096,9 @@ function createBackendHarness (options = {}) {
       privilegedNodes.delete(args.path)
       return { exitCode: 0, kind: 'remove-empty-directory', ok: true }
     }
-    if (options.privilegedTree && request.operation === 'remove-bound') {
+    if (options.privilegedTree && [
+      'remove-bound', 'remove-peer-bound'
+    ].includes(request.operation)) {
       if (options.redirectRm?.[args.targetPath]) {
         throw new Error('remove parent binding changed')
       }
@@ -1115,6 +1117,33 @@ function createBackendHarness (options = {}) {
         node.content = Buffer.from(mutatedContent)
         node.size = node.content.length
         delete options.mutateBeforeRemoveBound[args.targetPath]
+      }
+      if (request.operation === 'remove-peer-bound') {
+        const peerParent = ensurePrivilegedBinding(privilegedNodes.get(
+          args.peerParentRealPath
+        ))
+        const peer = ensurePrivilegedBinding(privilegedNodes.get(args.peerPath))
+        const mutatedPeerContent = options.mutatePeerBeforeRemoveBound?.[
+          args.peerPath
+        ]
+        if (mutatedPeerContent !== undefined && peer?.type === 'file') {
+          peer.content = Buffer.from(mutatedPeerContent)
+          peer.size = peer.content.length
+          delete options.mutatePeerBeforeRemoveBound[args.peerPath]
+        }
+        if (!peerParent || !peer ||
+          peerParent.device !== args.peerParentDevice ||
+          peerParent.inode !== args.peerParentInode ||
+          peer.device !== args.peerDevice || peer.inode !== args.peerInode ||
+          peer.type !== args.peerType ||
+          (peer.mode & 0o7777).toString(8) !== args.peerMode ||
+          String(peer.uid) !== args.peerUid || String(peer.gid) !== args.peerGid ||
+          (peer.type === 'file' && (
+            sha256(privilegedBytes(peer)) !== args.peerSha256 ||
+            String(peer.size ?? peer.content.length) !== args.peerSize
+          ))) {
+          throw new Error('remove peer proof changed')
+        }
       }
       if (!parent || !node || parent.device !== args.targetParentDevice ||
         parent.inode !== args.targetParentInode ||
@@ -1137,7 +1166,7 @@ function createBackendHarness (options = {}) {
       }
       privilegedNodes.delete(args.targetPath)
       options.onTreeRemove?.(args.targetPath)
-      return { exitCode: 0, kind: 'remove-bound', ok: true }
+      return { exitCode: 0, kind: request.operation, ok: true }
     }
     return { exitCode: 0, kind: request.operation, ok: true }
   }
@@ -2948,6 +2977,221 @@ test('privileged recovery descriptor binds a bounded tree without exposing raw b
   assert.equal(descriptor.manifest, undefined)
   assert.equal(descriptor.backend, undefined)
 
+  await backend.release()
+})
+
+test('privileged recovery descriptor freezes an exact absent target and its non-root parent', async () => {
+  const harness = createBackendHarness({
+    privilegedTree: {
+      '/srv/user': {
+        type: 'directory',
+        mode: 0o750,
+        uid: 1000,
+        gid: 1000,
+        device: '7',
+        inode: '70'
+      }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  const descriptor = await backend.sftp.describeRecoveryEntry(
+    '/srv/user/missing.conf',
+    { allowAbsent: true }
+  )
+
+  assert.deepEqual(descriptor, {
+    type: 'bound-absent',
+    path: '/srv/user/missing.conf',
+    basename: 'missing.conf',
+    mustBeAbsent: true,
+    parent: {
+      path: '/srv/user',
+      device: '7',
+      inode: '70',
+      mode: 0o750,
+      uid: 1000,
+      gid: 1000
+    }
+  })
+  assert.equal(Object.isFrozen(descriptor), true)
+  assert.equal(Object.isFrozen(descriptor.parent), true)
+  assert.ok(harness.requests.some(request =>
+    request.operation === 'lstat-bound' &&
+    request.args.path === '/srv/user/missing.conf' &&
+    request.args.sourceParentDevice === '7' &&
+    request.args.sourceParentInode === '70'))
+
+  await backend.release()
+})
+
+test('privileged recovery descriptor does not treat non-ENOENT failures as absent', async () => {
+  const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+  const harness = createBackendHarness({
+    privilegedTree: {
+      '/srv/user': {
+        type: 'directory', mode: 0o750, uid: 1000, gid: 1000
+      }
+    },
+    onPrivilegedLstat: path => {
+      if (path === '/srv/user/denied.conf') throw denied
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  const error = await backend.sftp.describeRecoveryEntry(
+    '/srv/user/denied.conf',
+    { allowAbsent: true }
+  ).catch(error => error)
+
+  assert.equal(error, denied)
+  await backend.release()
+})
+
+test('privileged proof-bound copy returns the exact frozen created descriptor', async () => {
+  const harness = createBackendHarness({
+    privilegedTree: {
+      '/root/backup': { type: 'file', content: 'safe', mode: 0o600 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+  const expectedSource = await backend.sftp.describeRecoveryEntry('/root/backup')
+  const expectedTarget = await backend.sftp.describeRecoveryEntry(
+    '/root/restored',
+    { allowAbsent: true }
+  )
+
+  const created = await backend.sftp.copyEntry(
+    '/root/backup',
+    '/root/restored',
+    { expectedSource, expectedTarget }
+  )
+  const current = await backend.sftp.describeRecoveryEntry('/root/restored')
+
+  assert.deepEqual(created, current)
+  assert.equal(Object.isFrozen(created), true)
+  assert.notEqual(created.inode, expectedSource.inode)
+  assert.equal(created.sha256, expectedSource.sha256)
+  await backend.release()
+})
+
+test('privileged copyEntry rejects a same-inode source changed after recovery preflight', async () => {
+  const harness = createBackendHarness({
+    privilegedTree: {
+      '/root/backup': { type: 'file', content: 'safe', mode: 0o600 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+  const expectedSource = await backend.sftp.describeRecoveryEntry('/root/backup')
+  const expectedTarget = await backend.sftp.describeRecoveryEntry(
+    '/root/restored',
+    { allowAbsent: true }
+  )
+  const source = harness.privilegedNodes.get('/root/backup')
+  const originalInode = source.inode
+  source.content = Buffer.from('evil')
+
+  const error = await backend.sftp.copyEntry('/root/backup', '/root/restored', {
+    expectedSource,
+    expectedTarget
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH')
+  assert.deepEqual(error.expectedDescriptor, expectedSource)
+  assert.equal(error.actualDescriptor.inode, originalInode)
+  assert.notEqual(error.actualDescriptor.sha256, expectedSource.sha256)
+  assert.equal(harness.privilegedNodes.has('/root/restored'), false)
+  await backend.release()
+})
+
+test('privileged copyEntry preserves a creator raced after an exact absent preflight', async () => {
+  const harness = createBackendHarness({
+    privilegedTree: {
+      '/srv/user': { type: 'directory', mode: 0o750, uid: 1000, gid: 1000 },
+      '/srv/user/backup': { type: 'file', content: 'safe', mode: 0o600 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+  const expectedSource = await backend.sftp.describeRecoveryEntry('/srv/user/backup')
+  const expectedTarget = await backend.sftp.describeRecoveryEntry(
+    '/srv/user/restored',
+    { allowAbsent: true }
+  )
+  harness.privilegedNodes.set('/srv/user/restored', {
+    type: 'file',
+    content: Buffer.from('foreign'),
+    mode: 0o640,
+    uid: 1000,
+    gid: 1000,
+    device: '7',
+    inode: '700'
+  })
+
+  const error = await backend.sftp.copyEntry(
+    '/srv/user/backup',
+    '/srv/user/restored',
+    { expectedSource, expectedTarget }
+  ).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH')
+  assert.deepEqual(error.expectedDescriptor, expectedTarget)
+  assert.equal(error.path, '/srv/user/restored')
+  assert.equal(error.actualDescriptor.type, 'file')
+  assert.equal(
+    harness.privilegedNodes.get('/srv/user/restored').content.toString(),
+    'foreign'
+  )
+  await backend.release()
+})
+
+test('privileged removeEntry preserves a same-inode source changed after recovery preflight', async () => {
+  const harness = createBackendHarness({
+    privilegedTree: {
+      '/root/displaced': { type: 'file', content: 'safe', mode: 0o600 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+  const expectedSource = await backend.sftp.describeRecoveryEntry('/root/displaced')
+  const source = harness.privilegedNodes.get('/root/displaced')
+  source.content = Buffer.from('evil')
+
+  const error = await backend.sftp.removeEntry('/root/displaced', {
+    expectedSource
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH')
+  assert.deepEqual(error.expectedDescriptor, expectedSource)
+  assert.notEqual(error.actualDescriptor.sha256, expectedSource.sha256)
+  assert.equal(
+    harness.privilegedNodes.get('/root/displaced').content.toString(),
+    'evil'
+  )
+  await backend.release()
+})
+
+test('privileged removeEntry preserves its source when the required copy peer changes', async () => {
+  const harness = createBackendHarness({
+    mutatePeerBeforeRemoveBound: { '/root/peer': 'evil' },
+    privilegedTree: {
+      '/root/source': { type: 'file', content: 'safe', mode: 0o600 },
+      '/root/peer': { type: 'file', content: 'safe', mode: 0o600 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+  const expectedSource = await backend.sftp.describeRecoveryEntry('/root/source')
+  const expectedPeer = await backend.sftp.describeRecoveryEntry('/root/peer')
+
+  const error = await backend.sftp.removeEntry('/root/source', {
+    expectedSource,
+    expectedPeer: { path: '/root/peer', descriptor: expectedPeer }
+  }).catch(error => error)
+
+  assert.equal(error.code, 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH')
+  assert.equal(error.path, '/root/peer')
+  assert.deepEqual(error.expectedDescriptor, expectedPeer)
+  assert.equal(harness.privilegedNodes.has('/root/source'), true)
+  assert.ok(harness.requests.some(request =>
+    request.operation === 'remove-peer-bound'))
   await backend.release()
 })
 

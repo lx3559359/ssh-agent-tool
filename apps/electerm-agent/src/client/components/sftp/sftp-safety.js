@@ -38,6 +38,32 @@ function requireRootRecoveryDescriptor (descriptor, label) {
   )))
 }
 
+function requireBoundAbsentRecoveryState (state, expectedPath) {
+  const path = String(expectedPath || '')
+  const parentPath = path.slice(0, path.lastIndexOf('/')) || '/'
+  const basename = path.slice(path.lastIndexOf('/') + 1)
+  const parent = state?.parent
+  const outerKeys = ['type', 'path', 'basename', 'mustBeAbsent', 'parent']
+  const parentKeys = ['path', 'device', 'inode', 'mode', 'uid', 'gid']
+  if (!path.startsWith('/') || path === '/' ||
+    !state || typeof state !== 'object' || Array.isArray(state) ||
+    Object.keys(state).length !== outerKeys.length ||
+    outerKeys.some(key => !Object.hasOwn(state, key)) ||
+    state.type !== 'bound-absent' || state.path !== path ||
+    state.basename !== basename || state.mustBeAbsent !== true ||
+    !parent || typeof parent !== 'object' || Array.isArray(parent) ||
+    Object.keys(parent).length !== parentKeys.length ||
+    parentKeys.some(key => !Object.hasOwn(parent, key)) ||
+    parent.path !== parentPath ||
+    !/^(?:0|[1-9]\d{0,19})$/.test(String(parent.device ?? '')) ||
+    !/^(?:0|[1-9]\d{0,19})$/.test(String(parent.inode ?? '')) ||
+    !Number.isInteger(parent.mode) || parent.mode < 0 || parent.mode > 0o7777 ||
+    !Number.isSafeInteger(parent.uid) || !Number.isSafeInteger(parent.gid)) {
+    throw createSftpRecoveryBindingMismatchError()
+  }
+  return freezeSafetyRecoveryBinding(state)
+}
+
 function requireRootRuntimeIdentity (identity) {
   if (!identity || identity.channel !== 'pty-root' ||
     String(identity.effectiveUid) !== '0' ||
@@ -84,16 +110,25 @@ export function assertRootSftpRecoveryBinding (record, {
   endpoint,
   runtimeIdentity,
   source,
-  backup
+  backup,
+  sourcePath = record?.sourcePath,
+  expectedSource
 }) {
   const binding = record?.metadata?.recoveryBinding
   if (!binding || binding.version !== 1) {
     throw createSftpRecoveryUnboundError()
   }
+  const originalBoundSource = requireRootRecoveryDescriptor(
+    binding.source,
+    '原始源文件'
+  )
+  const boundExpectedSource = expectedSource
+    ? requireRootRecoveryDescriptor(expectedSource, '恢复中源文件')
+    : originalBoundSource
   const current = createRootSftpRecoveryBinding({
     endpoint,
     runtimeIdentity,
-    source,
+    source: source?.type === 'bound-absent' ? boundExpectedSource : source,
     backup
   })
   try {
@@ -101,8 +136,11 @@ export function assertRootSftpRecoveryBinding (record, {
   } catch (cause) {
     throw createSftpRecoveryBindingMismatchError(cause)
   }
+  const sourceMatches = source?.type === 'bound-absent'
+    ? Boolean(requireBoundAbsentRecoveryState(source, sourcePath))
+    : sameJsonValue(boundExpectedSource, current.source)
   if (!sameJsonValue(binding.runtimeIdentity, current.runtimeIdentity) ||
-    !sameJsonValue(binding.source, current.source) ||
+    !sourceMatches ||
     !sameJsonValue(binding.backup, current.backup)) {
     throw createSftpRecoveryBindingMismatchError()
   }
@@ -334,7 +372,8 @@ export async function restoreSftpRecoveryRecord ({
   record,
   now = new Date(),
   describeEntry,
-  persistRecord
+  persistRecord,
+  recoveryProof
 }) {
   if (record.kind === 'chmod') {
     await sftp.chmod(record.sourcePath, record.previousMode)
@@ -347,103 +386,475 @@ export async function restoreSftpRecoveryRecord ({
     }
   }
   const persistedDisplacement = record.displacement
-  const displacedPath = persistedDisplacement?.path ||
+  let displacedPath = persistedDisplacement?.path ||
     buildSftpSafetyPath(record.sourcePath, 'displaced', now)
   let currentRecord = record
   let displacement = persistedDisplacement || null
+  const proofBound = Boolean(recoveryProof &&
+    typeof sftp?.copyEntry === 'function' &&
+    typeof sftp?.removeEntry === 'function' &&
+    typeof describeEntry === 'function')
+  if (recoveryProof && !proofBound) {
+    throw createSftpRecoveryBindingMismatchError(new Error(
+      'root SFTP 恢复后端缺少证明绑定方法。'
+    ))
+  }
+  let restoreTargetState = recoveryProof?.source
   const persist = async value => {
     currentRecord = typeof persistRecord === 'function'
       ? (await persistRecord(value)) || value
       : value
     return currentRecord
   }
-  if (!displacement || displacement.status === 'planned') {
-    let sourceExists = false
+  const observeRecoveryDescriptor = async path => {
     try {
-      await sftp.stat(record.sourcePath)
-      sourceExists = true
-    } catch (err) {
-      const message = String(err?.message || err)
-      if (!/no such|not found|does not exist/i.test(message)) throw err
+      return {
+        descriptor: await describeEntry(path, { allowAbsent: true })
+      }
+    } catch (error) {
+      let descriptor = null
+      if (error?.actualDescriptor &&
+        typeof error.actualDescriptor === 'object') {
+        try {
+          descriptor = freezeSafetyRecoveryBinding(error.actualDescriptor)
+        } catch {}
+      }
+      return {
+        descriptor,
+        observationFailure: freezeSafetyRecoveryBinding({
+          path,
+          code: String(error?.code || ''),
+          message: error?.message || String(error)
+        })
+      }
+    }
+  }
+  const persistProofMismatch = async primaryCause => {
+    const proofMismatch = freezeSafetyRecoveryBinding({
+      path: String(primaryCause?.path || ''),
+      expectedDescriptor: primaryCause?.expectedDescriptor,
+      actualDescriptor: primaryCause?.actualDescriptor
+    })
+    const uncertainRecord = {
+      ...currentRecord,
+      status: 'uncertain',
+      rollbackStatus: 'uncertain',
+      ...(displacement ? { displacement } : {}),
+      proofMismatch,
+      error: primaryCause?.message || String(primaryCause),
+      failedAt: now.toISOString()
+    }
+    await persist(uncertainRecord)
+    return createSftpRecoveryUncertainError({
+      message: 'SFTP 恢复证明在实际修改时发生变化，已保留精确证据供核对。',
+      primaryCause,
+      displacedPath: displacement?.path,
+      displacedDescriptor: displacement?.descriptor,
+      record: uncertainRecord
+    })
+  }
+  if (proofBound && displacement?.status === 'duplicated') {
+    const retainedDisplacements = [
+      ...(Array.isArray(currentRecord.retainedDisplacements)
+        ? currentRecord.retainedDisplacements
+        : []),
+      {
+        ...displacement,
+        status: 'preserved-duplicate',
+        preservedAt: now.toISOString()
+      }
+    ]
+    await persist({
+      ...currentRecord,
+      retainedDisplacements,
+      displacement: null
+    })
+    displacement = null
+    displacedPath = buildSftpSafetyPath(
+      record.sourcePath,
+      'displaced',
+      now
+    )
+  }
+  if (!displacement || displacement.status === 'planned') {
+    let sourceExists = proofBound
+      ? recoveryProof.source?.type !== 'bound-absent'
+      : false
+    if (!proofBound) {
+      try {
+        await sftp.stat(record.sourcePath)
+        sourceExists = true
+      } catch (err) {
+        const message = String(err?.message || err)
+        if (!/no such|not found|does not exist/i.test(message)) throw err
+      }
     }
     if (sourceExists) {
-      const displacedDescriptor = displacement?.descriptor ||
-        (typeof describeEntry === 'function'
-          ? await describeEntry(record.sourcePath)
-          : await describeDisplacedEntry(sftp, record.sourcePath))
+      let displacedDescriptor = displacement?.descriptor ||
+        (proofBound
+          ? recoveryProof.source
+          : typeof describeEntry === 'function'
+            ? await describeEntry(record.sourcePath)
+            : await describeDisplacedEntry(sftp, record.sourcePath))
+      await ensureRemoteDir(sftp, splitPath(displacedPath).parent)
+      const displacedTargetState = proofBound
+        ? await describeEntry(displacedPath, { allowAbsent: true })
+        : undefined
       displacement = {
         path: displacedPath,
         descriptor: displacedDescriptor,
+        ...(displacedTargetState
+          ? { targetState: displacedTargetState }
+          : {}),
         status: 'planned',
         plannedAt: displacement?.plannedAt || now.toISOString()
       }
       await persist({ ...currentRecord, displacement })
-      await ensureRemoteDir(sftp, splitPath(displacedPath).parent)
-      await sftp.rename(record.sourcePath, displacedPath)
+      if (proofBound) {
+        let copiedDescriptor
+        try {
+          copiedDescriptor = await sftp.copyEntry(
+            record.sourcePath,
+            displacedPath,
+            {
+              expectedSource: displacedDescriptor,
+              expectedTarget: displacedTargetState
+            }
+          )
+        } catch (primaryCause) {
+          if (primaryCause?.code === 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH') {
+            throw await persistProofMismatch(primaryCause)
+          }
+          throw primaryCause
+        }
+        displacedDescriptor = await describeEntry(displacedPath)
+        if (copiedDescriptor && typeof copiedDescriptor === 'object' &&
+          !sameJsonValue(copiedDescriptor, displacedDescriptor)) {
+          const mismatch = new Error(
+            'root SFTP displaced copy 在源删除前被替换。'
+          )
+          mismatch.code = 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH'
+          mismatch.path = displacedPath
+          mismatch.expectedDescriptor = copiedDescriptor
+          mismatch.actualDescriptor = displacedDescriptor
+          throw await persistProofMismatch(mismatch)
+        }
+        try {
+          await sftp.removeEntry(record.sourcePath, {
+            expectedSource: recoveryProof.source,
+            expectedPeer: {
+              path: displacedPath,
+              descriptor: displacedDescriptor
+            }
+          })
+        } catch (primaryCause) {
+          const sourceObservation = await observeRecoveryDescriptor(
+            record.sourcePath
+          )
+          const sourceDescriptor = sourceObservation.descriptor
+          displacement = {
+            ...displacement,
+            descriptor: displacedDescriptor,
+            sourceDescriptor,
+            ...(sourceObservation.observationFailure
+              ? { sourceObservationFailure: sourceObservation.observationFailure }
+              : {}),
+            status: 'duplicated',
+            duplicatedAt: now.toISOString()
+          }
+          const uncertainRecord = {
+            ...currentRecord,
+            status: 'uncertain',
+            rollbackStatus: 'uncertain',
+            displacement,
+            error: primaryCause?.message || String(primaryCause),
+            failedAt: now.toISOString()
+          }
+          await persist(uncertainRecord)
+          const uncertainError = createSftpRecoveryUncertainError({
+            message: 'SFTP 恢复位移只完成了证明副本，源路径未能精确删除。',
+            primaryCause,
+            displacedPath,
+            displacedDescriptor,
+            record: uncertainRecord
+          })
+          uncertainError.sourceDescriptor = sourceDescriptor
+          throw uncertainError
+        }
+        restoreTargetState = await describeEntry(
+          record.sourcePath,
+          { allowAbsent: true }
+        )
+        const finalDisplacedObservation = await observeRecoveryDescriptor(
+          displacedPath
+        )
+        const finalDisplacedDescriptor =
+          finalDisplacedObservation.descriptor
+        if (!finalDisplacedDescriptor ||
+          !sameJsonValue(displacedDescriptor, finalDisplacedDescriptor)) {
+          displacement = {
+            ...displacement,
+            descriptor: displacedDescriptor,
+            sourceState: restoreTargetState,
+            ...(finalDisplacedObservation.observationFailure
+              ? {
+                  displacedObservationFailure:
+                    finalDisplacedObservation.observationFailure
+                }
+              : {}),
+            status: 'uncertain',
+            uncertainAt: now.toISOString()
+          }
+          const mismatch = new Error(
+            'root SFTP displaced copy 在源删除期间被替换。'
+          )
+          mismatch.code = 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH'
+          mismatch.path = displacedPath
+          mismatch.expectedDescriptor = displacedDescriptor
+          mismatch.actualDescriptor = finalDisplacedDescriptor
+          throw await persistProofMismatch(mismatch)
+        }
+      } else {
+        await sftp.rename(record.sourcePath, displacedPath)
+      }
       displacement = {
         ...displacement,
+        descriptor: displacedDescriptor,
+        ...(restoreTargetState
+          ? { sourceState: restoreTargetState }
+          : {}),
         status: 'displaced',
         displacedAt: now.toISOString()
       }
       await persist({ ...currentRecord, displacement })
     } else if (displacement?.status === 'planned') {
-      try {
-        await sftp.stat(displacedPath)
+      if (proofBound) {
+        const displacedState = recoveryProof.displaced ||
+          await describeEntry(displacedPath, { allowAbsent: true })
+        if (displacedState?.type === 'bound-absent' ||
+          !sameJsonValue(displacedState, displacement.descriptor)) {
+          const mismatch = new Error(
+            'root SFTP planned displacement 恢复证明发生变化。'
+          )
+          mismatch.code = 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH'
+          mismatch.path = displacedPath
+          mismatch.expectedDescriptor = displacement.descriptor
+          mismatch.actualDescriptor = displacedState
+          throw await persistProofMismatch(mismatch)
+        }
         displacement = {
           ...displacement,
+          descriptor: displacedState,
+          sourceState: restoreTargetState,
           status: 'displaced',
           displacedAt: displacement.displacedAt || now.toISOString()
         }
         await persist({ ...currentRecord, displacement })
-      } catch (err) {
-        const message = String(err?.message || err)
-        if (/no such|not found|does not exist/i.test(message)) {
-          throw createSftpRecoveryUncertainError({
-            message: 'SFTP 恢复位移状态无法确认，需要人工核对。',
-            displacedPath,
-            displacedDescriptor: displacement.descriptor,
-            record: currentRecord
-          })
+      } else {
+        try {
+          await sftp.stat(displacedPath)
+          displacement = {
+            ...displacement,
+            status: 'displaced',
+            displacedAt: displacement.displacedAt || now.toISOString()
+          }
+          await persist({ ...currentRecord, displacement })
+        } catch (err) {
+          const message = String(err?.message || err)
+          if (/no such|not found|does not exist/i.test(message)) {
+            throw createSftpRecoveryUncertainError({
+              message: 'SFTP 恢复位移状态无法确认，需要人工核对。',
+              displacedPath,
+              displacedDescriptor: displacement.descriptor,
+              record: currentRecord
+            })
+          }
+          throw err
         }
-        throw err
       }
     }
   }
 
+  let installedCopyDescriptor
   try {
-    if (record.kind === 'trash' || record.kind === 'rename') {
+    if (proofBound) {
+      installedCopyDescriptor = await sftp.copyEntry(
+        record.backupPath,
+        record.sourcePath,
+        {
+          expectedSource: recoveryProof.backup,
+          expectedTarget: restoreTargetState
+        }
+      )
+    } else if (record.kind === 'trash' || record.kind === 'rename') {
       await sftp.rename(record.backupPath, record.sourcePath)
     } else {
       await sftp.cp(record.backupPath, record.sourcePath)
     }
   } catch (err) {
+    if (err?.code === 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH' &&
+      displacement?.status !== 'displaced') {
+      throw await persistProofMismatch(err)
+    }
     if (displacement?.status === 'displaced') {
+      let compensationCopied = false
+      let compensationRemoved = false
+      let compensationTargetDescriptor
       try {
-        await sftp.rename(displacedPath, record.sourcePath)
+        if (proofBound) {
+          const copiedDescriptor = await sftp.copyEntry(
+            displacedPath,
+            record.sourcePath,
+            {
+              expectedSource: displacement.descriptor,
+              expectedTarget: displacement.sourceState || restoreTargetState
+            }
+          )
+          compensationCopied = true
+          compensationTargetDescriptor = await describeEntry(
+            record.sourcePath
+          )
+          if (copiedDescriptor && typeof copiedDescriptor === 'object' &&
+            !sameJsonValue(
+              copiedDescriptor,
+              compensationTargetDescriptor
+            )) {
+            const mismatch = new Error(
+              'root SFTP compensation copy 在精确删除前被替换。'
+            )
+            mismatch.code = 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH'
+            mismatch.path = record.sourcePath
+            mismatch.expectedDescriptor = copiedDescriptor
+            mismatch.actualDescriptor = compensationTargetDescriptor
+            throw mismatch
+          }
+          await sftp.removeEntry(displacedPath, {
+            expectedSource: displacement.descriptor,
+            expectedPeer: {
+              path: record.sourcePath,
+              descriptor: compensationTargetDescriptor
+            }
+          })
+          compensationRemoved = true
+          const finalCompensationTarget = await describeEntry(
+            record.sourcePath
+          )
+          if (!sameJsonValue(
+            compensationTargetDescriptor,
+            finalCompensationTarget
+          )) {
+            const mismatch = new Error(
+              'root SFTP compensation target 在位移副本删除期间被替换。'
+            )
+            mismatch.code = 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH'
+            mismatch.path = record.sourcePath
+            mismatch.expectedDescriptor = compensationTargetDescriptor
+            mismatch.actualDescriptor = finalCompensationTarget
+            throw mismatch
+          }
+        } else {
+          await sftp.rename(displacedPath, record.sourcePath)
+        }
         const compensatedDisplacement = {
           ...displacement,
           status: 'compensated',
           compensatedAt: now.toISOString()
         }
+        const proofMismatch = err?.code === 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH'
+          ? freezeSafetyRecoveryBinding({
+            path: String(err.path || ''),
+            expectedDescriptor: err.expectedDescriptor,
+            actualDescriptor: err.actualDescriptor
+          })
+          : null
         await persist({
           ...currentRecord,
-          status: 'failed',
-          rollbackStatus: 'failed',
+          status: proofMismatch ? 'uncertain' : 'failed',
+          rollbackStatus: proofMismatch ? 'uncertain' : 'failed',
           displacement: null,
-          lastDisplacement: compensatedDisplacement
+          lastDisplacement: compensatedDisplacement,
+          ...(proofMismatch ? { proofMismatch } : {})
         })
         if (Object.isExtensible(err)) err.recoveryRecord = currentRecord
       } catch (rollbackCause) {
+        let compensationSourceDescriptor
+        let compensationDisplacedDescriptor
+        let compensationSourceObservationFailure
+        let compensationDisplacedObservationFailure
+        if (proofBound && compensationCopied) {
+          const [sourceObservation, displacedObservation] = await Promise.all([
+            observeRecoveryDescriptor(record.sourcePath),
+            observeRecoveryDescriptor(displacedPath)
+          ])
+          compensationSourceDescriptor = sourceObservation.descriptor
+          compensationDisplacedDescriptor = displacedObservation.descriptor
+          compensationSourceObservationFailure =
+            sourceObservation.observationFailure
+          compensationDisplacedObservationFailure =
+            displacedObservation.observationFailure
+        }
         displacement = {
           ...displacement,
-          status: 'uncertain',
-          uncertainAt: now.toISOString()
+          ...(compensationCopied && !compensationRemoved
+            ? {
+                descriptor: compensationDisplacedDescriptor,
+                sourceDescriptor: compensationSourceDescriptor,
+                ...(compensationSourceObservationFailure
+                  ? {
+                      sourceObservationFailure:
+                        compensationSourceObservationFailure
+                    }
+                  : {}),
+                ...(compensationDisplacedObservationFailure
+                  ? {
+                      displacedObservationFailure:
+                        compensationDisplacedObservationFailure
+                    }
+                  : {}),
+                status: 'duplicated',
+                duplicatedAt: now.toISOString()
+              }
+            : compensationCopied
+              ? {
+                  descriptor: compensationDisplacedDescriptor,
+                  sourceDescriptor: compensationSourceDescriptor,
+                  ...(compensationSourceObservationFailure
+                    ? {
+                        sourceObservationFailure:
+                          compensationSourceObservationFailure
+                      }
+                    : {}),
+                  ...(compensationDisplacedObservationFailure
+                    ? {
+                        displacedObservationFailure:
+                          compensationDisplacedObservationFailure
+                      }
+                    : {}),
+                  status: 'uncertain',
+                  uncertainAt: now.toISOString()
+                }
+              : {
+                  status: 'uncertain',
+                  uncertainAt: now.toISOString()
+                })
         }
+        const mismatch = [err, rollbackCause].find(error => (
+          error?.code === 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH'
+        ))
         const uncertainRecord = {
           ...currentRecord,
           status: 'uncertain',
           rollbackStatus: 'uncertain',
           displacement,
+          ...(mismatch
+            ? {
+                proofMismatch: freezeSafetyRecoveryBinding({
+                  path: String(mismatch.path || ''),
+                  expectedDescriptor: mismatch.expectedDescriptor,
+                  actualDescriptor: mismatch.actualDescriptor
+                })
+              }
+            : {}),
           error: `${err?.message || err}; 补偿失败：${rollbackCause?.message || rollbackCause}`,
           failedAt: now.toISOString()
         }
@@ -467,8 +878,97 @@ export async function restoreSftpRecoveryRecord ({
     throw err
   }
 
+  if (proofBound && (record.kind === 'trash' || record.kind === 'rename')) {
+    let installedDescriptor
+    let backupRemoved = false
+    try {
+      installedDescriptor = await describeEntry(record.sourcePath)
+      if (installedCopyDescriptor &&
+        typeof installedCopyDescriptor === 'object' &&
+        !sameJsonValue(installedCopyDescriptor, installedDescriptor)) {
+        const mismatch = new Error(
+          'root SFTP restored target 在备份精确删除前被替换。'
+        )
+        mismatch.code = 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH'
+        mismatch.path = record.sourcePath
+        mismatch.expectedDescriptor = installedCopyDescriptor
+        mismatch.actualDescriptor = installedDescriptor
+        throw mismatch
+      }
+      await sftp.removeEntry(record.backupPath, {
+        expectedSource: recoveryProof.backup,
+        expectedPeer: {
+          path: record.sourcePath,
+          descriptor: installedDescriptor
+        }
+      })
+      backupRemoved = true
+      const finalInstalledDescriptor = await describeEntry(record.sourcePath)
+      if (!sameJsonValue(installedDescriptor, finalInstalledDescriptor)) {
+        const mismatch = new Error(
+          'root SFTP restored target 在备份删除期间被替换。'
+        )
+        mismatch.code = 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH'
+        mismatch.path = record.sourcePath
+        mismatch.expectedDescriptor = installedDescriptor
+        mismatch.actualDescriptor = finalInstalledDescriptor
+        throw mismatch
+      }
+    } catch (primaryCause) {
+      const [sourceObservation, backupObservation] = await Promise.all([
+        observeRecoveryDescriptor(record.sourcePath),
+        observeRecoveryDescriptor(record.backupPath)
+      ])
+      const sourceDescriptor = sourceObservation.descriptor
+      const backupDescriptor = backupObservation.descriptor
+      const mismatch = primaryCause?.code ===
+        'REMOTE_FILE_RECOVERY_PROOF_MISMATCH'
+        ? freezeSafetyRecoveryBinding({
+          path: String(primaryCause.path || record.backupPath),
+          expectedDescriptor: primaryCause.expectedDescriptor,
+          actualDescriptor: primaryCause.actualDescriptor
+        })
+        : null
+      const backupDisposition = freezeSafetyRecoveryBinding({
+        status: backupRemoved ? 'removed-uncertain' : 'duplicated',
+        sourcePath: record.sourcePath,
+        sourceDescriptor,
+        backupPath: record.backupPath,
+        backupDescriptor,
+        ...(sourceObservation.observationFailure
+          ? { sourceObservationFailure: sourceObservation.observationFailure }
+          : {}),
+        ...(backupObservation.observationFailure
+          ? { backupObservationFailure: backupObservation.observationFailure }
+          : {}),
+        duplicatedAt: now.toISOString()
+      })
+      const uncertainRecord = {
+        ...currentRecord,
+        status: 'uncertain',
+        rollbackStatus: 'uncertain',
+        ...(displacement ? { displacement } : {}),
+        backupDisposition,
+        ...(mismatch ? { proofMismatch: mismatch } : {}),
+        error: primaryCause?.message || String(primaryCause),
+        failedAt: now.toISOString()
+      }
+      await persist(uncertainRecord)
+      const uncertainError = createSftpRecoveryUncertainError({
+        message: 'SFTP 恢复内容已安装，但原备份未能精确删除，已保留两侧证明。',
+        primaryCause,
+        displacedPath: displacement?.path,
+        displacedDescriptor: displacement?.descriptor,
+        record: uncertainRecord
+      })
+      uncertainError.sourceDescriptor = sourceDescriptor
+      uncertainError.backupDescriptor = backupDescriptor
+      throw uncertainError
+    }
+  }
+
   return {
-    ...record,
+    ...currentRecord,
     status: 'restored',
     rollbackStatus: 'completed',
     restoredAt: now.toISOString(),

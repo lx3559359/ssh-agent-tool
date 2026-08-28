@@ -1750,71 +1750,143 @@ export default class Sftp extends Component {
     try {
       const restore = async (backend, capability, mutation) => {
         const currentIdentity = capability?.runtimeIdentity || {}
-        if (requiresRoot && (
-          currentIdentity.channel !== 'pty-root' ||
-          String(currentIdentity.effectiveUid) !== '0'
-        )) {
-          throw createRemoteFileRootRequiredError()
-        }
-        if (requiresRoot) {
-          try {
-            assertSameSftpSafetyEndpoint(
-              record.metadata.recoveryBinding.endpoint,
-              this.getSftpSafetyEndpoint()
-            )
-          } catch (cause) {
-            throw createSftpRecoveryBindingMismatchError(cause)
-          }
-          let source
-          try {
-            source = await backend.describeRecoveryEntry(record.sourcePath)
-          } catch (error) {
-            if (!record.displacement?.path ||
-              !['planned', 'displaced', 'uncertain', 'preserved']
-                .includes(record.displacement.status) ||
-              !isAuthoritativeRemoteMissingError(error)) {
-              throw error
-            }
-            source = await backend.describeRecoveryEntry(
-              record.displacement.path
-            )
-          }
-          const backup = await backend.describeRecoveryEntry(
-            record.backupPath
+        let recoveryProof
+        const persistRecord = async value => {
+          const records = updateSafetyOperationRecord(
+            readSafetyOperationRecords(ls),
+            record.id,
+            value
           )
-          assertRootSftpRecoveryBinding(record, {
-            endpoint: this.getSftpSafetyEndpoint(),
-            runtimeIdentity: currentIdentity,
-            source,
-            backup
-          })
+          try {
+            const persisted = this.persistSftpRecoveryRecords(records) || records
+            return persisted.find(item => item.id === record.id) || value
+          } catch (error) {
+            throw createRemoteFileRecoveryPersistenceError(error, {
+              record: value,
+              records
+            })
+          }
         }
         this.remoteFileOperationBackends?.set(record.id, backend)
         this.remoteFileOperationBackendPins?.set(record.id, backend)
         try {
-          const persistRecord = async value => {
-            const records = updateSafetyOperationRecord(
-              readSafetyOperationRecords(ls),
-              record.id,
-              value
-            )
+          if (requiresRoot && (
+            currentIdentity.channel !== 'pty-root' ||
+          String(currentIdentity.effectiveUid) !== '0'
+          )) {
+            throw createRemoteFileRootRequiredError()
+          }
+          if (requiresRoot) {
             try {
-              const persisted = this.persistSftpRecoveryRecords(records) || records
-              return persisted.find(item => item.id === record.id) || value
-            } catch (error) {
-              throw createRemoteFileRecoveryPersistenceError(error, {
-                record: value,
-                records
+              assertSameSftpSafetyEndpoint(
+                record.metadata.recoveryBinding.endpoint,
+                this.getSftpSafetyEndpoint()
+              )
+            } catch (cause) {
+              throw createSftpRecoveryBindingMismatchError(cause)
+            }
+            const sourceState = await backend.describeRecoveryEntry(
+              record.sourcePath,
+              { allowAbsent: true }
+            )
+            let displacedSource
+            if (record.displacement?.path &&
+            ['planned', 'displaced', 'duplicated', 'uncertain', 'preserved']
+              .includes(record.displacement.status)) {
+              displacedSource = await backend.describeRecoveryEntry(
+                record.displacement.path,
+                { allowAbsent: true }
+              )
+            }
+            const backup = await backend.describeRecoveryEntry(
+              record.backupPath
+            )
+            const duplicatedSource = record.displacement?.status === 'duplicated'
+              ? record.displacement.sourceDescriptor
+              : undefined
+            const expectedDisplaced = record.displacement?.status === 'planned'
+              ? record.displacement.targetState
+              : record.displacement?.descriptor
+            try {
+              assertRootSftpRecoveryBinding(record, {
+                endpoint: this.getSftpSafetyEndpoint(),
+                runtimeIdentity: currentIdentity,
+                source: sourceState,
+                backup,
+                sourcePath: record.sourcePath,
+                expectedSource: duplicatedSource
+              })
+              if (record.displacement?.path &&
+              JSON.stringify(expectedDisplaced) !==
+                JSON.stringify(displacedSource)) {
+                throw createSftpRecoveryBindingMismatchError()
+              }
+              if (record.displacement?.status === 'duplicated' &&
+              (!duplicatedSource || sourceState.type === 'bound-absent')) {
+                throw createSftpRecoveryBindingMismatchError()
+              }
+            } catch (cause) {
+              const binding = record.metadata.recoveryBinding
+              const expectedSource = duplicatedSource || binding.source
+              const sourceChanged = sourceState.type === 'bound-absent'
+                ? record.displacement?.status === 'duplicated'
+                : JSON.stringify(expectedSource) !== JSON.stringify(sourceState)
+              const displacedChanged = Boolean(record.displacement?.path) &&
+              JSON.stringify(expectedDisplaced) !==
+                JSON.stringify(displacedSource)
+              const backupChanged = JSON.stringify(binding.backup) !==
+              JSON.stringify(backup)
+              if (!sourceChanged && !displacedChanged && !backupChanged) throw cause
+              const proofMismatch = {
+                path: sourceChanged
+                  ? record.sourcePath
+                  : displacedChanged
+                    ? record.displacement.path
+                    : record.backupPath,
+                expectedDescriptor: sourceChanged
+                  ? expectedSource
+                  : displacedChanged
+                    ? expectedDisplaced
+                    : binding.backup,
+                actualDescriptor: sourceChanged
+                  ? sourceState
+                  : displacedChanged
+                    ? displacedSource
+                    : backup
+              }
+              const uncertainRecord = await persistRecord({
+                ...record,
+                status: 'uncertain',
+                rollbackStatus: 'uncertain',
+                proofMismatch,
+                error: cause?.message || String(cause),
+                failedAt: new Date().toISOString()
+              })
+              throw createSftpRecoveryUncertainError({
+                message: 'root SFTP 恢复证明已变化，已保留精确证据供核对。',
+                primaryCause: cause,
+                displacedPath: record.displacement?.path,
+                displacedDescriptor: displacedSource,
+                record: uncertainRecord
               })
             }
+            recoveryProof = Object.freeze({
+              source: sourceState,
+              backup,
+              ...(displacedSource ? { displaced: displacedSource } : {})
+            })
           }
           const result = await restoreSftpRecoveryRecord({
             sftp: backend,
             record,
             describeEntry: typeof backend.describeRecoveryEntry === 'function'
-              ? path => backend.describeRecoveryEntry(path)
+              ? (path, describeOptions) => backend.describeRecoveryEntry(
+                  path,
+                  describeOptions
+                )
               : undefined,
-            persistRecord
+            persistRecord,
+            recoveryProof
           })
           const persisted = await persistRecord(result)
           mutation?.commit()
