@@ -171,7 +171,7 @@ const validRisks = new Set(Object.values(operationRisks))
 const validRecoveryProviders = new Set(Object.values(recoveryProviders))
 const endpointIdentityFields = [
   'tabId', 'host', 'port', 'username', 'title', 'pid', 'terminalPid',
-  'sshTerminalPid', 'sessionType', 'hostKeyFingerprint'
+  'sshSessionGeneration', 'sshTerminalPid', 'sessionType', 'hostKeyFingerprint'
 ]
 const normalizedOperationFields = [
   'id', 'source', 'command', 'title', 'state', 'createdAt', 'updatedAt',
@@ -280,11 +280,6 @@ export function normalizeOperation (operation = {}, options = {}) {
   const endpoint = Object.fromEntries(endpointIdentityFields
     .filter(field => operation.endpoint?.[field] !== undefined)
     .map(field => [field, operation.endpoint[field]]))
-  if (!Object.hasOwn(endpoint, 'sshTerminalPid') &&
-    String(endpoint.sessionType || '').trim().toLowerCase() === 'ssh' &&
-    endpoint.terminalPid !== undefined) {
-    endpoint.sshTerminalPid = endpoint.terminalPid
-  }
   Object.assign(endpoint, normalizedIdentity)
   const normalized = projectDefinedFields(operation, normalizedOperationFields)
   if (normalized.id !== undefined &&

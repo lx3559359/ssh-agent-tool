@@ -15,6 +15,7 @@ const {
   Sftp,
   closeSftpChannel
 } = require('../../src/app/server/session-sftp')
+const globalState = require('../../src/app/server/global-state')
 
 const originalLoad = Module._load
 Module._load = function (request, parent, isMain) {
@@ -305,6 +306,80 @@ async function startSftpServer (root, options = {}) {
 }
 
 describe('session-sftp transport flows', () => {
+  test('same tab creates a new server-only SSH generation on every session', async () => {
+    const root = makeTmpDir()
+    const server = await startSftpServer(root)
+    let first
+    let second
+    try {
+      const options = {
+        uid: 'same-tab-generation',
+        host: '127.0.0.1',
+        port: server.port,
+        username: USERNAME,
+        password: PASSWORD,
+        useSshAgent: false,
+        enableSsh: false,
+        readyTimeout: 5000,
+        sshSessionGeneration: 'client-forged-generation'
+      }
+      first = await session({ ...options }, createPromptWs())
+      second = await session({ ...options }, createPromptWs())
+
+      assert.match(first.sshSessionGeneration, /^[0-9a-f-]{36}$/i)
+      assert.match(second.sshSessionGeneration, /^[0-9a-f-]{36}$/i)
+      assert.notEqual(first.sshSessionGeneration, second.sshSessionGeneration)
+      assert.notEqual(first.sshSessionGeneration, options.sshSessionGeneration)
+      assert.notEqual(second.sshSessionGeneration, options.sshSessionGeneration)
+    } finally {
+      second?.kill()
+      first?.kill()
+      await server.close()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('SFTP transport binds only to the current server SSH generation', async () => {
+    const terminalId = 'generation-bound-terminal'
+    let sftpCalls = 0
+    globalState.setSession(terminalId, {
+      sshSessionGeneration: '22222222-2222-4222-8222-222222222222',
+      conn: {
+        sftp (callback) {
+          sftpCalls += 1
+          callback(null, { end () {} })
+        }
+      }
+    })
+    try {
+      const stale = Object.create(Sftp.prototype)
+      stale.pid = 'sftp-stale'
+      await assert.rejects(stale.connect({
+        terminalId,
+        sshSessionGeneration: '11111111-1111-4111-8111-111111111111'
+      }), /generation|代次|会话/i)
+      assert.equal(sftpCalls, 0)
+
+      const current = Object.create(Sftp.prototype)
+      current.pid = 'sftp-current'
+      assert.deepEqual(await current.connect({
+        terminalId,
+        sshSessionGeneration: '22222222-2222-4222-8222-222222222222'
+      }), {
+        sshSessionGeneration: '22222222-2222-4222-8222-222222222222'
+      })
+      assert.equal(
+        current.sshSessionGeneration,
+        '22222222-2222-4222-8222-222222222222'
+      )
+      assert.equal(sftpCalls, 1)
+      current.kill()
+    } finally {
+      globalState.removeSession(terminalId)
+      globalState.removeSession('sftp-current')
+    }
+  })
+
   test('exclusive staging file creation uses wx and validates encoded bytes and mode', async () => {
     const sftp = Object.create(Sftp.prototype)
     const calls = []
@@ -841,6 +916,7 @@ describe('session-sftp transport flows', () => {
       sftp = new Sftp({
         uid: 'sftp-copy-only-session-ci',
         terminalId: term.pid,
+        sshSessionGeneration: term.sshSessionGeneration,
         enableSsh: false
       })
       await sftp.connect(sftp.initOptions)
@@ -928,6 +1004,7 @@ describe('session-sftp transport flows', () => {
       sftp = new Sftp({
         uid: 'sftp-session-ci',
         terminalId: term.pid,
+        sshSessionGeneration: term.sshSessionGeneration,
         enableSsh: true
       })
       await sftp.connect(sftp.initOptions)
@@ -975,6 +1052,7 @@ describe('session-sftp transport flows', () => {
       sftp = new Sftp({
         uid: 'sftp-unicode-large-session-ci',
         terminalId: term.pid,
+        sshSessionGeneration: term.sshSessionGeneration,
         enableSsh: true
       })
       await sftp.connect(sftp.initOptions)
@@ -1030,6 +1108,7 @@ describe('session-sftp transport flows', () => {
       sftp = new Sftp({
         uid: 'sftp-transfer-session-ci',
         terminalId: term.pid,
+        sshSessionGeneration: term.sshSessionGeneration,
         enableSsh: true
       })
       await sftp.connect(sftp.initOptions)
@@ -1119,6 +1198,7 @@ describe('session-sftp transport flows', () => {
       sftp = new Sftp({
         uid: 'sftp-navigation-session-ci',
         terminalId: term.pid,
+        sshSessionGeneration: term.sshSessionGeneration,
         enableSsh: true
       })
       await sftp.connect(sftp.initOptions)
@@ -1171,6 +1251,7 @@ describe('session-sftp transport flows', () => {
       sftp = new Sftp({
         uid: 'sftp-safe-staging-session-ci',
         terminalId: term.pid,
+        sshSessionGeneration: term.sshSessionGeneration,
         enableSsh: true
       })
       await sftp.connect(sftp.initOptions)

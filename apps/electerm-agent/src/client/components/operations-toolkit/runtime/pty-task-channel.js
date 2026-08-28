@@ -11,6 +11,7 @@ const requiredEndpointFields = Object.freeze([
   'port',
   'username',
   'connectionUsername',
+  'sshSessionGeneration',
   'hostKeyFingerprint'
 ])
 

@@ -3,7 +3,7 @@ const strictSessionFields = [
   'tabId',
   'pid',
   'terminalPid',
-  'sshTerminalPid',
+  'sshSessionGeneration',
   'sessionType',
   'hostKeyFingerprint'
 ]
@@ -98,20 +98,11 @@ export function buildEndpointKey (endpoint) {
   return `${normalized.username}@${host}:${normalized.port}`
 }
 
-function strictSessionValue (endpoint, field) {
-  if (field !== 'sshTerminalPid' ||
-    Object.hasOwn(endpoint || {}, field) ||
-    String(endpoint?.sessionType || '').trim().toLowerCase() !== 'ssh') {
-    return endpoint?.[field]
-  }
-  return endpoint?.terminalPid
-}
-
 export function projectEndpoint (endpoint = {}) {
   const normalized = normalizeEndpoint(endpoint)
   const projected = { ...normalized }
   for (const field of strictSessionFields) {
-    const value = strictSessionValue(endpoint, field)
+    const value = endpoint[field]
     if (value === undefined || value === null || String(value).trim() === '') {
       const error = new Error(
         field === 'hostKeyFingerprint'
@@ -137,11 +128,11 @@ export function projectEndpoint (endpoint = {}) {
 
 function hasSameSessionIdentity (expected, actual) {
   return strictSessionFields.every(field => {
-    const expectedValue = strictSessionValue(expected, field)
-    const actualValue = strictSessionValue(actual, field)
+    const expectedValue = expected?.[field]
+    const actualValue = actual?.[field]
     const expectedMissing = expectedValue === undefined ||
       expectedValue === null || String(expectedValue).trim() === ''
-    if (field !== 'sshTerminalPid' && expectedMissing) return true
+    if (field !== 'sshSessionGeneration' && expectedMissing) return true
     const actualMissing = actualValue === undefined || actualValue === null ||
       String(actualValue).trim() === ''
     if (expectedMissing || actualMissing) return expectedMissing && actualMissing

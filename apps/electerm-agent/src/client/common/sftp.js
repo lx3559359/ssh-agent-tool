@@ -11,17 +11,23 @@ import {
   createSftpAbortError,
   prepareSftpCancelableCall
 } from './sftp-operation-cancellation'
+import { bindSftpTransportGeneration } from './sftp-session-generation.js'
 
 const transferKeys = Object.keys(transferTypeMap)
 
 class Sftp {
-  async init (terminalId, port) {
+  async init (terminalId, port, sshSessionGeneration) {
+    const generation = String(sshSessionGeneration || '').trim()
+    if (this.type !== 'ftp' && !generation) {
+      throw new Error('SFTP 缺少 SSH session generation')
+    }
     const id = generate()
     const ws = await initWs('sftp', id, terminalId, undefined, port)
     this.ws = ws
     this.id = id
     this.terminalId = terminalId
     this.port = port
+    if (this.type !== 'ftp') bindSftpTransportGeneration(this, generation)
     ws.s({
       action: 'sftp-new',
       id,
@@ -42,9 +48,12 @@ class Sftp {
             port
           })
         }
+        const callArgs = func === 'connect' && this.type !== 'ftp'
+          ? [{ ...(args[0] || {}), sshSessionGeneration: generation }]
+          : args
         const fid = generate()
         const uid = func + ':' + fid
-        const prepared = prepareSftpCancelableCall(func, args, fid)
+        const prepared = prepareSftpCancelableCall(func, callArgs, fid)
         if (prepared.signal?.aborted) throw createSftpAbortError()
         // let ws = await initWs()
         return new Promise((resolve, reject) => {
@@ -76,6 +85,10 @@ class Sftp {
                 : 'SFTP is unavailable'
               const message = String(arg.error.message || '').trim() || fallback
               return reject(new Error(message))
+            }
+            if (func === 'connect' && this.type !== 'ftp' &&
+              arg.data?.sshSessionGeneration !== generation) {
+              return reject(new Error('SFTP server SSH session generation mismatch'))
             }
             resolve(arg.data)
           }, uid))
@@ -123,9 +136,14 @@ class Sftp {
   }
 }
 
-export default async (terminalId, type = 'sftp', port) => {
+export default async (
+  terminalId,
+  type = 'sftp',
+  port,
+  sshSessionGeneration
+) => {
   const sftp = new Sftp()
   sftp.type = type
-  await sftp.init(terminalId, port)
+  await sftp.init(terminalId, port, sshSessionGeneration)
   return sftp
 }

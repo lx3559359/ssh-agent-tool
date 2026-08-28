@@ -863,33 +863,37 @@ test('SFTP endpoint identity survives transport refresh but rejects another secu
   const endpoint = buildSftpSafetyEndpoint({
     tab,
     terminalId: 'terminal-session-stable',
+    sftpSessionGeneration: 'ssh-generation-1',
     terminalEndpoint: {
       ...tab,
       tabId: tab.id,
       connectionUsername: tab.username,
-      pid: 'ssh-terminal-pid-1',
-      terminalPid: 'ssh-terminal-pid-1',
+      pid: tab.id,
+      terminalPid: tab.id,
+      sshSessionGeneration: 'ssh-generation-1',
       hostKeyFingerprint: 'SHA256:one'
     }
   })
   assert.equal(endpoint.host, tab.host)
   assert.equal(endpoint.pid, 'sftp:tab-stable:terminal-session-stable')
   assert.equal(endpoint.terminalPid, 'terminal-session-stable')
-  assert.equal(endpoint.sshTerminalPid, 'ssh-terminal-pid-1')
+  assert.equal(endpoint.sshSessionGeneration, 'ssh-generation-1')
   assert.equal(endpoint.connectionUsername, 'deploy')
   assert.equal(endpoint.hostKeyFingerprint, 'SHA256:one')
   const operation = await createSideEffectOperation({ endpoint })
-  assert.equal(operation.endpoint.sshTerminalPid, 'ssh-terminal-pid-1')
+  assert.equal(operation.endpoint.sshSessionGeneration, 'ssh-generation-1')
   assert.equal(operation.endpoint.hostKeyFingerprint, 'SHA256:one')
   const refreshedEndpoint = buildSftpSafetyEndpoint({
     tab: { ...tab },
     terminalId: 'terminal-session-stable',
+    sftpSessionGeneration: 'ssh-generation-1',
     terminalEndpoint: {
       ...tab,
       tabId: tab.id,
       connectionUsername: tab.username,
-      pid: 'ssh-terminal-pid-1',
-      terminalPid: 'ssh-terminal-pid-1',
+      pid: tab.id,
+      terminalPid: tab.id,
+      sshSessionGeneration: 'ssh-generation-1',
       hostKeyFingerprint: 'SHA256:one'
     }
   })
@@ -922,7 +926,7 @@ test('SFTP endpoint identity survives transport refresh but rejects another secu
     { ...refreshedEndpoint, username: 'root' },
     { ...refreshedEndpoint, tabId: 'tab-other' },
     { ...refreshedEndpoint, terminalPid: 'terminal-session-other' },
-    { ...refreshedEndpoint, sshTerminalPid: 'ssh-terminal-pid-2' },
+    { ...refreshedEndpoint, sshSessionGeneration: 'ssh-generation-2' },
     { ...refreshedEndpoint, hostKeyFingerprint: 'SHA256:two' }
   ]) {
     assert.equal(findMatchingSafetySftp(
@@ -939,7 +943,8 @@ test('SFTP endpoint identity survives transport refresh but rejects another secu
     ...operation,
     endpoint: { ...operation.endpoint }
   }
-  delete legacyOperation.endpoint.sshTerminalPid
+  legacyOperation.endpoint.sshTerminalPid = legacyOperation.endpoint.tabId
+  delete legacyOperation.endpoint.sshSessionGeneration
   assert.equal(findMatchingSafetySftp(
     legacyOperation,
     [tab.id],
@@ -964,8 +969,9 @@ test('SFTP endpoint rejects a terminal from another SSH connection identity', as
     port: tab.port,
     username: tab.username,
     connectionUsername: tab.username,
-    pid: 'ssh-pid-one',
-    terminalPid: 'ssh-pid-one',
+    pid: tab.id,
+    terminalPid: tab.id,
+    sshSessionGeneration: 'ssh-generation-one',
     sessionType: 'ssh',
     hostKeyFingerprint: 'SHA256:one'
   }
@@ -980,12 +986,14 @@ test('SFTP endpoint rejects a terminal from another SSH connection identity', as
       assert.throws(() => buildSftpSafetyEndpoint({
         tab,
         terminalId: 'sftp-session-one',
+        sftpSessionGeneration: 'ssh-generation-one',
         terminalEndpoint: { ...terminalEndpoint, ...changed }
       }), /端点|主机|端口|用户|标签/i)
     })
   }
   for (const [label, missingField] of [
     ['PID', 'terminalPid'],
+    ['generation', 'sshSessionGeneration'],
     ['fingerprint', 'hostKeyFingerprint']
   ]) {
     await t.test(label, () => {
@@ -994,10 +1002,18 @@ test('SFTP endpoint rejects a terminal from another SSH connection identity', as
       assert.throws(() => buildSftpSafetyEndpoint({
         tab,
         terminalId: 'sftp-session-one',
+        sftpSessionGeneration: 'ssh-generation-one',
         terminalEndpoint: changed
-      }), /进程|指纹/i)
+      }), /进程|generation|代次|指纹/i)
     })
   }
+
+  assert.throws(() => buildSftpSafetyEndpoint({
+    tab,
+    terminalId: 'sftp-session-one',
+    sftpSessionGeneration: 'ssh-generation-old',
+    terminalEndpoint
+  }), /generation|代次|会话/i)
 })
 
 function normalizeFakePath (value) {

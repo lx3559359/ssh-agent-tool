@@ -4,6 +4,7 @@ import {
   createPrivilegedFileBackend
 } from './remote-file-backends.js'
 import { assertExactSshTerminalEndpoint } from './sftp-safety-endpoint.js'
+import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
 
 function requiredIdentity (value, label) {
   const identity = String(value ?? '').trim()
@@ -23,6 +24,13 @@ export function assertExactRemoteFileEndpoint ({
   )
   if (sftpTerminalId !== endpoint.tabId) {
     throw new Error('远程文件 SFTP 与 SSH 标签页端点不一致')
+  }
+  const sftpGeneration = requiredIdentity(
+    sftp?.sshSessionGeneration,
+    'SFTP SSH session generation'
+  )
+  if (sftpGeneration !== endpoint.sshSessionGeneration) {
+    throw new Error('远程文件 SFTP 与 SSH session generation 不一致')
   }
   return endpoint
 }
@@ -67,6 +75,56 @@ async function releasePty (pty) {
   return true
 }
 
+function createGuardedRemoteFileCapability (capability, assertCurrent) {
+  let invalidationPromise
+  const proxies = new WeakMap()
+
+  async function guardCurrent () {
+    try {
+      await assertCurrent()
+    } catch (cause) {
+      invalidationPromise ||= Promise.resolve(capability.release())
+      let releaseError
+      try {
+        await invalidationPromise
+      } catch (error) {
+        releaseError = error
+      }
+      const unavailable = remoteFileIdentityUnavailable(cause)
+      if (releaseError) unavailable.releaseError = releaseError
+      throw unavailable
+    }
+  }
+
+  function guardBackend (backend) {
+    if (!backend || typeof backend !== 'object') return backend
+    if (proxies.has(backend)) return proxies.get(backend)
+    const guarded = new Proxy(backend, {
+      get (target, property, receiver) {
+        const value = Reflect.get(target, property, receiver)
+        if (typeof value !== 'function') return value
+        return async (...args) => {
+          await guardCurrent()
+          return Reflect.apply(value, target, args)
+        }
+      }
+    })
+    proxies.set(backend, guarded)
+    return guarded
+  }
+
+  const guardedSftp = guardBackend(capability.sftp)
+  const guardedBackend = capability.backend === capability.sftp
+    ? guardedSftp
+    : guardBackend(capability.backend)
+  return Object.freeze({
+    ...capability,
+    sftp: guardedSftp,
+    backend: guardedBackend,
+    release: () => capability.release()
+  })
+}
+
 export async function acquireRemoteFileCapability ({
   operationId,
   tab = {},
@@ -82,23 +140,44 @@ export async function acquireRemoteFileCapability ({
     if (typeof getTerminal !== 'function') {
       throw new Error('远程文件端点缺少终端解析器')
     }
-    const terminal = await getTerminal(requiredIdentity(tab.id, '标签页标识'))
+    const tabId = requiredIdentity(tab.id, '标签页标识')
+    const terminal = await getTerminal(tabId)
     if (!terminal || typeof terminal.getTerminalSafetyEndpoint !== 'function' ||
       typeof terminal.acquireRemoteFilePtyTask !== 'function') {
       throw new Error('远程文件端点缺少同标签页 SSH 终端')
     }
     const terminalEndpoint = terminal.getTerminalSafetyEndpoint()
-    assertExactRemoteFileEndpoint({ tab, sftp, terminalEndpoint })
+    const pinnedEndpoint = assertExactRemoteFileEndpoint({
+      tab,
+      sftp,
+      terminalEndpoint
+    })
+    const assertCurrent = async () => {
+      const currentTerminal = await getTerminal(tabId)
+      if (!currentTerminal ||
+        typeof currentTerminal.getTerminalSafetyEndpoint !== 'function') {
+        throw new Error('当前 SSH 终端已不可用')
+      }
+      const currentEndpoint = assertExactRemoteFileEndpoint({
+        tab,
+        sftp,
+        terminalEndpoint: currentTerminal.getTerminalSafetyEndpoint()
+      })
+      assertSameSessionEndpoint(pinnedEndpoint, currentEndpoint)
+      return currentEndpoint
+    }
 
     pty = await terminal.acquireRemoteFilePtyTask(ownerId)
     if (!pty || typeof pty.execute !== 'function' ||
       typeof pty.release !== 'function') {
       throw new Error('远程文件 PTY 租约合同无效')
     }
+    await assertCurrent()
     const probe = await pty.execute(createPrivilegedFileRequest({
       operation: 'probe'
     }), signal ? { signal } : {})
     const identity = requireProbeResult(probe)
+    await assertCurrent()
     const channel = identity.uid === '0' ? 'pty-root' : 'sftp'
     const identityUpdate = Object.freeze({
       loginUsername: requiredIdentity(
@@ -126,7 +205,10 @@ export async function acquireRemoteFileCapability ({
       })
     }
 
+    await assertCurrent()
+    capability = createGuardedRemoteFileCapability(capability, assertCurrent)
     await onIdentity?.(identityUpdate)
+    await assertCurrent()
     return capability
   } catch (cause) {
     let releaseError

@@ -19,6 +19,7 @@ function endpoint () {
     pid: 'pid-concrete',
     terminalPid: 'pid-concrete',
     sessionType: 'ssh',
+    sshSessionGeneration: 'ssh-generation-concrete',
     hostKeyFingerprint: 'SHA256:concrete'
   }
 }

@@ -65,7 +65,24 @@ export function disposeSftpEntryClient (entry) {
 }
 
 export function reconnectSftpEntryRemote (entry) {
-  return entry.initRemoteAll()
+  return Promise.resolve(disposeSftpEntryClient(entry))
+    .then(() => entry.initRemoteAll())
+}
+
+export async function bindSftpEntryRemoteSession (entry, binding = {}) {
+  const nextGeneration = String(binding.sshSessionGeneration || '').trim()
+  const generationChanged = Boolean(
+    entry.sftp && entry.sshSessionGeneration !== nextGeneration
+  )
+  entry.terminalId = binding.terminalId
+  entry.port = binding.port
+  entry.sshSessionGeneration = nextGeneration
+  if (generationChanged) await disposeSftpEntryClient(entry)
+  const remote = entry.shouldRenderRemote()
+    ? await entry.initRemoteAll()
+    : undefined
+  entry.initLocalAll()
+  return remote
 }
 
 function canonicalRemotePath (value) {

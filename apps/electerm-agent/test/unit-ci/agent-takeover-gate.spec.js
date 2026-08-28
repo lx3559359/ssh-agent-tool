@@ -22,6 +22,7 @@ function endpoint (overrides = {}) {
     pid: 'pid-a',
     terminalPid: 'terminal-a',
     sessionType: 'ssh',
+    sshSessionGeneration: 'ssh-generation-a',
     hostKeyFingerprint: 'SHA256:abc',
     ...overrides
   }

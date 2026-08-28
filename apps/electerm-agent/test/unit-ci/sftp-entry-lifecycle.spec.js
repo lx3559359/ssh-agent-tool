@@ -84,22 +84,61 @@ test('replacing an SFTP entry timer cancels the previous callback', async () => 
   assert.deepEqual(scheduled, [[callback, 1000]])
 })
 
-test('remote reconnect preserves the active terminal context', async () => {
+test('remote reconnect destroys the stale SFTP transport before recreating it', async () => {
   const { reconnectSftpEntryRemote } = await loadModule()
   const calls = []
+  const client = {
+    async destroy () {
+      calls.push('destroy')
+    }
+  }
   const entry = {
+    sftp: client,
     terminalId: 'terminal-42',
     port: 2200,
     initRemoteAll: () => {
-      calls.push([entry.terminalId, entry.port])
+      calls.push(['init', entry.sftp, entry.terminalId, entry.port])
       return 'reconnecting'
     }
   }
 
-  assert.equal(reconnectSftpEntryRemote(entry), 'reconnecting')
+  assert.equal(await reconnectSftpEntryRemote(entry), 'reconnecting')
   assert.equal(entry.terminalId, 'terminal-42')
   assert.equal(entry.port, 2200)
-  assert.deepEqual(calls, [['terminal-42', 2200]])
+  assert.deepEqual(calls, [
+    'destroy',
+    ['init', null, 'terminal-42', 2200]
+  ])
+})
+
+test('binding a new SSH generation destroys the old SFTP transport first', async () => {
+  const { bindSftpEntryRemoteSession } = await loadModule()
+  const calls = []
+  const entry = {
+    terminalId: 'tab-1',
+    port: 41001,
+    sshSessionGeneration: 'generation-old',
+    sftp: {
+      async destroy () { calls.push('destroy') }
+    },
+    shouldRenderRemote: () => true,
+    initRemoteAll: () => {
+      calls.push(['init', entry.sftp, entry.sshSessionGeneration])
+      return 'ready'
+    },
+    initLocalAll: () => calls.push('local')
+  }
+
+  assert.equal(await bindSftpEntryRemoteSession(entry, {
+    terminalId: 'tab-1',
+    port: 41002,
+    sshSessionGeneration: 'generation-new'
+  }), 'ready')
+  assert.deepEqual(calls, [
+    'destroy',
+    ['init', null, 'generation-new'],
+    'local'
+  ])
 })
 
 test('SFTP client disposal detaches first and absorbs destroy rejection', async () => {

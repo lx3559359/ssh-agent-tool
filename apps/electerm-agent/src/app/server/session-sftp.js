@@ -68,6 +68,16 @@ function isMissingSftpError (error) {
     error?.code === 'SFTP_NO_SUCH_FILE'
 }
 
+function requireSshSessionGeneration (value) {
+  const generation = typeof value === 'string' ? value.trim() : ''
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    generation
+  )) {
+    throw new Error('SFTP SSH session generation is invalid')
+  }
+  return generation
+}
+
 async function closeSftpChannel (channel, timeoutMs = 1000) {
   if (!channel) return true
   if (typeof channel.end !== 'function') {
@@ -147,9 +157,18 @@ class Sftp extends TerminalBase {
   }
 
   async remoteInitSftp (initOptions) {
-    this.initOptions = initOptions
+    const expectedGeneration = requireSshSessionGeneration(
+      initOptions?.sshSessionGeneration
+    )
     this.transfers = {}
-    const terminalInst = globalState.getSession(initOptions.terminalId)
+    const terminalId = initOptions?.terminalId
+    const terminalInst = globalState.getSession(terminalId)
+    if (!terminalInst ||
+      terminalInst.sshSessionGeneration !== expectedGeneration) {
+      throw new Error('SFTP SSH session generation does not match current terminal')
+    }
+    this.initOptions = { ...initOptions, sshSessionGeneration: expectedGeneration }
+    this.sshSessionGeneration = expectedGeneration
     const {
       conn
     } = terminalInst
@@ -169,8 +188,15 @@ class Sftp extends TerminalBase {
       this.initSshFsFallback(conn)
     }
 
+    if (globalState.getSession(terminalId) !== terminalInst ||
+      terminalInst.sshSessionGeneration !== expectedGeneration) {
+      await closeSftpChannel(this.sftp)
+      delete this.sftp
+      throw new Error('SFTP SSH session changed during initialization')
+    }
+
     globalState.setSession(this.pid, this)
-    return 'ok'
+    return { sshSessionGeneration: expectedGeneration }
   }
 
   kill () {

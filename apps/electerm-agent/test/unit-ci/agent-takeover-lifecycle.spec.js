@@ -18,6 +18,7 @@ function endpoint (suffix = 'a') {
     pid: `pid-${suffix}`,
     terminalPid: `pid-${suffix}`,
     sessionType: 'ssh',
+    sshSessionGeneration: `ssh-generation-${suffix}`,
     hostKeyFingerprint: `SHA256:${suffix}`
   }
 }
@@ -155,5 +156,20 @@ test('terminal publishes connected status only after exact session identity is r
     connectedBlock[1].indexOf('this.pid = id') <
       connectedBlock[1].indexOf('this.setStatus(statusMap.success)'),
     'session pid must be assigned before the observable connected status update'
+  )
+  assert.ok(
+    connectedBlock[1].indexOf('this.sshSessionGeneration =') <
+      connectedBlock[1].indexOf('this.setStatus(statusMap.success)'),
+    'SSH generation must be assigned before the observable connected status update'
+  )
+  assert.match(
+    connectedBlock[1],
+    /initData\([\s\S]*?this\.sshSessionGeneration[\s\S]*?\)/,
+    'SFTP initialization must capture the connected SSH generation'
+  )
+  assert.match(
+    terminalSource,
+    /oncloseSocket = \(\) => \{[\s\S]*?this\.sshSessionGeneration = ''/,
+    'disconnect must invalidate the connected SSH generation'
   )
 })

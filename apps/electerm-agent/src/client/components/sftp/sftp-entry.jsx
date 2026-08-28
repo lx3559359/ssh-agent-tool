@@ -71,6 +71,7 @@ import {
   destroySftpClient,
   disposeSftpEntryClient,
   disposeSftpEntryScheduling,
+  bindSftpEntryRemoteSession,
   removeDeletedRemoteEntries,
   reconnectSftpEntryRemote,
   replaceSftpEntryTimer,
@@ -546,6 +547,7 @@ export default class Sftp extends Component {
     return buildSftpSafetyEndpoint({
       tab: this.props.tab,
       terminalId: this.terminalId,
+      sftpSessionGeneration: this.sftp.sshSessionGeneration,
       terminalEndpoint: terminal?.getTerminalSafetyEndpoint?.()
     })
   }
@@ -1508,13 +1510,12 @@ export default class Sftp extends Component {
     this[type + 'Dom'].onPaste()
   }
 
-  initData = (terminalId, port) => {
-    this.terminalId = terminalId
-    this.port = port
-    if (this.shouldRenderRemote()) {
-      this.initRemoteAll()
-    }
-    this.initLocalAll()
+  initData = (terminalId, port, sshSessionGeneration) => {
+    return bindSftpEntryRemoteSession(this, {
+      terminalId,
+      port,
+      sshSessionGeneration
+    }).catch(window.store.onError)
   }
 
   shouldRenderRemote = () => {
@@ -1694,7 +1695,19 @@ export default class Sftp extends Component {
     let sftp = this.sftp
     try {
       if (!this.sftp) {
-        sftp = await Client(this.terminalId, this.type, this.port)
+        const terminal = this.type === 'ftp'
+          ? null
+          : refs.get('term-' + tab.id)
+        const terminalEndpoint = terminal?.getTerminalSafetyEndpoint?.()
+        const sshSessionGeneration = this.type === 'ftp'
+          ? undefined
+          : terminalEndpoint?.sshSessionGeneration
+        sftp = await Client(
+          this.terminalId,
+          this.type,
+          this.port,
+          sshSessionGeneration
+        )
         if (!sftp) {
           return
         }
@@ -1740,6 +1753,15 @@ export default class Sftp extends Component {
             sftpCreated: false
           })
         } else {
+          if (this.type !== 'ftp') {
+            buildSftpSafetyEndpoint({
+              tab,
+              terminalId: this.terminalId,
+              sftpSessionGeneration: sftp.sshSessionGeneration,
+              terminalEndpoint: refs.get('term-' + tab.id)
+                ?.getTerminalSafetyEndpoint?.()
+            })
+          }
           this.sftp = sftp
           this.retryCount = 0
         }

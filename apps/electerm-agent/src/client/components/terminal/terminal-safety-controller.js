@@ -4,7 +4,8 @@ import { redactAuditText } from '../../common/safety-transactions/audit-redactio
 export function buildTerminalSafetyEndpoint (
   tab = {},
   terminalPid,
-  hostKeyFingerprint
+  hostKeyFingerprint,
+  sshSessionGeneration
 ) {
   const pid = terminalPid === undefined || terminalPid === null
     ? ''
@@ -19,6 +20,7 @@ export function buildTerminalSafetyEndpoint (
     title: tab.title || tab.name || '',
     pid,
     terminalPid: pid,
+    sshSessionGeneration: String(sshSessionGeneration || '').trim(),
     sessionType: tab.type || 'ssh'
   }
   if (hostKeyFingerprint) {

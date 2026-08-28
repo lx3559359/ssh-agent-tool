@@ -77,6 +77,7 @@ test('returns only verified public SSH identity metadata from child creation', a
           data: {
             pid: 'tab-verified',
             hostKeyFingerprint: 'SHA256:verified-host-key',
+            sshSessionGeneration: '11111111-1111-4111-8111-111111111111',
             password: 'must-not-cross-process-boundary',
             privateKey: 'must-not-cross-process-boundary'
           }
@@ -100,6 +101,10 @@ test('returns only verified public SSH identity metadata from child creation', a
   assert.equal(result.pid, 'tab-verified')
   assert.equal(Number.isInteger(result.port), true)
   assert.equal(result.hostKeyFingerprint, 'SHA256:verified-host-key')
+  assert.equal(
+    result.sshSessionGeneration,
+    '11111111-1111-4111-8111-111111111111'
+  )
   assert.equal(Object.hasOwn(result, 'password'), false)
   assert.equal(Object.hasOwn(result, 'privateKey'), false)
 

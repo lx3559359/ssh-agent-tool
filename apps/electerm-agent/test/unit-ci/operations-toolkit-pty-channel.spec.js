@@ -11,6 +11,7 @@ const endpoint = Object.freeze({
   port: 22,
   username: 'hik',
   connectionUsername: 'hik',
+  sshSessionGeneration: 'ssh-generation-1',
   hostKeyFingerprint: 'SHA256:fixture'
 })
 
@@ -67,6 +68,7 @@ test('PTY channel rejects every incomplete or changed session identity before ac
     port: 2222,
     username: 'other',
     connectionUsername: 'other',
+    sshSessionGeneration: 'ssh-generation-2',
     hostKeyFingerprint: 'SHA256:other'
   }
 

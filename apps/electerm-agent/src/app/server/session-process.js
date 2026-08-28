@@ -411,8 +411,17 @@ exports.terminal = async function (initOptions, ws, uid) {
       const hostKeyFingerprint = typeof createdSession?.hostKeyFingerprint === 'string'
         ? createdSession.hostKeyFingerprint.trim()
         : ''
-      if (hostKeyFingerprint) {
-        sessionMetadata = { hostKeyFingerprint }
+      const sshSessionGeneration = typeof createdSession?.sshSessionGeneration === 'string'
+        ? createdSession.sshSessionGeneration.trim()
+        : ''
+      if (isSsh && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        sshSessionGeneration
+      )) {
+        throw new Error('SSH session generation is unavailable')
+      }
+      sessionMetadata = {
+        ...(hostKeyFingerprint ? { hostKeyFingerprint } : {}),
+        ...(isSsh ? { sshSessionGeneration } : {})
       }
     }
     if (abortSignal?.aborted) throw childEndedError('aborted during initialization')

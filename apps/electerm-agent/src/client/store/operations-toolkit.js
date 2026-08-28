@@ -48,6 +48,7 @@ function resolveCurrentEndpoint () {
   if (typeof terminal.getTerminalSafetyEndpoint !== 'function') return null
   const safetyEndpoint = terminal.getTerminalSafetyEndpoint()
   if (!safetyEndpoint?.hostKeyFingerprint ||
+    !safetyEndpoint?.sshSessionGeneration ||
     !endpointsMatch(tab, safetyEndpoint)) return null
   return {
     tabId: safetyEndpoint.tabId,
@@ -58,6 +59,7 @@ function resolveCurrentEndpoint () {
     port: safetyEndpoint.port,
     username: safetyEndpoint.username,
     connectionUsername: safetyEndpoint.username,
+    sshSessionGeneration: safetyEndpoint.sshSessionGeneration,
     hostKeyFingerprint: safetyEndpoint.hostKeyFingerprint,
     title: tab.title || tab.name || tab.host
   }

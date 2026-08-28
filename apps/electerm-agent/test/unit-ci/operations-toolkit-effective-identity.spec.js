@@ -34,6 +34,7 @@ test('operations endpoint is projected from the exact verified terminal session'
   assert.match(store, /terminal\.getTerminalSafetyEndpoint\(\)/)
   assert.match(store, /connectionUsername:\s*safetyEndpoint\.username/)
   assert.match(store, /hostKeyFingerprint/)
+  assert.match(store, /sshSessionGeneration/)
   assert.match(store, /terminalPid/)
   assert.match(store, /sessionType/)
   assert.doesNotMatch(store, /runtimeIdentity[^\n]*(?:currentTab|props\.tab|SFTP)/i)

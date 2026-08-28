@@ -90,7 +90,8 @@ async function toggleTerminalLogTimestamp (body) {
 
 async function createTerm (body, ws) {
   const t = await startSession(body, ws)
-  const metadata = typeof t.getPublicSessionMetadata === 'function'
+  const isSsh = typeof t.getPublicSessionMetadata === 'function'
+  const metadata = isSsh
     ? t.getPublicSessionMetadata()
     : {}
   const result = { pid: t.pid }
@@ -98,6 +99,17 @@ async function createTerm (body, ws) {
     ? metadata.hostKeyFingerprint.trim()
     : ''
   if (hostKeyFingerprint) result.hostKeyFingerprint = hostKeyFingerprint
+  if (isSsh) {
+    const sshSessionGeneration = typeof metadata?.sshSessionGeneration === 'string'
+      ? metadata.sshSessionGeneration.trim()
+      : ''
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      sshSessionGeneration
+    )) {
+      throw new Error('SSH session generation is unavailable')
+    }
+    result.sshSessionGeneration = sshSessionGeneration
+  }
   return result
 }
 

@@ -65,6 +65,7 @@ export function assertExactSshTerminalEndpoint ({
       'SSH 终端进程标识'
     )
   }
+  assertEqualIdentity(sshTerminalPid, tabId, 'SSH 终端进程标识')
   const expectedPid = tab.sshTerminalPid || tab.terminalPid || tab.pid
   if (expectedPid !== undefined && expectedPid !== null && expectedPid !== '') {
     assertEqualIdentity(sshTerminalPid, expectedPid, 'SSH 终端进程标识')
@@ -72,6 +73,10 @@ export function assertExactSshTerminalEndpoint ({
   const hostKeyFingerprint = requiredIdentity(
     terminalEndpoint.hostKeyFingerprint,
     '主机密钥指纹'
+  )
+  const sshSessionGeneration = requiredIdentity(
+    terminalEndpoint.sshSessionGeneration,
+    'SSH session generation'
   )
   if (tab.hostKeyFingerprint) {
     assertEqualIdentity(
@@ -89,7 +94,7 @@ export function assertExactSshTerminalEndpoint ({
     port,
     username,
     connectionUsername: username,
-    sshTerminalPid,
+    sshSessionGeneration,
     hostKeyFingerprint
   })
 }
@@ -97,12 +102,22 @@ export function assertExactSshTerminalEndpoint ({
 export function buildSftpSafetyEndpoint ({
   tab = {},
   terminalId,
+  sftpSessionGeneration,
   terminalEndpoint = {}
 } = {}) {
   const exact = assertExactSshTerminalEndpoint({ tab, terminalEndpoint })
   const terminalIdentity = requiredIdentity(
     terminalId ?? tab.terminalId ?? exact.tabId,
     '会话安全标识'
+  )
+  const boundGeneration = requiredIdentity(
+    sftpSessionGeneration,
+    'SFTP SSH session generation'
+  )
+  assertEqualIdentity(
+    boundGeneration,
+    exact.sshSessionGeneration,
+    'SSH session generation'
   )
   return {
     host: tab.host,
@@ -113,7 +128,7 @@ export function buildSftpSafetyEndpoint ({
     tabId: exact.tabId,
     pid: `sftp:${exact.tabId}:${terminalIdentity}`,
     terminalPid: terminalIdentity,
-    sshTerminalPid: exact.sshTerminalPid,
+    sshSessionGeneration: exact.sshSessionGeneration,
     hostKeyFingerprint: exact.hostKeyFingerprint,
     sessionType: 'sftp'
   }

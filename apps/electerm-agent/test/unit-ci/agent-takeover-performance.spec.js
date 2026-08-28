@@ -17,6 +17,7 @@ function endpoint (suffix) {
     pid: `pid-${suffix}`,
     terminalPid: `term-${suffix}`,
     sessionType: 'ssh',
+    sshSessionGeneration: `ssh-generation-${suffix}`,
     hostKeyFingerprint: `SHA256:${suffix}`
   }
 }

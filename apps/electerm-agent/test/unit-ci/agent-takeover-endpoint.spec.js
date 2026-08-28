@@ -15,6 +15,7 @@ test('projects complete verified SSH identity without credentials', async () => 
     pid: 'pid-a',
     terminalPid: 'term-a',
     sessionType: 'ssh',
+    sshSessionGeneration: 'ssh-generation-a',
     host: 'srv.test',
     port: 22,
     username: 'ops',
@@ -31,6 +32,7 @@ test('projects complete verified SSH identity without credentials', async () => 
     pid: 'pid-a',
     terminalPid: 'term-a',
     sessionType: 'ssh',
+    sshSessionGeneration: 'ssh-generation-a',
     hostKeyFingerprint: 'SHA256:abc'
   })
   assert.doesNotMatch(JSON.stringify(endpoint), /secret/)
@@ -43,6 +45,7 @@ test('rejects an incomplete or unverified SSH identity', async () => {
     pid: 'pid-a',
     terminalPid: 'term-a',
     sessionType: 'ssh',
+    sshSessionGeneration: 'ssh-generation-a',
     host: 'srv.test',
     port: 22,
     username: 'ops',
@@ -54,6 +57,7 @@ test('rejects an incomplete or unverified SSH identity', async () => {
     'pid',
     'terminalPid',
     'sessionType',
+    'sshSessionGeneration',
     'hostKeyFingerprint'
   ]) {
     assert.throws(

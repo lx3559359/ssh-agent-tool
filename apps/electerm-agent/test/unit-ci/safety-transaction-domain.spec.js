@@ -1374,7 +1374,7 @@ test('normalizes endpoint identity including IPv6 and rejects mismatches', async
   const verifiedSession = {
     ...expectedSession,
     terminalPid: 1001,
-    sshTerminalPid: 1001,
+    sshSessionGeneration: 'ssh-generation-1',
     sessionType: 'ssh',
     hostKeyFingerprint: 'SHA256:verified-host-key'
   }
@@ -1390,7 +1390,7 @@ test('normalizes endpoint identity including IPv6 and rejects mismatches', async
     tabId: 'tab-1',
     pid: 1001,
     terminalPid: 1001,
-    sshTerminalPid: 1001,
+    sshSessionGeneration: 'ssh-generation-1',
     sessionType: 'ssh',
     hostKeyFingerprint: 'SHA256:verified-host-key'
   })
@@ -1399,7 +1399,7 @@ test('normalizes endpoint identity including IPv6 and rejects mismatches', async
     /fingerprint/i
   )
   assert.throws(
-    () => projectEndpoint({ ...verifiedSession, sshTerminalPid: '' }),
+    () => projectEndpoint({ ...verifiedSession, sshSessionGeneration: '' }),
     error => error.code === 'INCOMPLETE_SSH_SESSION_IDENTITY'
   )
   assert.throws(

@@ -8,6 +8,7 @@ const generate = require('../common/uid')
 const { resolve: pathResolve } = require('path')
 const net = require('net')
 const { exec } = require('child_process')
+const { randomUUID } = require('crypto')
 const log = require('../common/log')
 const { algDefault, algAlt } = require('./ssh2-alg')
 const { createHostVerifier } = require('./ssh-known-hosts')
@@ -310,6 +311,11 @@ function reorderConnectionHoppings (initOptions = {}) {
 }
 
 class TerminalSshBase extends TerminalBase {
+  constructor (...args) {
+    super(...args)
+    this.sshSessionGeneration = randomUUID()
+  }
+
   async remoteInitProcess () {
     this.adjustConnectionOrder()
     const {
@@ -1327,9 +1333,11 @@ class TerminalSshBase extends TerminalBase {
   }
 
   getPublicSessionMetadata () {
-    if (!this.hostKeyFingerprint) return {}
     return {
-      hostKeyFingerprint: this.hostKeyFingerprint
+      ...(this.hostKeyFingerprint
+        ? { hostKeyFingerprint: this.hostKeyFingerprint }
+        : {}),
+      sshSessionGeneration: this.sshSessionGeneration
     }
   }
 }

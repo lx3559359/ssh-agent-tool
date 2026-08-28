@@ -145,6 +145,7 @@ class Term extends Component {
     this.shellInjected = false
     this.shellType = null
     this.shellTransitionCandidate = null
+    this.sshSessionGeneration = ''
     this.lastTerminalRemoteOutputAt = 0
     this.terminalRemoteOutputSequence = 0
     this.operationsPtyTaskController = createManagedPtyTaskController({
@@ -306,6 +307,7 @@ class Term extends Component {
       tabId: this.props.tab.id,
       endpoint: this.getTerminalSafetyEndpoint()
     })
+    this.sshSessionGeneration = ''
     this.onClose = true
     this.operationsPtyTaskController.invalidate('终端标签页已关闭').catch(() => {})
     this.commandSafetyEntrypoint.invalidateSession().catch(() => {})
@@ -1346,12 +1348,23 @@ class Term extends Component {
   }
 
   acquireRemoteFilePtyTask = async ownerId => {
+    const sshSessionGeneration = String(this.sshSessionGeneration || '').trim()
+    if (!sshSessionGeneration) {
+      throw new Error('当前 SSH 连接代次不可用')
+    }
     const lease = await this.operationsPtyTaskController.acquire(
       `root-file:${ownerId}`
     )
+    if (this.sshSessionGeneration !== sshSessionGeneration) {
+      await lease.release()
+      throw new Error('SSH 连接已在 PTY 租约获取期间变化')
+    }
     const protocol = createPrivilegedFileProtocol()
     return Object.freeze({
       execute: (request, options = {}) => {
+        if (this.sshSessionGeneration !== sshSessionGeneration) {
+          throw new Error('SSH 连接已变化，root 文件请求被拒绝')
+        }
         if (!request || typeof request !== 'object' ||
           Object.keys(request).some(key => !['operation', 'args'].includes(key))) {
           throw new Error('root 文件 PTY 请求合同无效')
@@ -1367,6 +1380,7 @@ class Term extends Component {
           ...options
         })
       },
+      sshSessionGeneration,
       release: () => lease.release()
     })
   }
@@ -1478,7 +1492,8 @@ class Term extends Component {
     return buildTerminalSafetyEndpoint(
       tab,
       this.pid,
-      this.hostKeyFingerprint
+      this.hostKeyFingerprint,
+      this.sshSessionGeneration
     )
   }
 
@@ -1930,6 +1945,7 @@ class Term extends Component {
       })
     }
     this.hostKeyFingerprint = ''
+    this.sshSessionGeneration = ''
     this.setState({
       loading: true,
       terminalError: null
@@ -2055,10 +2071,25 @@ class Term extends Component {
     this.hostKeyFingerprint = typeof r.hostKeyFingerprint === 'string'
       ? r.hostKeyFingerprint
       : ''
+    this.sshSessionGeneration = typeof r.sshSessionGeneration === 'string'
+      ? r.sshSessionGeneration.trim()
+      : ''
+    if (!this.sshSessionGeneration && this.isSsh()) {
+      this.setStatus(statusMap.error)
+      return this.handleError({
+        message: 'SSH 服务器未返回有效连接代次',
+        from,
+        srcId
+      })
+    }
     term.pid = id
     this.pid = id
     this.setStatus(statusMap.success)
-    refs.get('sftp-' + id)?.initData(id, r.port)
+    refs.get('sftp-' + id)?.initData(
+      id,
+      r.port,
+      this.sshSessionGeneration
+    )
     if (previousEndpoint) {
       emitAgentTakeoverLifecycleEvent({
         type: 'endpoint-change',
@@ -2196,6 +2227,7 @@ class Term extends Component {
       tabId: this.props.tab.id,
       endpoint: this.getTerminalSafetyEndpoint()
     })
+    this.sshSessionGeneration = ''
     this.operationsPtyTaskController.invalidate('终端连接已断开').catch(error => {
       if (!this.onClose) window.store.onError(error)
     })
