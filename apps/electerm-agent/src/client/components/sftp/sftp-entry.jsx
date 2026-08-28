@@ -13,7 +13,7 @@ import wait from '../../common/wait'
 import isAbsPath from '../../common/is-absolute-path'
 import classnames from 'classnames'
 import { handleErr } from '../../common/fetch'
-import { getLocalFileInfo, getRemoteFileInfo, getFolderFromFilePath } from './file-read'
+import { getLocalFileInfo, getFolderFromFilePath } from './file-read'
 import {
   typeMap, maxSftpHistory, paneMap,
   fileTypeMap,
@@ -99,9 +99,44 @@ import {
   updateSafetyOperationRecord,
   writeSafetyOperationRecords
 } from '../../common/safety-operation-records'
+import { acquireRemoteFileCapability } from './remote-file-capability.js'
 import './sftp.styl'
 
 const e = window.translate
+
+function abortRemoteFileOperation (signal) {
+  if (!signal?.aborted) return
+  if (signal.reason instanceof Error) throw signal.reason
+  const error = new Error('远程文件操作已取消。')
+  error.name = 'AbortError'
+  error.code = 'ABORT_ERR'
+  throw error
+}
+
+function remoteFileOperationUnmounted () {
+  const error = new Error('远程文件组件已卸载，操作已取消。')
+  error.name = 'AbortError'
+  error.code = 'ABORT_ERR'
+  return error
+}
+
+function remoteFileOperationStale () {
+  const error = new Error('远程文件会话已变化，操作已取消。')
+  error.name = 'AbortError'
+  error.code = 'ABORT_ERR'
+  return error
+}
+
+function isRemoteDirectory (stat) {
+  if (typeof stat?.isDirectory === 'function') return stat.isDirectory()
+  if (typeof stat?.isDirectory === 'boolean') return stat.isDirectory
+  if (typeof stat?.type === 'string') {
+    return stat.type === 'd' || stat.type === 'directory'
+  }
+  if (typeof stat?.type === 'number') return stat.type === 2
+  return typeof stat?.mode === 'number' &&
+    (stat.mode & 0o170000) === 0o040000
+}
 
 export default class Sftp extends Component {
   constructor (props) {
@@ -116,9 +151,20 @@ export default class Sftp extends Component {
       loadingSftp: false,
       inited: false,
       ready: false,
+      remoteFileIdentity: {
+        loginUsername: props.tab?.username || '',
+        effectiveUid: '',
+        effectiveUsername: '',
+        channel: 'unknown'
+      },
       sftpRecoveryRecords: readSafetyOperationRecords(ls)
     }
     this.retryCount = 0
+    this.remoteFileOperationBackends = new Map()
+    this.remoteFileOperationSequence = 0
+    this.remoteFileOperations = new Set()
+    this.remoteFileOperationTail = Promise.resolve()
+    this.remoteFileUnmounted = false
     this.sftpSafetyProgressHandlers = new Map()
     this.sftpSafetyAdapter = createSftpTransactionAdapter({
       getSftp: () => this.sftp,
@@ -196,6 +242,18 @@ export default class Sftp extends Component {
   }
 
   componentWillUnmount () {
+    this.remoteFileUnmounted = true
+    const remoteFileOperations = [...this.remoteFileOperations]
+    this.remoteFileOperations.clear()
+    this.remoteFileOperationBackends.clear()
+    const releases = remoteFileOperations.map(capability => {
+      try {
+        return capability.release()
+      } catch (error) {
+        return Promise.reject(error)
+      }
+    })
+    Promise.allSettled(releases)
     refs.remove(this.id)
     this.sftpSafetyProgressHandlers.clear()
     this.sftpSafetyAdapter.discardAllPreparedProofs()
@@ -479,12 +537,11 @@ export default class Sftp extends Component {
     await func(p).catch(window.store.onError)
   }
 
-  remoteDel = async (file) => {
+  remoteDel = async (file, backend) => {
     const { name, isDirectory, path } = file
-    const { sftp } = this
     const func = isDirectory
-      ? sftp.rmdir
-      : sftp.rm
+      ? backend.rmdir
+      : backend.rm
     const p = resolve(path, name)
     await func(p).catch(window.store.onError)
   }
@@ -1029,7 +1086,7 @@ export default class Sftp extends Component {
       if (!confirmed || options.signal?.aborted) return false
       for (const file of files) {
         if (options.signal?.aborted) return false
-        await this.remoteDel(file)
+        await this.remoteDel(file, this.sftp)
       }
       return {
         deletedPaths: files.map(file => resolve(file.path, file.name)),
@@ -1663,24 +1720,141 @@ export default class Sftp extends Component {
     })
   }
 
-  sftpList = (sftp, remotePath) => {
-    return sftp.list(remotePath)
-      .then(arr => {
-        return arr.map(item => {
-          const { type } = item
-          return {
-            ...pick(
-              item,
-              ['name', 'size', 'accessTime', 'modifyTime', 'mode', 'owner', 'group']
-            ),
-            isDirectory: type === fileTypeMap.directory,
-            type: typeMap.remote,
-            path: remotePath,
-            isSymbol: type === fileTypeMap.link,
-            id: generate()
-          }
-        })
-      })
+  acquireRemoteFileOperation = async ({
+    id,
+    signal,
+    lifecycleTask
+  } = {}) => {
+    const operationId = id ||
+      `file-ui-${this.props.tab.id}-${++this.remoteFileOperationSequence}`
+    const sftp = this.sftp
+    const lifecycleEpoch = this.sftpLifecycleEpoch || 0
+    const sshSessionGeneration = String(this.sshSessionGeneration || '')
+    const sshTerminalPid = String(this.sshTerminalPid || '')
+    let remoteFileIdentity
+    const capability = await acquireRemoteFileCapability({
+      operationId,
+      tab: this.props.tab,
+      sftp,
+      getTerminal: tabId => refs.get('term-' + tabId),
+      signal,
+      onIdentity: identity => { remoteFileIdentity = identity }
+    })
+    const lifecycleCurrent =
+      !this.remoteFileUnmounted &&
+      this.sftp === sftp &&
+      (this.sftpLifecycleEpoch || 0) === lifecycleEpoch &&
+      String(this.sshSessionGeneration || '') === sshSessionGeneration &&
+      String(this.sshTerminalPid || '') === sshTerminalPid &&
+      (!lifecycleTask ||
+        isCurrentSftpEntryRemoteTask(this, lifecycleTask))
+    if (!lifecycleCurrent) {
+      const staleError = remoteFileOperationStale()
+      try {
+        await capability.release()
+      } catch (releaseError) {
+        staleError.releaseError = releaseError
+      }
+      throw staleError
+    }
+    if (remoteFileIdentity) {
+      this.setState({ remoteFileIdentity })
+    }
+    return capability
+  }
+
+  withRemoteFileOperation = async (options, work) => {
+    const previous = this.remoteFileOperationTail || Promise.resolve()
+    let unlock
+    this.remoteFileOperationTail = new Promise(resolve => {
+      unlock = resolve
+    })
+    await previous
+    try {
+      abortRemoteFileOperation(options?.signal)
+      if (this.remoteFileUnmounted) throw remoteFileOperationUnmounted()
+      const capability = await this.acquireRemoteFileOperation(options)
+      if (this.remoteFileUnmounted) {
+        const unmountedError = remoteFileOperationUnmounted()
+        try {
+          await capability.release()
+        } catch (releaseError) {
+          unmountedError.releaseError = releaseError
+        }
+        throw unmountedError
+      }
+      this.remoteFileOperations.add(capability)
+      let result
+      let workError
+      try {
+        abortRemoteFileOperation(options?.signal)
+        result = await work(capability.backend, capability)
+        abortRemoteFileOperation(options?.signal)
+        if (this.remoteFileUnmounted) throw remoteFileOperationUnmounted()
+      } catch (error) {
+        workError = error
+      }
+      this.remoteFileOperations.delete(capability)
+      let releaseError
+      try {
+        await capability.release()
+      } catch (error) {
+        releaseError = error
+      }
+      if (workError) {
+        if (releaseError &&
+          Object.isExtensible(workError) &&
+          !workError.releaseError) {
+          workError.releaseError = releaseError
+        }
+        throw workError
+      }
+      if (releaseError) throw releaseError
+      return result
+    } finally {
+      unlock()
+    }
+  }
+
+  readRemoteFile = path => {
+    if (this.type === 'ftp') return this.sftp.readFile(path)
+    return this.withRemoteFileOperation(
+      { id: `editor-read:${path}` },
+      backend => backend.readFile(path)
+    )
+  }
+
+  createRemoteFile = ({ path, isDirectory }) => {
+    if (this.type === 'ftp') {
+      return isDirectory ? this.sftp.mkdir(path) : this.sftp.touch(path)
+    }
+    return this.withRemoteFileOperation(
+      { id: `create:${path}` },
+      backend => isDirectory ? backend.mkdir(path) : backend.touch(path)
+    )
+  }
+
+  sftpList = async (backend, remotePath, { signal } = {}) => {
+    abortRemoteFileOperation(signal)
+    const arr = await backend.list(
+      remotePath,
+      signal ? { signal } : undefined
+    )
+    abortRemoteFileOperation(signal)
+    return arr.map(item => {
+      const { type } = item
+      return {
+        ...pick(
+          item,
+          ['name', 'size', 'accessTime', 'modifyTime', 'mode', 'owner', 'group']
+        ),
+        isDirectory: type === fileTypeMap.directory,
+        type: typeMap.remote,
+        path: remotePath,
+        isSymbol: type === fileTypeMap.link,
+        id: generate()
+      }
+    })
   }
 
   remoteList = async (
@@ -1689,6 +1863,7 @@ export default class Sftp extends Component {
     oldPath,
     options = {}
   ) => {
+    if (this.remoteFileUnmounted) throw remoteFileOperationUnmounted()
     const task = options.lifecycleTask || beginSftpEntryRemoteTask(this)
     const { tab, sessionOptions } = this.props
     const { username, startDirectory } = tab
@@ -1812,9 +1987,34 @@ export default class Sftp extends Component {
         }
       }
 
-      const remote = await this.sftpList(sftp, remotePath)
+      let remote
+      if (this.type === 'ftp') {
+        remote = await this.sftpList(sftp, remotePath)
+        if (!isCurrentSftpEntryRemoteTask(this, task)) return
+        if (!await commitSftpEntryRemoteClient(this, task, sftp)) return
+        remote = await this.updateRemoteList(remote, remotePath, sftp, task)
+      } else {
+        remote = await this.withRemoteFileOperation({
+          id: `list:${remotePath}`,
+          signal: options.signal,
+          lifecycleTask: task
+        }, async backend => {
+          const listed = await this.sftpList(backend, remotePath, {
+            signal: options.signal
+          })
+          if (!isCurrentSftpEntryRemoteTask(this, task)) return
+          return await this.updateRemoteList(
+            listed,
+            remotePath,
+            backend,
+            task,
+            options.signal
+          )
+        })
+        if (!isCurrentSftpEntryRemoteTask(this, task)) return
+        if (!await commitSftpEntryRemoteClient(this, task, sftp)) return
+      }
       if (!isCurrentSftpEntryRemoteTask(this, task)) return
-      if (!await commitSftpEntryRemoteClient(this, task, sftp)) return
       const update = {
         remote,
         remoteFileTree: this.buildTree(remote, typeMap.remote),
@@ -1825,9 +2025,9 @@ export default class Sftp extends Component {
         update.remotePath = remotePath
         update.remotePathTemp = remotePath
       }
-      if (returnList) {
+      if (returnList && !options.commitList) {
         return remote
-      } else {
+      } else if (!returnList) {
         update.onEditFile = false
       }
       if (oldPath) {
@@ -1858,22 +2058,21 @@ export default class Sftp extends Component {
           : nextUpdate
       }, () => {
         if (!isCurrentSftpEntryRemoteTask(this, task)) return
-        if (this.type !== 'ftp') {
-          this.updateRemoteList(remote, remotePath, sftp, task)
-        }
         this.props.editTab(tab.id, {
           sftpCreated: true
         })
       })
-      replaceSftpEntryTimer(this, 'timer5', () => {
-        if (!isCurrentSftpEntryRemoteTask(this, task)) return
-        if (this.type !== 'ftp') {
-          this.updateRemoteList(remote, remotePath, sftp, task)
-        }
-        this.props.editTab(tab.id, {
-          sftpCreated: true
-        })
-      }, 1000)
+      if (!returnList && !options.skipCompensation) {
+        replaceSftpEntryTimer(this, 'timer5', () => {
+          if (!isCurrentSftpEntryRemoteTask(this, task)) return
+          return this.remoteList(true, remotePath, undefined, {
+            commitList: true,
+            skipCompensation: true,
+            suppressLoading: true,
+            suppressVisibleError: true
+          })
+        }, 1000)
+      }
     } catch (error) {
       if (!isCurrentSftpEntryRemoteTask(this, task)) {
         if (sftp && sftp !== this.sftp) await destroySftpClient(sftp)
@@ -1905,76 +2104,62 @@ export default class Sftp extends Component {
     }
   }
 
-  updateRemoteList = async (
-    remotes,
-    remotePath,
-    sftp,
-    task
-  ) => {
-    const remote = []
-    for (const r of remotes) {
-      const { name } = r
-      if (r.isSymbol) {
-        const linkPath = resolve(remotePath, name)
-        let realpath = await sftp.readlink(linkPath)
-          .catch(e => {
-            console.debug(e)
-            return null
-          })
-        if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
-        if (!realpath) {
-          continue
-        }
-        if (!isAbsPath(realpath)) {
-          realpath = resolve(remotePath, realpath)
-          realpath = await sftp.realpath(realpath)
-          if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
-        }
-        const realFileInfo = await getRemoteFileInfo(
-          sftp,
-          realpath
-        ).catch(e => {
-          console.debug('seems a bad symbolic link')
-          console.debug(e)
-          return null
-        })
-        if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
-        if (!realFileInfo) {
-          continue
-        }
-        r.isSymbolicLink = true
-        r.isDirectory = realFileInfo.isDirectory
-      } else {
-        r.isSymbolicLink = false
-      }
-      remote.push(r)
+  resolveRemoteLink = async (file, remotePath, backend, task, signal) => {
+    abortRemoteFileOperation(signal)
+    const { name } = file
+    if (!file.isSymbol) {
+      file.isSymbolicLink = false
+      return file
     }
-    const update = {
-      remote,
-      remoteFileTree: this.buildTree(remote, typeMap.remote)
-    }
+    const linkPath = resolve(remotePath, name)
+    let realpath = await backend.readlink(linkPath)
+      .catch(e => {
+        console.debug(e)
+        return null
+      })
+    abortRemoteFileOperation(signal)
     if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
-    this.setState(prevState => {
-      if (task && !isCurrentSftpEntryRemoteTask(this, task)) return null
-      const nextRemote = preserveSftpDraftItems(prevState.remote, remote)
-      const nextUpdate = nextRemote === remote
-        ? update
-        : {
-            ...update,
-            remote: nextRemote,
-            remoteFileTree: this.buildTree(nextRemote, typeMap.remote)
-          }
-      return prevState.selectedType === typeMap.remote
-        ? {
-            ...nextUpdate,
-            selectedFiles: reconcileSelectedFileIds(
-              prevState.remote,
-              nextRemote,
-              prevState.selectedFiles
-            )
-          }
-        : nextUpdate
+    if (!realpath) return null
+    if (!isAbsPath(realpath)) {
+      realpath = resolve(remotePath, realpath)
+      abortRemoteFileOperation(signal)
+      realpath = await backend.realpath(realpath)
+      abortRemoteFileOperation(signal)
+      if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
+    }
+    const realFileInfo = await backend.stat(
+      realpath,
+      signal ? { signal } : undefined
+    ).catch(e => {
+      console.debug('seems a bad symbolic link')
+      console.debug(e)
+      return null
     })
+    abortRemoteFileOperation(signal)
+    if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
+    if (!realFileInfo) return null
+    file.isSymbolicLink = true
+    file.isDirectory = isRemoteDirectory(realFileInfo)
+    return file
+  }
+
+  updateRemoteList = async (remotes, remotePath, backend, task, signal) => {
+    if (this.type === 'ftp') return remotes
+    abortRemoteFileOperation(signal)
+    const remote = []
+    for (const file of remotes) {
+      const resolved = await this.resolveRemoteLink(
+        file,
+        remotePath,
+        backend,
+        task,
+        signal
+      )
+      abortRemoteFileOperation(signal)
+      if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
+      if (resolved) remote.push(resolved)
+    }
+    return remote
   }
 
   getLocalHome = () => {
@@ -2195,6 +2380,8 @@ export default class Sftp extends Component {
         'modifier',
         'localList',
         'remoteList',
+        'readRemoteFile',
+        'createRemoteFile',
         'localDel',
         'remoteDel',
         'delFiles',

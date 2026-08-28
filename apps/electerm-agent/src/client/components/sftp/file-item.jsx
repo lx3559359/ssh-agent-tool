@@ -19,7 +19,6 @@ import {
   mode2permission,
   permission2mode
 } from '../../common/mode2permission'
-import wait from '../../common/wait'
 import {
   fileOperationsMap,
   isWin, transferTypeMap, typeMap,
@@ -407,17 +406,14 @@ export default class FileSection extends React.Component {
   }
 
   remoteCreateNew = async file => {
-    const { nameTemp, isDirectory } = file
-    const { remotePath, sftp } = this.props
-    const p = resolve(remotePath, nameTemp)
-    const func = isDirectory
-      ? sftp.mkdir
-      : sftp.touch
-    const res = await func(p)
+    const path = resolve(this.props.remotePath, file.nameTemp)
+    const res = await this.props.createRemoteFile({
+      path,
+      isDirectory: file.isDirectory
+    })
       .then(() => true)
       .catch(window.store.onError)
     if (res) {
-      await wait(500)
       await this.props.remoteList()
     }
   }
@@ -762,9 +758,8 @@ export default class FileSection extends React.Component {
   }
 
   fetchEditorText = async (path, type) => {
-    // const sftp = sftpFunc()
     const text = typeMap.remote === type
-      ? await this.props.sftp.readFile(path)
+      ? await this.props.readRemoteFile(path)
       : await window.fs.readFile(path)
     return text
   }

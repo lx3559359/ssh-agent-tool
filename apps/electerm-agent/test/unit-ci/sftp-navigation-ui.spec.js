@@ -51,6 +51,19 @@ test('sftp double click enters directories before opening or transferring files'
   assert.match(body, /this\.transfer\(\)/)
 })
 
+test('sftp double click reads a remote editor file through the entry capability', () => {
+  const source = readClientSource('file-item.jsx')
+  const start = source.indexOf('fetchEditorText = async (path, type) => {')
+  const end = source.indexOf('\n  onSubmitEditFile', start)
+  const body = source.slice(start, end)
+
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+  assert.match(body, /typeMap\.remote === type/)
+  assert.match(body, /this\.props\.readRemoteFile\(path\)/)
+  assert.doesNotMatch(body, /this\.props\.sftp\.readFile/)
+})
+
 test('sftp address bar supports Enter navigation and reload-or-jump button actions', () => {
   const source = readClientSource('address-bar.jsx')
 
