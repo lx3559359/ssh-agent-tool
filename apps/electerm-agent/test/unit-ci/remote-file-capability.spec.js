@@ -133,6 +133,7 @@ function createTerminalStub ({
   identity = { uid: '0', username: 'root' },
   acquireError,
   executeError,
+  executeRequest,
   releaseResult = true,
   failProbeAfter = Infinity
 } = {}) {
@@ -207,6 +208,7 @@ function createTerminalStub ({
               ok: true
             }
           }
+          if (executeRequest) return executeRequest(request, options)
           throw new Error(`unexpected request: ${request.operation}`)
         },
         async release () {
@@ -390,6 +392,24 @@ test('root backend initialization failure transfers and releases the lease exact
   assert.deepEqual(identities, [])
 })
 
+test('post-construction publication failure releases root capability exactly once', async () => {
+  const { acquireRemoteFileCapability } = await importModule(capabilityModule)
+  const fake = createFakeSftp()
+  currentSftpNodes = fake.nodes
+  const terminal = createTerminalStub()
+
+  await assertUnavailable(acquireRemoteFileCapability({
+    operationId: 'root-publication-failure',
+    tab: tab(),
+    sftp: fake.sftp,
+    getTerminal: () => terminal,
+    onIdentity: () => { throw new Error('identity publication failed') }
+  }), /publication/i)
+
+  assert.equal(terminal.releaseCount, 1)
+  assert.equal(terminal.owner(), '')
+})
+
 test('non-root release failure publishes no unavailable capability identity', async () => {
   const { acquireRemoteFileCapability } = await importModule(capabilityModule)
   const fake = createFakeSftp()
@@ -466,7 +486,178 @@ test('stale capability rejects file operations after SSH reconnect', async () =>
     harness.capability.sftp.list('/home/hik'),
     /generation|endpoint|会话|连接/i
   )
+  await assertCapabilityReleased(
+    harness.capability.sftp.mkdir('/home/hik/after-stale')
+  )
   assert.equal(await harness.capability.release(), true)
+})
+
+function assertCapabilityReleased (promise) {
+  return assert.rejects(promise, error => {
+    assert.equal(error.code, 'REMOTE_FILE_CAPABILITY_RELEASED')
+    assert.equal(error.name, 'RemoteFileCapabilityReleasedError')
+    assert.match(error.message, /释放|关闭|released/i)
+    return true
+  })
+}
+
+test('native and root capabilities reject every new operation after release', async t => {
+  for (const [label, terminalOptions] of [
+    ['native', { identity: { uid: '1000', username: 'hik' } }],
+    ['root', {}]
+  ]) {
+    await t.test(label, async () => {
+      const harness = await acquireWithHarness({
+        terminalOptions,
+        sftpOptions: {
+          async openReadStream () { return { owner: this.id } }
+        }
+      })
+      const capturedList = harness.capability.sftp.list
+      await harness.capability.release()
+
+      await assertCapabilityReleased(
+        harness.capability.backend.mkdir('/home/hik/after-release')
+      )
+      await assertCapabilityReleased(
+        harness.capability.sftp.list('/home/hik')
+      )
+      await assertCapabilityReleased(capturedList('/home/hik'))
+      if (label === 'native') {
+        await assertCapabilityReleased(
+          harness.capability.sftp.readFileChunk('/home/hik/file')
+        )
+        await assertCapabilityReleased(
+          harness.capability.sftp.createExclusiveFile(
+            '/home/hik/file',
+            '',
+            0o600
+          )
+        )
+        await assertCapabilityReleased(
+          harness.capability.sftp.removeEmptyDirectory('/home/hik/empty')
+        )
+        await assertCapabilityReleased(
+          harness.capability.sftp.openReadStream('/home/hik/file')
+        )
+      }
+    })
+  }
+})
+
+test('capability proxy preserves non-function properties and method receivers', async () => {
+  const harness = await acquireWithHarness({
+    terminalOptions: { identity: { uid: '1000', username: 'hik' } },
+    sftpOptions: {
+      openReadStream () {
+        return { owner: this.id }
+      }
+    }
+  })
+
+  assert.equal(harness.capability.backend, harness.capability.sftp)
+  assert.notEqual(harness.capability.backend, harness.sftp)
+  assert.equal(harness.capability.backend.id, 'sftp-1')
+  assert.equal(
+    await harness.capability.backend.valueOf(),
+    harness.capability.backend
+  )
+  assert.deepEqual(
+    await harness.capability.backend.openReadStream('/home/hik/file'),
+    { owner: 'sftp-1' }
+  )
+  await harness.capability.release()
+})
+
+test('concurrent capability release shares one promise and releases root lease once', async () => {
+  const harness = await acquireWithHarness()
+
+  const first = harness.capability.release()
+  const second = harness.capability.release()
+
+  assert.equal(first, second)
+  assert.equal(await first, true)
+  assert.equal(harness.terminal.releaseCount, 1)
+})
+
+test('release waits for active operations and rejects operations started while closing', async () => {
+  let resolveRealpath
+  let markRealpathStarted
+  const realpathStarted = new Promise(resolve => { markRealpathStarted = resolve })
+  const harness = await acquireWithHarness({
+    terminalOptions: {
+      executeRequest: request => {
+        if (request.operation !== 'realpath') {
+          throw new Error(`unexpected deferred request: ${request.operation}`)
+        }
+        markRealpathStarted()
+        return new Promise(resolve => { resolveRealpath = resolve })
+      }
+    }
+  })
+  const active = harness.capability.backend.realpath('/home/hik')
+  await realpathStarted
+
+  const release = harness.capability.release()
+  assert.equal(harness.terminal.releaseCount, 0)
+  await assertCapabilityReleased(harness.capability.backend.list('/home/hik'))
+  assert.equal(harness.terminal.releaseCount, 0)
+
+  resolveRealpath({
+    exitCode: 0,
+    identity: { uid: '0', username: 'root' },
+    kind: 'realpath',
+    text: '/home/hik'
+  })
+  assert.equal(await active, '/home/hik')
+  assert.equal(await release, true)
+  assert.equal(harness.terminal.releaseCount, 1)
+})
+
+test('release preserves the first active operation error while still closing', async () => {
+  let rejectList
+  let markListStarted
+  const listStarted = new Promise(resolve => { markListStarted = resolve })
+  const operationFailure = new Error('active list failed first')
+  const harness = await acquireWithHarness({
+    terminalOptions: { identity: { uid: '1000', username: 'hik' } },
+    sftpOptions: {
+      list () {
+        markListStarted()
+        return new Promise((resolve, reject) => { rejectList = reject })
+      }
+    }
+  })
+  const active = harness.capability.backend.list('/home/hik')
+  await listStarted
+  const release = harness.capability.release()
+  const activeRejection = assert.rejects(
+    active,
+    error => error === operationFailure
+  )
+
+  rejectList(operationFailure)
+  await activeRejection
+  assert.equal(await release, true)
+  await assertCapabilityReleased(harness.capability.backend.list('/home/hik'))
+})
+
+test('release gate wins over a later stale generation and preserves release failure', async () => {
+  let generation = 'ssh-generation-1'
+  const releaseFailure = new Error('inner release failed first')
+  const harness = await acquireWithHarness({
+    terminalOptions: {
+      endpoint: () => terminalEndpoint({ sshSessionGeneration: generation }),
+      releaseResult: releaseFailure
+    }
+  })
+  const firstRelease = harness.capability.release()
+  generation = 'ssh-generation-2'
+
+  await assert.rejects(firstRelease, error => error === releaseFailure)
+  assert.equal(harness.capability.release(), firstRelease)
+  await assertCapabilityReleased(harness.capability.backend.list('/home/hik'))
+  assert.equal(harness.terminal.releaseCount, 1)
 })
 
 test('safety transaction identity persists and strictly compares SSH generation', async () => {

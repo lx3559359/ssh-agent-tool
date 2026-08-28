@@ -52,6 +52,13 @@ export function remoteFileIdentityUnavailable (cause) {
   return error
 }
 
+function remoteFileCapabilityReleased () {
+  const error = new Error('远程文件 capability 已经释放或正在关闭。')
+  error.name = 'RemoteFileCapabilityReleasedError'
+  error.code = 'REMOTE_FILE_CAPABILITY_RELEASED'
+  return error
+}
+
 function requireProbeResult (probe) {
   if (!probe || probe.exitCode !== 0 || probe.kind !== 'probe') {
     throw new Error('远程文件身份 probe 未成功完成')
@@ -83,19 +90,39 @@ async function releasePty (pty) {
 }
 
 function createGuardedRemoteFileCapability (capability, assertCurrent) {
-  let invalidationPromise
+  let state = 'open'
+  let releasePromise
+  const activeOperations = new Set()
   const proxies = new WeakMap()
 
-  async function guardCurrent () {
+  function beginRelease (excludedOperation) {
+    if (releasePromise) return releasePromise
+    state = 'closing'
+    const pending = [...activeOperations]
+      .filter(operation => operation !== excludedOperation)
+      .map(operation => operation.settled)
+    releasePromise = (async () => {
+      await Promise.allSettled(pending)
+      try {
+        return await capability.release()
+      } finally {
+        state = 'released'
+      }
+    })()
+    return releasePromise
+  }
+
+  async function guardCurrent (operation) {
     try {
       await assertCurrent()
     } catch (cause) {
-      invalidationPromise ||= Promise.resolve(capability.release())
       let releaseError
-      try {
-        await invalidationPromise
-      } catch (error) {
-        releaseError = error
+      if (state === 'open') {
+        try {
+          await beginRelease(operation)
+        } catch (error) {
+          releaseError = error
+        }
       }
       const unavailable = remoteFileIdentityUnavailable(cause)
       if (releaseError) unavailable.releaseError = releaseError
@@ -103,16 +130,57 @@ function createGuardedRemoteFileCapability (capability, assertCurrent) {
     }
   }
 
+  function runBackendOperation (operation) {
+    if (state !== 'open') {
+      return Promise.reject(remoteFileCapabilityReleased())
+    }
+    let markSettled
+    const activeOperation = {
+      settled: new Promise(resolve => { markSettled = resolve })
+    }
+    activeOperations.add(activeOperation)
+    return (async () => {
+      try {
+        await guardCurrent(activeOperation)
+        return await operation()
+      } finally {
+        activeOperations.delete(activeOperation)
+        markSettled()
+      }
+    })()
+  }
+
   function guardBackend (backend) {
     if (!backend || typeof backend !== 'object') return backend
     if (proxies.has(backend)) return proxies.get(backend)
-    const guarded = new Proxy(backend, {
-      get (target, property, receiver) {
-        const value = Reflect.get(target, property, receiver)
+    const methodWrappers = new Map()
+    const guarded = new Proxy(Object.create(null), {
+      get (_target, property) {
+        const value = Reflect.get(backend, property, backend)
+        if (value === backend) return guarded
         if (typeof value !== 'function') return value
-        return async (...args) => {
-          await guardCurrent()
-          return Reflect.apply(value, target, args)
+        const cached = methodWrappers.get(property)
+        if (cached?.value === value) return cached.wrapper
+        const wrapper = (...args) => runBackendOperation(async () => {
+          const result = await Reflect.apply(value, backend, args)
+          return result === backend ? guarded : result
+        })
+        methodWrappers.set(property, { value, wrapper })
+        return wrapper
+      },
+      has (_target, property) {
+        return Reflect.has(backend, property)
+      },
+      ownKeys () {
+        return Reflect.ownKeys(backend)
+      },
+      getOwnPropertyDescriptor (_target, property) {
+        const descriptor = Reflect.getOwnPropertyDescriptor(backend, property)
+        if (!descriptor) return undefined
+        return {
+          configurable: true,
+          enumerable: descriptor.enumerable,
+          get: () => guarded[property]
         }
       }
     })
@@ -128,7 +196,7 @@ function createGuardedRemoteFileCapability (capability, assertCurrent) {
     ...capability,
     sftp: guardedSftp,
     backend: guardedBackend,
-    release: () => capability.release()
+    release: () => beginRelease()
   })
 }
 

@@ -37,6 +37,8 @@ function persistedSessionIdentity (overrides = {}) {
     tabId: 'tab-a',
     pid: 'pid-a',
     terminalPid: 'terminal-a',
+    sshTerminalPid: 4242,
+    sshSessionGeneration: 'ssh-generation-a',
     sessionType: 'ssh',
     host: 'srv.test',
     port: 22,
@@ -306,6 +308,8 @@ test('preserves and revalidates exact safe session identity through production h
     'port',
     'sessionDigest',
     'sessionType',
+    'sshSessionGeneration',
+    'sshTerminalPid',
     'tabId',
     'terminalPid',
     'username'
@@ -322,6 +326,8 @@ test('preserves and revalidates exact safe session identity through production h
     ['fingerprint', { hostFingerprint: 'SHA256:host-b' }],
     ['pid', { pid: 'pid-b' }],
     ['terminal pid', { terminalPid: 'terminal-b' }],
+    ['SSH terminal pid', { sshTerminalPid: 4343 }],
+    ['SSH generation', { sshSessionGeneration: 'ssh-generation-b' }],
     ['session type', { sessionType: 'telnet' }],
     ['host', { host: 'other.test' }],
     ['port', { port: 2222 }],
@@ -347,7 +353,37 @@ test('preserves and revalidates exact safe session identity through production h
       sessionDigest: undefined
     }],
     ['wrong port type', { ...persisted.sessionIdentity, port: '22' }],
-    ['wrong pid type', { ...persisted.sessionIdentity, pid: { value: 'pid-a' } }]
+    ['wrong pid type', { ...persisted.sessionIdentity, pid: { value: 'pid-a' } }],
+    ['wrong SSH pid type', { ...persisted.sessionIdentity, sshTerminalPid: '4242' }],
+    ['nonpositive SSH pid', { ...persisted.sessionIdentity, sshTerminalPid: 0 }],
+    ['unsafe SSH pid', {
+      ...persisted.sessionIdentity,
+      sshTerminalPid: Number.MAX_SAFE_INTEGER + 1
+    }],
+    ['blank SSH generation', {
+      ...persisted.sessionIdentity,
+      sshSessionGeneration: ''
+    }],
+    ['oversized SSH generation', {
+      ...persisted.sessionIdentity,
+      sshSessionGeneration: 'g'.repeat(513)
+    }],
+    ['legacy identity cannot mix with modern endpoint', (() => {
+      const identity = { ...persisted.sessionIdentity }
+      delete identity.sshTerminalPid
+      delete identity.sshSessionGeneration
+      return identity
+    })()],
+    ['partial modern identity missing SSH pid', (() => {
+      const identity = { ...persisted.sessionIdentity }
+      delete identity.sshTerminalPid
+      return identity
+    })()],
+    ['partial modern identity missing generation', (() => {
+      const identity = { ...persisted.sessionIdentity }
+      delete identity.sshSessionGeneration
+      return identity
+    })()]
   ]) {
     assert.equal(getAgentCommandFillState({
       presentation: { ...persisted, sessionIdentity },
@@ -358,6 +394,10 @@ test('preserves and revalidates exact safe session identity through production h
 
   for (const [label, currentEndpoint] of [
     ['missing current fingerprint', endpoint({ hostKeyFingerprint: undefined })],
+    ['missing current SSH pid', endpoint({ sshTerminalPid: undefined })],
+    ['missing current SSH generation', endpoint({
+      sshSessionGeneration: undefined
+    })],
     ['mismatched current endpoint digest', endpoint({
       endpointKey: 'root@other.test:22'
     })]
@@ -390,6 +430,8 @@ test('binds fill to the exact SSH session identity and rejects same-tab reconnec
   const mismatches = [
     ['pid', { pid: 'pid-b' }],
     ['terminal pid', { terminalPid: 'terminal-b' }],
+    ['SSH terminal pid only', { sshTerminalPid: 4343 }],
+    ['SSH generation only', { sshSessionGeneration: 'ssh-generation-b' }],
     ['session type', { sessionType: 'telnet' }],
     ['fingerprint', { hostKeyFingerprint: 'SHA256:host-b' }],
     ['host', { host: 'other.test' }],

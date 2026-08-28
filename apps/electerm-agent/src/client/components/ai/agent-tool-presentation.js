@@ -9,7 +9,7 @@ const MAX_OUTPUT_CHARS = 32768
 const MAX_ERROR_CHARS = 4096
 const MAX_ENDPOINT_CHARS = 512
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key)
-const sessionIdentityFields = [
+const legacySessionIdentityFields = [
   'sessionDigest',
   'hostFingerprint',
   'tabId',
@@ -19,6 +19,14 @@ const sessionIdentityFields = [
   'host',
   'port',
   'username'
+]
+const modernSessionIdentityFields = [
+  'sshTerminalPid',
+  'sshSessionGeneration'
+]
+const sessionIdentityFields = [
+  ...legacySessionIdentityFields,
+  ...modernSessionIdentityFields
 ]
 
 function boundedSanitizedText (value, maxChars) {
@@ -44,8 +52,15 @@ function projectStoredSessionIdentity (identity) {
   if (!identity || typeof identity !== 'object' || Array.isArray(identity)) {
     return null
   }
+  const hasSshTerminalPid = hasOwn(identity, 'sshTerminalPid')
+  const hasSshSessionGeneration = hasOwn(identity, 'sshSessionGeneration')
+  if (hasSshTerminalPid !== hasSshSessionGeneration) return null
+  const modern = hasSshTerminalPid && hasSshSessionGeneration
+  const fields = modern
+    ? sessionIdentityFields
+    : legacySessionIdentityFields
   const projected = {}
-  for (const field of sessionIdentityFields) {
+  for (const field of fields) {
     if (!hasOwn(identity, field)) return null
     if (field === 'port') {
       if (
@@ -55,6 +70,12 @@ function projectStoredSessionIdentity (identity) {
         identity.port > 65535
       ) return null
       projected.port = identity.port
+      continue
+    }
+    if (field === 'sshTerminalPid') {
+      if (!Number.isSafeInteger(identity.sshTerminalPid) ||
+        identity.sshTerminalPid < 1) return null
+      projected.sshTerminalPid = identity.sshTerminalPid
       continue
     }
     if (typeof identity[field] !== 'string') return null
@@ -100,6 +121,11 @@ function projectPresentationEndpoint (endpoint) {
       projected.terminalPid,
       MAX_ENDPOINT_CHARS
     ).trim(),
+    sshTerminalPid: projected.sshTerminalPid,
+    sshSessionGeneration: boundedSanitizedText(
+      projected.sshSessionGeneration,
+      MAX_ENDPOINT_CHARS
+    ).trim(),
     sessionType: boundedSanitizedText(
       projected.sessionType,
       MAX_ENDPOINT_CHARS
@@ -111,6 +137,20 @@ function projectPresentationEndpoint (endpoint) {
       MAX_ENDPOINT_CHARS
     ).trim()
   })
+}
+
+function sameStoredSessionIdentity (expected, current) {
+  const expectedModern = modernSessionIdentityFields.every(field => (
+    hasOwn(expected, field)
+  ))
+  const currentModern = modernSessionIdentityFields.every(field => (
+    hasOwn(current, field)
+  ))
+  if (expectedModern !== currentModern) return false
+  const fields = expectedModern
+    ? sessionIdentityFields
+    : legacySessionIdentityFields
+  return fields.every(field => current[field] === expected[field])
 }
 
 function formatTarget (endpoint) {
@@ -308,9 +348,7 @@ export function getAgentCommandFillState ({
     )
     if (
       !currentIdentity ||
-      sessionIdentityFields.some(field => (
-        currentIdentity[field] !== sessionIdentity[field]
-      ))
+      !sameStoredSessionIdentity(sessionIdentity, currentIdentity)
     ) throw new Error('SSH session identity changed')
   } catch {
     return denied('当前 SSH 会话与只读证据不一致')
