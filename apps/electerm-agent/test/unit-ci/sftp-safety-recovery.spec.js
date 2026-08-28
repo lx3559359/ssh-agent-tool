@@ -251,7 +251,7 @@ test('SFTP restore preserves current content before restoring a backup', async (
   const { restoreSftpRecoveryRecord } = await import(moduleUrl)
   const calls = []
   const sftp = {
-    stat: async () => ({ isDirectory: false }),
+    lstat: async () => ({ isDirectory: false }),
     mkdir: async value => calls.push(['mkdir', value]),
     rename: async (from, to) => calls.push(['rename', from, to]),
     cp: async (from, to) => calls.push(['cp', from, to])
@@ -276,6 +276,173 @@ test('SFTP restore preserves current content before restoring a backup', async (
   assert.equal(result.status, 'restored')
   assert.equal(result.rollbackStatus, 'completed')
   assert.equal(result.displacedPath, '/etc/nginx/.shellpilot-before-restore/nginx.conf-20260712-091011')
+})
+
+test('non-root SFTP restore treats a dangling symlink as existing via lstat', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const calls = []
+  let statCalls = 0
+  let lstatCalls = 0
+  const result = await restoreSftpRecoveryRecord({
+    sftp: {
+      stat: async () => {
+        statCalls += 1
+        throw Object.assign(new Error('No such file'), { code: 'ENOENT' })
+      },
+      lstat: async path => {
+        lstatCalls += 1
+        assert.equal(path, '/etc/nginx/nginx.conf')
+        return { type: 'l', mode: 0o120777, size: 12, uid: 1000, gid: 1000 }
+      },
+      mkdir: async value => calls.push(['mkdir', value]),
+      rename: async (from, to) => calls.push(['rename', from, to]),
+      cp: async (from, to) => calls.push(['cp', from, to])
+    },
+    record: {
+      id: 'dangling-symlink',
+      kind: 'backup',
+      sourcePath: '/etc/nginx/nginx.conf',
+      backupPath: '/etc/nginx/.shellpilot-backups/nginx.conf-old',
+      status: 'available'
+    },
+    now: new Date('2026-07-12T09:10:11Z')
+  })
+
+  assert.equal(statCalls, 0)
+  assert.equal(lstatCalls, 2)
+  assert.deepEqual(calls, [
+    ['mkdir', '/etc/nginx/.shellpilot-before-restore'],
+    ['rename', '/etc/nginx/nginx.conf', '/etc/nginx/.shellpilot-before-restore/nginx.conf-20260712-091011'],
+    ['cp', '/etc/nginx/.shellpilot-backups/nginx.conf-old', '/etc/nginx/nginx.conf']
+  ])
+  assert.equal(result.status, 'restored')
+})
+
+test('non-root SFTP restore only accepts authoritative source absence', async t => {
+  const failures = [
+    Object.assign(new Error('No such file: permission denied'), { code: 'EACCES' }),
+    Object.assign(new Error('connection reset'), { code: 'ECONNRESET' }),
+    Object.assign(new Error('privileged operation failed'), {
+      code: 'PRIVILEGED_FILE_OPERATION_FAILED'
+    }),
+    new Error('No such file')
+  ]
+
+  for (const failure of failures) {
+    await t.test(failure.code || 'message-only', async () => {
+      const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+      let statCalls = 0
+      let lstatCalls = 0
+      let mutations = 0
+      await assert.rejects(restoreSftpRecoveryRecord({
+        sftp: {
+          stat: async () => {
+            statCalls += 1
+            throw failure
+          },
+          lstat: async () => {
+            lstatCalls += 1
+            throw failure
+          },
+          mkdir: async () => { mutations += 1 },
+          rename: async () => { mutations += 1 },
+          cp: async () => { mutations += 1 }
+        },
+        record: {
+          id: `source-${failure.code || 'message-only'}`,
+          kind: 'backup',
+          sourcePath: '/etc/app.conf',
+          backupPath: '/etc/.shellpilot-backups/app.conf-old',
+          status: 'available'
+        }
+      }), error => error === failure)
+      assert.equal(statCalls, 0)
+      assert.equal(lstatCalls, 1)
+      assert.equal(mutations, 0)
+    })
+  }
+})
+
+test('non-root SFTP restore uses lstat for a planned displacement', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const displacedPath = '/etc/.shellpilot-before-restore/app.conf-existing'
+  const calls = []
+  let statCalls = 0
+  const result = await restoreSftpRecoveryRecord({
+    sftp: {
+      stat: async () => {
+        statCalls += 1
+        throw new Error('stat must not be used for recovery presence checks')
+      },
+      lstat: async path => {
+        if (path === '/etc/app.conf') {
+          throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+        }
+        assert.equal(path, displacedPath)
+        return { type: 'l', mode: 0o120777, size: 9, uid: 1000, gid: 1000 }
+      },
+      rename: async (from, to) => calls.push(['rename', from, to]),
+      cp: async (from, to) => calls.push(['cp', from, to])
+    },
+    record: {
+      id: 'planned-dangling-symlink',
+      kind: 'backup',
+      sourcePath: '/etc/app.conf',
+      backupPath: '/etc/.shellpilot-backups/app.conf-old',
+      status: 'uncertain',
+      displacement: {
+        path: displacedPath,
+        descriptor: { type: 'file', inode: '42' },
+        status: 'planned'
+      }
+    },
+    persistRecord: async value => value
+  })
+
+  assert.equal(statCalls, 0)
+  assert.deepEqual(calls, [[
+    'cp',
+    '/etc/.shellpilot-backups/app.conf-old',
+    '/etc/app.conf'
+  ]])
+  assert.equal(result.status, 'restored')
+  assert.equal(result.displacedPath, displacedPath)
+})
+
+test('non-root SFTP restore only accepts authoritative planned displacement absence', async () => {
+  const { restoreSftpRecoveryRecord } = await import(moduleUrl)
+  const failure = Object.assign(new Error('No such file: permission denied'), {
+    code: 'EACCES'
+  })
+  const displacedPath = '/etc/.shellpilot-before-restore/app.conf-existing'
+  let mutations = 0
+  await assert.rejects(restoreSftpRecoveryRecord({
+    sftp: {
+      lstat: async path => {
+        if (path === '/etc/app.conf') {
+          throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+        }
+        assert.equal(path, displacedPath)
+        throw failure
+      },
+      rename: async () => { mutations += 1 },
+      cp: async () => { mutations += 1 }
+    },
+    record: {
+      id: 'planned-permission-error',
+      kind: 'backup',
+      sourcePath: '/etc/app.conf',
+      backupPath: '/etc/.shellpilot-backups/app.conf-old',
+      status: 'uncertain',
+      displacement: {
+        path: displacedPath,
+        descriptor: { type: 'file', inode: '42' },
+        status: 'planned'
+      }
+    },
+    persistRecord: async value => value
+  }), error => error === failure)
+  assert.equal(mutations, 0)
 })
 
 test('root recovery installs a deleted target with exact proof and no path-only mutation', async () => {
@@ -2258,7 +2425,7 @@ test('SFTP restore persists displacement before moving current content and expos
   const primaryCause = new Error('primary restore failed')
   const rollbackCause = new Error('compensation failed')
   const sftp = {
-    stat: async () => ({ isDirectory: false }),
+    lstat: async () => ({ isDirectory: false }),
     mkdir: async () => {},
     rename: async (from, to) => {
       if (from === displacedPath && to === '/etc/nginx/nginx.conf') {
@@ -2351,7 +2518,7 @@ test('successful restore compensation clears active displacement before a later 
   }
   const error = await restoreSftpRecoveryRecord({
     sftp: {
-      stat: async () => ({ mode: 0o600, uid: 0, gid: 0, size: 4 }),
+      lstat: async () => ({ mode: 0o600, uid: 0, gid: 0, size: 4 }),
       mkdir: async () => {},
       rename: async () => {},
       cp: async () => { throw primaryCause }
@@ -2396,8 +2563,10 @@ test('SFTP rename recovery moves the renamed entry back to its original path', a
   const { restoreSftpRecoveryRecord } = await import(moduleUrl)
   const calls = []
   const sftp = {
-    stat: async target => {
-      if (target.endsWith('/old.conf')) throw new Error('No such file')
+    lstat: async target => {
+      if (target.endsWith('/old.conf')) {
+        throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+      }
       return { isDirectory: false }
     },
     rename: async (from, to) => calls.push(['rename', from, to])

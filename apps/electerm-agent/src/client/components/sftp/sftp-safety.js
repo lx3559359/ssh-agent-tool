@@ -664,11 +664,10 @@ export async function restoreSftpRecoveryRecord ({
       : false
     if (!proofBound) {
       try {
-        await sftp.stat(record.sourcePath)
+        await sftp.lstat(record.sourcePath)
         sourceExists = true
       } catch (err) {
-        const message = String(err?.message || err)
-        if (!/no such|not found|does not exist/i.test(message)) throw err
+        if (!isAuthoritativeRemoteMissingError(err)) throw err
       }
     }
     if (sourceExists) {
@@ -996,7 +995,7 @@ export async function restoreSftpRecoveryRecord ({
         await persist({ ...currentRecord, displacement })
       } else {
         try {
-          await sftp.stat(displacedPath)
+          await sftp.lstat(displacedPath)
           displacement = {
             ...displacement,
             status: 'displaced',
@@ -1004,8 +1003,7 @@ export async function restoreSftpRecoveryRecord ({
           }
           await persist({ ...currentRecord, displacement })
         } catch (err) {
-          const message = String(err?.message || err)
-          if (/no such|not found|does not exist/i.test(message)) {
+          if (isAuthoritativeRemoteMissingError(err)) {
             throw createSftpRecoveryUncertainError({
               message: 'SFTP 恢复位移状态无法确认，需要人工核对。',
               displacedPath,
