@@ -130,24 +130,53 @@ class Sftp {
   async destroy () {
     const { ws } = this
     if (!ws) return
-    if (!ws.closed) {
-      const uid = `sftp-destroy:${generate()}`
-      await Promise.race([
-        new Promise(resolve => {
-          Promise.resolve(ws.once(resolve, uid)).then(() => {
-            ws.s({
-              action: 'sftp-destroy',
-              id: this.id,
-              uid,
-              terminalId: this.terminalId
-            })
-          }).catch(resolve)
-        }),
-        wait(1500)
-      ])
+    let primaryError
+    try {
+      if (!ws.closed) {
+        const uid = `sftp-destroy:${generate()}`
+        await Promise.race([
+          new Promise((resolve, reject) => {
+            Promise.resolve(ws.once(result => {
+              if (result?.error) {
+                reject(reconstructSftpError(
+                  result.error,
+                  'SFTP teardown failed'
+                ))
+                return
+              }
+              resolve(result?.data)
+            }, uid)).then(() => {
+              ws.s({
+                action: 'sftp-destroy',
+                id: this.id,
+                uid,
+                terminalId: this.terminalId
+              })
+            }).catch(reject)
+          }),
+          wait(1500)
+        ])
+      }
+    } catch (error) {
+      primaryError = error
     }
-    ws.close()
-    delete this.ws
+    try {
+      ws.close()
+    } catch (error) {
+      if (!primaryError) {
+        primaryError = error
+      } else if (primaryError !== error && Object.isExtensible(primaryError)) {
+        primaryError.cleanupErrors = Object.freeze([
+          ...(Array.isArray(primaryError.cleanupErrors)
+            ? primaryError.cleanupErrors
+            : []),
+          error
+        ])
+      }
+    } finally {
+      delete this.ws
+    }
+    if (primaryError) throw primaryError
   }
 }
 

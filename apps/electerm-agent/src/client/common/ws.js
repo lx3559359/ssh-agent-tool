@@ -9,9 +9,31 @@ import { pick } from 'lodash-es'
 const onces = {}
 const wss = {}
 const persists = {}
+const abandonedCreates = new Map()
+const wsStartTimeoutMs = 10000
+const abandonedCreateRetentionMs = wsStartTimeoutMs * 2
 
 function send (data) {
   window.worker.postMessage(data)
+}
+
+function websocketAbortError (signal) {
+  if (signal?.reason instanceof Error) return signal.reason
+  const error = new Error('WebSocket startup was aborted')
+  error.name = 'AbortError'
+  return error
+}
+
+function closeAbandonedCreate (id) {
+  send({ action: 'close', wsId: id })
+  const previous = abandonedCreates.get(id)
+  if (previous) clearTimeout(previous)
+  const timer = setTimeout(() => {
+    if (abandonedCreates.get(id) === timer) {
+      abandonedCreates.delete(id)
+    }
+  }, abandonedCreateRetentionMs)
+  abandonedCreates.set(id, timer)
 }
 
 class Ws {
@@ -139,6 +161,12 @@ function onEvent (e) {
     action,
     persist
   } = e.data
+  if (action === 'create' && abandonedCreates.has(id)) {
+    clearTimeout(abandonedCreates.get(id))
+    abandonedCreates.delete(id)
+    send({ action: 'close', wsId: id })
+    return
+  }
   if (wss[id] && action === 'close') {
     const ws = wss[id]
     ws.onclose()
@@ -148,6 +176,11 @@ function onEvent (e) {
       ws.clearOnces()
       delete wss[id]
     }
+    return
+  }
+  if (action === 'close' && typeof onces[id]?.reject === 'function') {
+    onces[id].reject(new Error('WebSocket closed before startup completed'))
+    delete onces[id]
     return
   }
   if (persists[id]) {
@@ -170,7 +203,16 @@ function onEvent (e) {
 
 window.worker.addEventListener('message', onEvent)
 
-export default (type, id, sftpId = '', persist, port) => {
+export default (type, id, sftpId = '', persist, port, options = {}) => {
+  const signal = options?.signal
+  if (signal !== undefined && (
+    !signal || typeof signal.aborted !== 'boolean' ||
+    typeof signal.addEventListener !== 'function' ||
+    typeof signal.removeEventListener !== 'function'
+  )) {
+    return Promise.reject(new Error('WebSocket startup signal is invalid'))
+  }
+  if (signal?.aborted) return Promise.reject(websocketAbortError(signal))
   const opts = pick(window.store.config, [
     'host',
     'port',
@@ -181,21 +223,51 @@ export default (type, id, sftpId = '', persist, port) => {
   if (port) {
     opts.port = port
   }
-  return new Promise((resolve) => {
-    send({
-      id,
-      action: 'create',
-      persist,
-      type,
-      args: [
-        type,
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let sentCreate = false
+    const finish = (callback, value) => {
+      if (settled) return false
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener?.('abort', onAbort)
+      if (onces[id] === entry) delete onces[id]
+      callback(value)
+      return true
+    }
+    const fail = error => {
+      if (!finish(reject, error)) return
+      if (sentCreate) closeAbandonedCreate(id)
+    }
+    const onAbort = () => fail(websocketAbortError(signal))
+    const entry = {
+      resolve: ws => {
+        if (!finish(resolve, ws)) ws?.close?.()
+      },
+      reject: error => finish(reject, error)
+    }
+    const timer = setTimeout(() => {
+      fail(new Error(`WebSocket startup timed out after ${wsStartTimeoutMs}ms`))
+    }, wsStartTimeoutMs)
+    onces[id] = entry
+    signal?.addEventListener?.('abort', onAbort, { once: true })
+    try {
+      sentCreate = true
+      send({
         id,
-        sftpId,
-        opts
-      ]
-    })
-    onces[id] = {
-      resolve
+        action: 'create',
+        persist,
+        type,
+        args: [
+          type,
+          id,
+          sftpId,
+          opts
+        ]
+      })
+      if (signal?.aborted) onAbort()
+    } catch (error) {
+      fail(error)
     }
   })
 }

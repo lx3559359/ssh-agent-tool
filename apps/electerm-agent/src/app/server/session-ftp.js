@@ -5,6 +5,10 @@ const { readRemoteFile, writeRemoteFile } = require('./ftp-file')
 const { Readable, PassThrough } = require('stream')
 const { posix: path } = require('path')
 const globalState = require('./global-state')
+const {
+  appendSessionCleanupError,
+  destroySessionTransfers
+} = require('./session-transfer-teardown')
 
 const trustedFtpEntryTypes = new Set([1, 2, 3])
 const authoritativeRemoteMissingCodes = new Set([
@@ -94,6 +98,29 @@ class Ftp extends TerminalBase {
     })
     this.transfers = {}
     super.onEndConn()
+  }
+
+  async destroyGracefully () {
+    if (this.destroyPromise) return this.destroyPromise
+    this.destroyPromise = (async () => {
+      let primaryError
+      try {
+        await destroySessionTransfers(this)
+      } catch (error) {
+        primaryError = error
+      } finally {
+        delete this.initOptions
+        try {
+          this.onEndConn()
+        } catch (error) {
+          if (primaryError) appendSessionCleanupError(primaryError, error)
+          else primaryError = error
+        }
+      }
+      if (primaryError) throw primaryError
+      return true
+    })()
+    return this.destroyPromise
   }
 
   async getHomeDir () {

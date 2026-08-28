@@ -44,9 +44,16 @@ function onDestroySftp (id, graceful = false) {
 
 function onDestroyTransfer (id, sftpId) {
   const sftpInst = sftp(sftpId)
-  const inst = transfer(id, sftpId)
-  inst && inst.destroy && inst.destroy()
-  sftpInst && delete sftpInst.transfers[id]
+  const inst = sftpInst?.transfers?.[id]
+  if (!inst) return Promise.resolve(true)
+  return Promise.resolve()
+    .then(() => inst.destroy?.())
+    .finally(() => {
+      if (sftpInst.transfers?.[id] === inst) {
+        delete sftpInst.transfers[id]
+      }
+    })
+    .then(() => true)
 }
 
 function cleanAllSessions () {

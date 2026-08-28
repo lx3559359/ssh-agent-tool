@@ -9,7 +9,7 @@ const {
   terminals,
   cleanAllSessions
 } = require('./remote-common')
-const { Transfer } = require('./transfer')
+const { Transfer, transferKeys } = require('./transfer')
 const { Transfer: FtpTransfer } = require('./ftp-transfer')
 const app = express()
 const log = require('../common/log')
@@ -343,7 +343,9 @@ if (type === 'rdp') {
     wsDec(ws)
     const { id } = req.params
     ws.on('close', () => {
-      onDestroySftp(id)
+      Promise.resolve(onDestroySftp(id, true)).catch(error => {
+        log.error('SFTP websocket teardown failed', error)
+      })
     })
     ws.on('message', (message) => {
       const msg = JSON.parse(message)
@@ -396,9 +398,19 @@ if (type === 'rdp') {
       } else if (action === 'sftp-destroy') {
         const { id, uid } = msg
         Promise.resolve(onDestroySftp(id, true))
-          .catch(() => {})
-          .finally(() => {
+          .then(() => {
             if (uid) ws.s({ id: uid, data: true })
+          })
+          .catch(error => {
+            log.error('graceful SFTP teardown failed', error)
+            if (uid) {
+              ws.s({
+                id: uid,
+                error: projectSftpError(error)
+              })
+            }
+          })
+          .finally(() => {
             ws.close()
           })
       }
@@ -410,48 +422,100 @@ if (type === 'rdp') {
   app.ws('/transfer/:id', (ws, req) => {
     verify(req)
     wsDec(ws)
-    const { id } = req.params
-    const { sftpId } = req.query
+    const routeId = String(req.params.id || '')
+    const routeSftpId = String(req.query.sftpId || '')
+    const routeSession = sftp(routeSftpId)
+    const transferControlKeys = new Set(transferKeys)
+
+    const assertRouteBinding = msg => {
+      if (!routeId || !routeSftpId || msg?.id !== routeId ||
+        msg?.sftpId !== routeSftpId) {
+        throw new Error('Transfer route identity does not match the message')
+      }
+      if (!routeSession || sftp(routeSftpId) !== routeSession) {
+        throw new Error('Transfer route session is no longer active')
+      }
+      return routeSession
+    }
+
+    const sendTransferError = error => {
+      ws.s({
+        id: `transfer:err:${routeId}`,
+        error: { message: error?.message || String(error) }
+      })
+    }
 
     ws.on('close', () => {
-      onDestroyTransfer(id, sftpId)
+      const active = transfer(routeId, routeSftpId)
+      if (!active || active.ws !== ws) return
+      Promise.resolve(onDestroyTransfer(routeId, routeSftpId)).catch(error => {
+        log.error('transfer websocket cleanup failed', error)
+      })
     })
 
     ws.on('message', (message) => {
-      const msg = JSON.parse(message)
+      let msg
+      try {
+        msg = JSON.parse(message)
+      } catch (error) {
+        sendTransferError(error)
+        return
+      }
+      if (!msg || typeof msg !== 'object' || Array.isArray(msg)) {
+        sendTransferError(new Error('Transfer message must be an object'))
+        return
+      }
       const { action } = msg
 
       if (action === 'transfer-new') {
-        const { sftpId, id, isFtp } = msg
-        const session = sftp(sftpId)
-        const encode = session.initOptions?.encode || 'utf8'
-        const opts = Object.assign({}, msg, {
-          sftp: session.sftp,
-          conn: session.client,
-          ftpSession: isFtp ? session : null,
-          sftpId,
-          ws,
-          encode
-        })
-        const Cls = isFtp ? FtpTransfer : Transfer
-        transfer(id, sftpId, new Cls(opts))
+        try {
+          const session = assertRouteBinding(msg)
+          if (transfer(routeId, routeSftpId)) {
+            log.warn('ignored duplicate transfer startup', routeId)
+            return
+          }
+          const isFtp = session instanceof Ftp || session.type === 'ftp'
+          const encode = session.initOptions?.encode || 'utf8'
+          const opts = {
+            ...msg,
+            id: routeId,
+            sftp: session.sftp,
+            conn: session.client,
+            ftpSession: isFtp ? session : null,
+            isFtp,
+            sftpId: routeSftpId,
+            ws,
+            encode
+          }
+          const Cls = isFtp ? FtpTransfer : Transfer
+          transfer(routeId, routeSftpId, new Cls(opts))
+        } catch (error) {
+          sendTransferError(error)
+        }
       } else if (action === 'transfer-func') {
-        const { id, func, args, sftpId, controlId } = msg
+        const { func, args, controlId } = msg
         const acknowledge = async () => {
           try {
-            const instance = transfer(id, sftpId)
+            assertRouteBinding(msg)
+            if (!transferControlKeys.has(func)) {
+              throw new Error(`Transfer control is unavailable: ${func}`)
+            }
+            if (!Array.isArray(args) || args.length !== 0) {
+              throw new Error('Transfer controls do not accept arguments')
+            }
+            const instance = transfer(routeId, routeSftpId)
             const operation = instance?.[func]
             if (typeof operation !== 'function') {
               throw new Error(`Transfer control is unavailable: ${func}`)
             }
-            await Promise.resolve(operation.apply(instance, args))
+            await Promise.resolve(operation.call(instance))
             ws.s({
-              id: `transfer:control:${id}:${controlId}`,
+              id: `transfer:control:${routeId}:${controlId}`,
               data: { ok: true }
             })
           } catch (error) {
             ws.s({
-              id: `transfer:control:${id}:${controlId}`,
+              id: `transfer:control:${routeId}:${controlId}`,
               data: {
                 ok: false,
                 error: { message: error?.message || String(error) }

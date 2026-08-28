@@ -25,6 +25,10 @@ const {
 const { searchTextReader } = require('../common/log-search')
 const globalState = require('./global-state')
 const {
+  appendSessionCleanupError,
+  destroySessionTransfers
+} = require('./session-transfer-teardown')
+const {
   assertSftpCopyTargetOutsideSource,
   consumeSftpCopyActualBytes,
   consumeSftpCopyBudget,
@@ -229,16 +233,29 @@ class Sftp extends TerminalBase {
   async destroyGracefully () {
     if (this.destroyPromise) return this.destroyPromise
     this.destroyPromise = (async () => {
-      const keys = Object.keys(this.transfers || {})
-      for (const key of keys) {
-        const transfer = this.transfers[key]
-        transfer && transfer.destroy && transfer.destroy()
-        delete this.transfers[key]
+      let primaryError
+      try {
+        await destroySessionTransfers(this)
+      } catch (error) {
+        primaryError = error
       }
-      await closeSftpChannel(this.sftp)
-      delete this.sftp
-      delete this.initOptions
-      this.onEndConn()
+      try {
+        await closeSftpChannel(this.sftp)
+      } catch (error) {
+        if (primaryError) appendSessionCleanupError(primaryError, error)
+        else primaryError = error
+      } finally {
+        delete this.sftp
+        delete this.initOptions
+        try {
+          this.onEndConn()
+        } catch (error) {
+          if (primaryError) appendSessionCleanupError(primaryError, error)
+          else primaryError = error
+        }
+      }
+      if (primaryError) throw primaryError
+      return true
     })()
     return this.destroyPromise
   }

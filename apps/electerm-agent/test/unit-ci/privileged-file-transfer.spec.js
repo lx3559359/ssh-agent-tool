@@ -788,6 +788,32 @@ test('privileged transfer pause resume and cancel never carry file bytes through
   await harness.backend.release()
 })
 
+test('privileged upload and download forward lifecycle abort to native startup', async () => {
+  const uploadHarness = await createPrivilegedBackendHarness()
+  const uploadController = new AbortController()
+  await uploadHarness.backend.backend.upload({
+    localPath: 'C:\\tmp\\signal-upload.bin',
+    remotePath: '/root/signal-upload.bin',
+    signal: uploadController.signal
+  })
+  const nativeUpload = await uploadHarness.uploadGate.promise
+  assert.equal(nativeUpload.signal, uploadController.signal)
+  await nativeUpload.onError(new Error('finish upload signal test'))
+  await uploadHarness.backend.release()
+
+  const downloadHarness = await createPrivilegedBackendHarness()
+  const downloadController = new AbortController()
+  await downloadHarness.backend.backend.download({
+    localPath: 'C:\\tmp\\signal-download.bin',
+    remotePath: '/root/source.bin',
+    signal: downloadController.signal
+  })
+  const nativeDownload = await downloadHarness.downloadGate.promise
+  assert.equal(nativeDownload.signal, downloadController.signal)
+  await nativeDownload.onError(new Error('finish download signal test'))
+  await downloadHarness.backend.release()
+})
+
 test('privileged download export failure never starts native transfer', async () => {
   const harness = await createPrivilegedBackendHarness({ exportFailure: true })
   await assert.rejects(harness.backend.backend.download({
@@ -873,6 +899,10 @@ test('Transfer pins one effective session before remote checks and releases afte
     __dirname,
     '../../src/client/components/file-transfer/transfer.jsx'
   ), 'utf8')
+  const cancellationLifecycle = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/file-transfer/transfer-cancellation-lifecycle.js'
+  ), 'utf8')
   const init = source.slice(
     source.indexOf('initTransfer = async'),
     source.indexOf('checkConflict = async')
@@ -940,6 +970,9 @@ test('Transfer pins one effective session before remote checks and releases afte
   assert.doesNotMatch(mkdir, /sftp\.mkdir\(toPath\)[\s\S]*\.catch\(\(\) => false\)/)
   assert.match(source, /componentWillUnmount[\s\S]*releaseRemoteFileSession/)
   assert.match(unmount, /finally[\s\S]*releaseRemoteFileSession/)
-  assert.match(cancelProtected, /finally[\s\S]*releaseRemoteFileSession/)
-  assert.match(cancelAndWait, /finally[\s\S]*releaseRemoteFileSession/)
+  assert.match(cancelProtected, /settleTransferCancellation/)
+  assert.match(cancelProtected, /release:\s*\(\) => this\.releaseRemoteFileSession/)
+  assert.match(cancelAndWait, /settleTransferCancellation/)
+  assert.match(cancelAndWait, /release:\s*\(\) => this\.releaseRemoteFileSession/)
+  assert.match(cancellationLifecycle, /finally[\s\S]*release/)
 })

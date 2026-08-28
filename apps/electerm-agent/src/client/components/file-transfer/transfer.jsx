@@ -56,6 +56,12 @@ import {
   buildTransferResumeCheckpoint,
   buildTransferResumeOptions
 } from './transfer-resume.js'
+import {
+  destroyTransferHandles,
+  preserveTransferCleanupError,
+  settleStaleTransferHandle
+} from './transfer-cleanup.js'
+import { settleTransferCancellation } from './transfer-cancellation-lifecycle.js'
 import './transfer.styl'
 
 const { assign } = Object
@@ -218,18 +224,18 @@ export default class TransportAction extends Component {
         try {
           await this.destroySubTransports()
         } catch (error) {
-          primaryError ||= error
+          primaryError = preserveTransferCleanupError(primaryError, error)
         }
         try {
           await this.transferSafety.dispose()
         } catch (error) {
-          primaryError ||= error
+          primaryError = preserveTransferCleanupError(primaryError, error)
         }
       } finally {
         try {
           await this.releaseRemoteFileSession()
         } catch (error) {
-          primaryError ||= error
+          primaryError = preserveTransferCleanupError(primaryError, error)
         }
       }
       if (primaryError) throw primaryError
@@ -542,6 +548,17 @@ export default class TransportAction extends Component {
       }
     }
     try {
+      await this.stopTransport('completed')
+    } catch (error) {
+      failed = true
+      update = {
+        ...update,
+        status: 'exception',
+        error: update.error || error.message
+      }
+      window.store.onError(error)
+    }
+    try {
       const completed = await this.transferSafety.complete({
         exitCode: failed ? 1 : 0
       })
@@ -695,18 +712,28 @@ export default class TransportAction extends Component {
     this.retryTimer = null
     const transport = this.transport
     this.transport = null
-    if (reason === 'cancelled') {
-      await transport?.cancel()
-    } else if (reason === 'interrupted') {
-      await transport?.interrupt()
+    let primaryError
+    try {
+      if (reason === 'cancelled') {
+        await transport?.cancel()
+      } else if (reason === 'interrupted') {
+        await transport?.interrupt()
+      }
+    } catch (error) {
+      primaryError = error
     }
-    await this.destroySubTransports()
+    try {
+      await this.destroySubTransports()
+    } catch (error) {
+      primaryError = preserveTransferCleanupError(primaryError, error)
+    }
+    if (primaryError) throw primaryError
   }
 
   destroySubTransports = async () => {
     const transports = [...this.subTransports]
     this.subTransports.clear()
-    await Promise.allSettled(transports.map(transport => transport?.destroy()))
+    await destroyTransferHandles(transports)
   }
 
   removeTransferFromQueue = async () => {
@@ -744,68 +771,56 @@ export default class TransportAction extends Component {
   }
 
   cancelProtectedTransport = async () => {
-    let primaryError
-    try {
-      try {
+    return settleTransferCancellation({
+      stopTransport: () => this.stopTransport('cancelled'),
+      cancelSafety: null,
+      finishTransfer: () => this.finishTransfer(),
+      markCancelled: async () => {
         this.recordTransferBatchResult(this.props.transfer, {
           status: 'cancelled'
         })
         await this.runTransferTask('onCancelled')
-        await this.finishTransfer(undefined, 'cancelled')
-      } catch (error) {
-        primaryError = error
-      }
-    } finally {
-      try {
-        await this.releaseRemoteFileSession()
-      } catch (error) {
-        primaryError ||= error
-      }
-    }
-    if (primaryError) throw primaryError
+      },
+      markFailed: error => this.runTransferTask(
+        'onFailed',
+        error?.message || 'SFTP cancellation failed'
+      ),
+      release: () => this.releaseRemoteFileSession()
+    })
   }
 
   cancelAndWait = () => {
     if (this.cancellationPromise) return this.cancellationPromise
     this.userCancelling = true
-    this.cancellationPromise = (async () => {
-      let primaryError
-      try {
-        try {
-          const transport = this.transport
-          this.transport = null
-          await transport?.cancel()
-          await this.transferSafety.cancel()
-        } catch (error) {
-          primaryError = error
-        }
-        try {
-          await this.notifyAgentRiskTerminal({
-            status: 'cancelled',
-            remoteState: 'unknown',
-            transferId: this.props.transfer.id
-          })
-        } catch (error) {
-          primaryError ||= error
-        }
-        try {
-          this.recordTransferBatchResult(this.props.transfer, {
-            status: 'cancelled'
-          })
-          await this.runTransferTask('onCancelled')
-          await this.finishTransfer(undefined, 'cancelled')
-        } catch (error) {
-          primaryError ||= error
-        }
-      } finally {
-        try {
-          await this.releaseRemoteFileSession()
-        } catch (error) {
-          primaryError ||= error
-        }
-      }
-      if (primaryError) throw primaryError
-    })()
+    this.cancellationPromise = settleTransferCancellation({
+      stopTransport: () => this.stopTransport('cancelled'),
+      cancelSafety: () => this.transferSafety.cancel(),
+      finishTransfer: () => this.finishTransfer(),
+      markCancelled: async () => {
+        await this.notifyAgentRiskTerminal({
+          status: 'cancelled',
+          remoteState: 'unknown',
+          transferId: this.props.transfer.id
+        })
+        this.recordTransferBatchResult(this.props.transfer, {
+          status: 'cancelled'
+        })
+        await this.runTransferTask('onCancelled')
+      },
+      markFailed: async error => {
+        await this.notifyAgentRiskTerminal({
+          status: 'failed',
+          remoteState: 'unknown',
+          error: error?.message || 'SFTP cancellation failed',
+          transferId: this.props.transfer.id
+        })
+        await this.runTransferTask(
+          'onFailed',
+          error?.message || 'SFTP cancellation failed'
+        )
+      },
+      release: () => this.releaseRemoteFileSession()
+    })
     return this.cancellationPromise
   }
 
@@ -973,7 +988,12 @@ export default class TransportAction extends Component {
         onEnd: handleEnd
       })
       if (!this.transferAttempts.isCurrent(attemptToken)) {
-        transport?.destroy()
+        const staleError = new Error('传输尝试已失效。')
+        staleError.code = 'STALE_TRANSFER_ATTEMPT'
+        await settleStaleTransferHandle(transport, staleError)
+        if (staleError.cleanupErrors?.length) {
+          window.store.onError(staleError.cleanupErrors[0])
+        }
         return
       }
       this.transport = transport
@@ -1366,11 +1386,14 @@ export default class TransportAction extends Component {
     return new Promise((resolve, reject) => {
       let transport
 
-      const onSubEnd = () => {
+      const onSubEnd = async () => {
         if (!this.transferAttempts.isCurrent(attemptToken)) {
-          transport?.destroy()
           const error = new Error('传输尝试已失效。')
           error.code = 'STALE_TRANSFER_ATTEMPT'
+          const staleTransport = transport
+          if (staleTransport) this.subTransports.delete(staleTransport)
+          transport = null
+          await settleStaleTransferHandle(staleTransport, error)
           return reject(error)
         }
         if (transport) {
@@ -1407,11 +1430,11 @@ export default class TransportAction extends Component {
         onData: () => {},
         onError: onSubError,
         onEnd: onSubEnd
-      }).then(transportInstance => {
+      }).then(async transportInstance => {
         if (!this.transferAttempts.isCurrent(attemptToken)) {
-          transportInstance?.destroy()
           const error = new Error('传输尝试已失效。')
           error.code = 'STALE_TRANSFER_ATTEMPT'
+          await settleStaleTransferHandle(transportInstance, error)
           reject(error)
           return
         }

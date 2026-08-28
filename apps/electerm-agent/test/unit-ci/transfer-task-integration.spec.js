@@ -49,7 +49,7 @@ test('strict local source verification resolves prebound descriptors without res
   assert.doesNotMatch(verifyBody, /transfer\.sourceDescriptor\s*=\s*null/)
 })
 
-test('transfer cancellation paths finalize batch results before queue teardown', () => {
+test('transfer cancellation publishes success only after queue teardown', () => {
   const source = read('src/client/components/file-transfer/transfer.jsx')
   const cancelProtectedBody = sliceBody(
     source,
@@ -71,13 +71,14 @@ test('transfer cancellation paths finalize batch results before queue teardown',
     /recordTransferBatchResult\(\s*this\.props\.transfer,\s*\{\s*status:\s*'cancelled'/s
   )
   assert.ok(
-    cancelProtectedBody.indexOf('recordTransferBatchResult') <
-      cancelProtectedBody.indexOf('finishTransfer')
+    cancelProtectedBody.indexOf('finishTransfer') <
+      cancelProtectedBody.indexOf('recordTransferBatchResult')
   )
   assert.ok(
-    cancelAndWaitBody.indexOf('recordTransferBatchResult') <
-      cancelAndWaitBody.indexOf('finishTransfer')
+    cancelAndWaitBody.indexOf('finishTransfer') <
+      cancelAndWaitBody.indexOf('recordTransferBatchResult')
   )
+  assert.match(cancelAndWaitBody, /markFailed:[\s\S]*status:\s*'failed'/)
 })
 
 test('batch result recording ignores legacy transfers before claiming the exactly-once flag', () => {

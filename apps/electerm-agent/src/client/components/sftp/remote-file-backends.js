@@ -2712,6 +2712,7 @@ export async function createPrivilegedFileBackend ({
         const inner = await sftp.upload({
           localPath,
           remotePath: ownedStage.stage.path,
+          signal,
           isDirectory: false,
           options: {
             mode: 0o600,
@@ -2789,6 +2790,7 @@ export async function createPrivilegedFileBackend ({
         const inner = await sftp.download({
           localPath,
           remotePath: ownedStage.stage.path,
+          signal,
           isDirectory: false,
           options,
           ...proxy.callbacks

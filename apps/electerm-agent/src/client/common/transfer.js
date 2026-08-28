@@ -7,6 +7,74 @@ import initWs from './ws'
 
 const keys = window.pre.transferKeys
 const transferControlAckTimeout = 15000
+const transferStartTimeout = 15000
+
+function transferStartAbortError (signal) {
+  if (signal?.reason instanceof Error) return signal.reason
+  const error = new Error('Transfer startup was aborted')
+  error.name = 'AbortError'
+  return error
+}
+
+function throwIfTransferStartAborted (signal) {
+  if (signal?.aborted) throw transferStartAbortError(signal)
+}
+
+function closeLateTransferSocket (ws) {
+  try {
+    ws?.close?.()
+  } catch (error) {
+    console.warn('Failed to close a late transfer websocket', error)
+  }
+}
+
+function startTransferWebSocket (start, signal, onStop) {
+  throwIfTransferStartAborted(signal)
+  const startupController = new AbortController()
+  const started = Promise.resolve().then(() => start(
+    startupController.signal
+  ))
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (callback, value) => {
+      if (settled) return false
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener?.('abort', onAbort)
+      callback(value)
+      return true
+    }
+    const stop = error => {
+      if (!startupController.signal.aborted) startupController.abort(error)
+      onStop?.()
+    }
+    const onAbort = () => {
+      const error = transferStartAbortError(signal)
+      stop(error)
+      finish(reject, error)
+    }
+    const timer = setTimeout(() => {
+      const error = new Error(
+        `Transfer startup timed out after ${transferStartTimeout}ms`
+      )
+      stop(error)
+      finish(reject, error)
+    }, transferStartTimeout)
+    signal?.addEventListener?.('abort', onAbort, { once: true })
+    started.then(
+      ws => {
+        if (!finish(resolve, ws)) {
+          onStop?.()
+          closeLateTransferSocket(ws)
+        }
+      },
+      error => {
+        finish(reject, error)
+      }
+    )
+    if (signal?.aborted) onAbort()
+  })
+}
 
 class Transfer {
   async init ({
@@ -14,8 +82,10 @@ class Transfer {
     onEnd,
     onError,
     onPaused,
+    signal,
     ...rest
   }) {
+    throwIfTransferStartAborted(signal)
     const id = generate()
     this.id = id
     const th = this
@@ -25,104 +95,122 @@ class Transfer {
       isFtp,
       port
     } = rest
-    const ws = await initWs('transfer', id, sftpId, undefined, port)
-    this.pendingControls = new Map()
-    this.terminalSeen = false
-    this.terminalControlRequested = false
-    const maybeDestroy = () => {
-      if ((this.terminalSeen || this.terminalControlRequested) &&
-        this.pendingControls.size === 0) {
-        th.onDestroy(ws)
-      }
-    }
-    keys.forEach(func => {
-      th[func] = (...args) => {
-        const controlId = generate()
-        const terminalControl = ['cancel', 'interrupt', 'destroy'].includes(func)
-        if (terminalControl) th.terminalControlRequested = true
-        const acknowledgement = new Promise((resolve, reject) => {
-          const settle = (error, value) => {
-            const pending = th.pendingControls.get(controlId)
-            if (!pending) return
-            clearTimeout(pending.timer)
-            th.pendingControls.delete(controlId)
-            if (error) reject(error)
-            else resolve(value)
-            maybeDestroy()
+    let ws
+    await startTransferWebSocket(async startupSignal => {
+      ws = await initWs(
+        'transfer', id, sftpId, undefined, port, { signal: startupSignal }
+      )
+      try {
+        throwIfTransferStartAborted(startupSignal)
+        this.pendingControls = new Map()
+        this.terminalSeen = false
+        this.terminalControlRequested = false
+        const maybeDestroy = () => {
+          if ((this.terminalSeen || this.terminalControlRequested) &&
+            this.pendingControls.size === 0) {
+            th.onDestroy(ws)
           }
-          const timer = setTimeout(() => {
-            settle(new Error(`Transfer control acknowledgement timed out: ${func}`))
-          }, transferControlAckTimeout)
-          th.pendingControls.set(controlId, { reject, timer })
-          if (ws.closed) {
-            settle(new Error('Transfer connection closed before control acknowledgement'))
-            return
-          }
-          Promise.resolve(ws.once((result) => {
-            if (result?.ok !== true) {
-              settle(new Error(
-                result?.error?.message || 'Transfer control failed'
+        }
+        keys.forEach(func => {
+          th[func] = (...args) => {
+            if (args.length !== 0) {
+              return Promise.reject(new Error(
+                `Transfer control does not accept arguments: ${func}`
               ))
-              return
             }
-            settle(null, true)
-          }, `transfer:control:${th.id}:${controlId}`)).catch(error => {
-            settle(error)
-          })
-          try {
-            ws.s({
-              action: 'transfer-func',
-              id: th.id,
-              isFtp,
-              func,
-              sftpId,
-              controlId,
-              args
+            const controlId = generate()
+            const terminalControl = ['cancel', 'interrupt', 'destroy'].includes(func)
+            if (terminalControl) th.terminalControlRequested = true
+            const acknowledgement = new Promise((resolve, reject) => {
+              const settle = (error, value) => {
+                const pending = th.pendingControls.get(controlId)
+                if (!pending) return
+                clearTimeout(pending.timer)
+                th.pendingControls.delete(controlId)
+                if (error) reject(error)
+                else resolve(value)
+                maybeDestroy()
+              }
+              const timer = setTimeout(() => {
+                settle(new Error(`Transfer control acknowledgement timed out: ${func}`))
+              }, transferControlAckTimeout)
+              th.pendingControls.set(controlId, { reject, timer })
+              if (ws.closed) {
+                settle(new Error('Transfer connection closed before control acknowledgement'))
+                return
+              }
+              Promise.resolve(ws.once((result) => {
+                if (result?.ok !== true) {
+                  settle(new Error(
+                    result?.error?.message || 'Transfer control failed'
+                  ))
+                  return
+                }
+                settle(null, true)
+              }, `transfer:control:${th.id}:${controlId}`)).catch(error => {
+                settle(error)
+              })
+              try {
+                ws.s({
+                  action: 'transfer-func',
+                  id: th.id,
+                  isFtp,
+                  func,
+                  sftpId,
+                  controlId,
+                  args
+                })
+              } catch (error) {
+                settle(error)
+              }
             })
-          } catch (error) {
-            settle(error)
+            return acknowledgement
           }
         })
-        return acknowledgement
-      }
-    })
 
-    const did = 'transfer:data:' + id
-    this.onData = (evt) => {
-      const arg = JSON.parse(evt.data)
-      if (did === arg.id) {
-        onData(arg.data)
+        const did = 'transfer:data:' + id
+        this.onData = (evt) => {
+          const arg = JSON.parse(evt.data)
+          if (did === arg.id) {
+            onData(arg.data)
+          }
+        }
+        ws.addEventListener('message', this.onData)
+        await Promise.all([
+          ws.once((arg) => {
+            th.terminalSeen = true
+            try {
+              onEnd(arg)
+            } finally {
+              maybeDestroy()
+            }
+          }, 'transfer:end:' + id),
+          ws.once((arg) => {
+            th.terminalSeen = true
+            console.debug('sftp transfer error')
+            console.debug(arg.error.stack)
+            try {
+              onError(new Error(arg.error.message))
+            } finally {
+              maybeDestroy()
+            }
+          }, 'transfer:err:' + id),
+          ws.once((arg) => {
+            this.onPaused?.(arg)
+          }, 'transfer:paused:' + id)
+        ])
+        throwIfTransferStartAborted(startupSignal)
+        ws.s({
+          action: 'transfer-new',
+          ...rest,
+          id
+        })
+        return ws
+      } catch (error) {
+        closeLateTransferSocket(ws)
+        throw error
       }
-    }
-    ws.addEventListener('message', this.onData)
-    await Promise.all([
-      ws.once((arg) => {
-        th.terminalSeen = true
-        try {
-          onEnd(arg)
-        } finally {
-          maybeDestroy()
-        }
-      }, 'transfer:end:' + id),
-      ws.once((arg) => {
-        th.terminalSeen = true
-        console.debug('sftp transfer error')
-        console.debug(arg.error.stack)
-        try {
-          onError(new Error(arg.error.message))
-        } finally {
-          maybeDestroy()
-        }
-      }, 'transfer:err:' + id),
-      ws.once((arg) => {
-        this.onPaused?.(arg)
-      }, 'transfer:paused:' + id)
-    ])
-    ws.s({
-      action: 'transfer-new',
-      ...rest,
-      id
-    })
+    }, signal, () => closeLateTransferSocket(ws))
   }
 
   onDestroy (ws) {
