@@ -2057,6 +2057,14 @@ test('stage-import signal cleanup is constant-time and defers proof I/O', async 
   const signalEnd = command.indexOf('; __sp_import_exit_trap()', signalStart)
   assert.ok(signalStart >= 0 && signalEnd > signalStart)
   const signalHandler = command.slice(signalStart, signalEnd)
+  const exitStart = command.indexOf('__sp_import_exit_trap()')
+  const exitEnd = command.indexOf('; trap __sp_import_exit_trap 0', exitStart)
+  assert.ok(exitStart >= 0 && exitEnd > exitStart)
+  const exitHandler = command.slice(exitStart, exitEnd)
+  const finalizeStart = command.indexOf('__sp_import_finalize()')
+  const finalizeEnd = command.indexOf('; __sp_importSignalled=', finalizeStart)
+  assert.ok(finalizeStart >= 0 && finalizeEnd > finalizeStart)
+  const finalizer = command.slice(finalizeStart, finalizeEnd)
 
   assert.match(command, /trap __sp_import_signal_trap HUP INT TERM/)
   assert.match(command, /trap __sp_import_exit_trap 0/)
@@ -2064,6 +2072,12 @@ test('stage-import signal cleanup is constant-time and defers proof I/O', async 
   assert.match(signalHandler, /exec 3<&- 4>&- 5<&-/)
   assert.doesNotMatch(signalHandler, /__sp_import_cleanup|__sp_bounded_digest|sha256/)
   assert.match(command, /__sp_import_exit_trap\(\).*__sp_importSignalled.*-ne 1.*__sp_import_cleanup/)
+  assert.match(exitHandler, /__sp_import_cleanup/)
+  assert.doesNotMatch(exitHandler, /__sp_emit_install/)
+  assert.match(finalizer, /__sp_importCleanupStatus.*-ne 0/)
+  assert.match(finalizer, /__sp_importInstalled.*__sp_emit_install/)
+  assert.ok(command.indexOf('__sp_import_finalize "$__sp_status"') <
+    command.indexOf(';end;%s'))
   assert.match(command, /__sp_importTempName="\.shellpilot-\$__sp_objectName\.tmp"/)
 })
 
@@ -2198,16 +2212,33 @@ test('privileged parser normalizes every fixed result shape', async () => {
       size: 12
     })
   }
-  assert.deepEqual(parse('stage-import', 'installed', [
-    'b'.repeat(64), '12', '4003', '4004'
-  ]), {
+  const installed = parse('stage-import', 'installed', [
+    'b'.repeat(64), '12', '4003', '4004', '600', '0', '0'
+  ])
+  assert.deepEqual(installed, {
     kind: 'stage-import',
     capabilities: allCapabilityObject,
     sha256: 'b'.repeat(64),
     size: 12,
     targetDevice: '4003',
-    targetInode: '4004'
+    targetInode: '4004',
+    targetClaim: {
+      targetPath: '/root/target',
+      targetDevice: '4003',
+      targetInode: '4004',
+      targetType: 'file',
+      targetParentRealPath: '/root',
+      targetParentDevice: '4001',
+      targetParentInode: '4002',
+      sha256: 'b'.repeat(64),
+      size: 12,
+      mode: 0o600,
+      uid: 0,
+      gid: 0
+    }
   })
+  assert.equal(Object.isFrozen(installed), true)
+  assert.equal(Object.isFrozen(installed.targetClaim), true)
   assert.deepEqual(parse('mkdir-bound', 'binding', ['4003', '4004']), {
     kind: 'mkdir-bound',
     capabilities: allCapabilityObject,
@@ -2238,7 +2269,7 @@ test('stage parser rejects forged success when a required capability is false', 
       'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256',
       'procFd', 'noclobber', 'cat', 'gnuStat', 'gnuMv', 'realpath',
       'chown', 'chmod', 'rm'
-    ], ['installed', 'b'.repeat(64), '12', '4003', '4004']],
+    ], ['installed', 'b'.repeat(64), '12', '4003', '4004', '600', '0', '0']],
     ['stage-cleanup', [
       'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256', 'procFd',
       'noclobber', 'gnuStat', 'realpath', 'rm'

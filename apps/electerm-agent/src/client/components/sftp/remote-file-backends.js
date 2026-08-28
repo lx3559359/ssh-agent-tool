@@ -349,6 +349,9 @@ export async function createPrivilegedFileBackend ({
       const error = new Error(`root 文件操作失败：${operation}`)
       error.code = 'PRIVILEGED_FILE_OPERATION_FAILED'
       error.operation = operation
+      if (operation === 'stage-import' && result?.targetClaim) {
+        error.targetClaim = result.targetClaim
+      }
       throw error
     }
     return result
@@ -742,9 +745,50 @@ export async function createPrivilegedFileBackend ({
         normalizeMode(expected.mode & 0o7777)
   }
 
+  function normalizeImportTargetClaim (value, record) {
+    const keys = [
+      'targetPath', 'targetDevice', 'targetInode', 'targetType',
+      'targetParentRealPath', 'targetParentDevice', 'targetParentInode',
+      'sha256', 'size', 'mode', 'uid', 'gid'
+    ]
+    if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(value)) ||
+      Object.keys(value).length !== keys.length ||
+      keys.some(key => !Object.hasOwn(value, key)) ||
+      value.targetPath !== record.targetPath ||
+      value.targetType !== 'file' ||
+      value.targetParentRealPath !== record.parentPath ||
+      String(value.targetParentDevice) !== String(record.parent.device) ||
+      String(value.targetParentInode) !== String(record.parent.inode) ||
+      value.sha256 !== record.proof.sha256 ||
+      value.size !== record.proof.size ||
+      !/^(?:0|[1-9]\d*)$/.test(String(value.targetDevice)) ||
+      !/^(?:0|[1-9]\d*)$/.test(String(value.targetInode)) ||
+      ![value.size, value.mode, value.uid, value.gid].every(Number.isSafeInteger) ||
+      value.size < 0 || value.mode < 0 || value.mode > 0o7777 ||
+      value.uid < 0 || value.gid < 0) {
+      throw new Error('root 文件后端 stage-import target claim 无效')
+    }
+    return Object.freeze({
+      targetPath: value.targetPath,
+      targetDevice: String(value.targetDevice),
+      targetInode: String(value.targetInode),
+      targetType: value.targetType,
+      targetParentRealPath: value.targetParentRealPath,
+      targetParentDevice: String(value.targetParentDevice),
+      targetParentInode: String(value.targetParentInode),
+      sha256: value.sha256,
+      size: value.size,
+      mode: value.mode,
+      uid: value.uid,
+      gid: value.gid
+    })
+  }
+
   async function cleanupImportResidual (record, signal) {
     staging.assertCurrent()
     for (const candidate of [record.tempPath, record.targetPath]) {
+      const finalTarget = candidate === record.targetPath
       let entry
       try {
         entry = await boundMutationEntry(
@@ -756,10 +800,24 @@ export async function createPrivilegedFileBackend ({
         if (error?.code === 'ENOENT') continue
         throw error
       }
+      if (finalTarget && !record.targetClaim) {
+        throw new Error(
+          'root 文件后端 stage-import final target ownership ambiguous without exact claim'
+        )
+      }
       if (entry.metadata.type !== 'file' ||
         entry.metadata.size !== record.proof.size ||
         !parentBindingMatches(entry.parent, record.parent)) {
         throw new Error('root 文件后端 stage-import residual proof 发生变化')
+      }
+      if (finalTarget && (
+        String(entry.metadata.device) !== record.targetClaim.targetDevice ||
+        String(entry.metadata.inode) !== record.targetClaim.targetInode ||
+        entry.metadata.type !== record.targetClaim.targetType ||
+        normalizeMode(entry.metadata.mode & 0o7777) !== record.targetClaim.mode ||
+        Number(entry.metadata.uid) !== record.targetClaim.uid ||
+        Number(entry.metadata.gid) !== record.targetClaim.gid)) {
+        throw new Error('root 文件后端 stage-import exact target claim 发生变化')
       }
       const proof = await boundDigest({
         path: candidate,
@@ -772,7 +830,6 @@ export async function createPrivilegedFileBackend ({
       }
       await executeRequest('remove-bound',
         boundRemovalArgs(candidate, entry, proof), { signal })
-      break
     }
     pendingImportCleanups.delete(record.objectName)
     return true
@@ -784,10 +841,12 @@ export async function createPrivilegedFileBackend ({
       targetPath,
       tempPath: importTempPath(targetPath, stage.objectName),
       parent: Object.freeze({ ...parent }),
+      parentPath: parentFilePath(targetPath),
       proof: Object.freeze({
         sha256: args.sha256,
         size: Number(args.size)
-      })
+      }),
+      targetClaim: null
     })
     pendingImportCleanups.set(record.objectName, record)
     try {
@@ -798,12 +857,24 @@ export async function createPrivilegedFileBackend ({
       const interrupted = signal?.aborted || [
         'AbortError', 'TimeoutError', 'CancellationUnknownError'
       ].includes(error?.name)
-      if (!interrupted) {
+      let cleanupRecord = record
+      if (error?.targetClaim) {
+        try {
+          cleanupRecord = Object.freeze({
+            ...record,
+            targetClaim: normalizeImportTargetClaim(error.targetClaim, record)
+          })
+          pendingImportCleanups.set(record.objectName, cleanupRecord)
+        } catch (claimError) {
+          attachCleanupFailure(error, claimError)
+        }
+      }
+      if (!interrupted && !error?.targetClaim) {
         pendingImportCleanups.delete(record.objectName)
         throw error
       }
       try {
-        await cleanupImportResidual(record)
+        await cleanupImportResidual(cleanupRecord)
       } catch (cleanupError) {
         attachCleanupFailure(error, cleanupError)
       }
