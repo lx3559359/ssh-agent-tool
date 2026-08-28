@@ -879,6 +879,7 @@ const stageImportCleanupBody = [
   '__sp_import_residual_metadata_matches() { __sp_importResidualMode="$(stat -L -c %a -- "$__sp_fd3")" && __sp_importResidualUid="$(stat -L -c %u -- "$__sp_fd3")" && __sp_importResidualGid="$(stat -L -c %g -- "$__sp_fd3")" || return 1; { [ "$__sp_importResidualMode" = "$__sp_initialMode" ] && [ "$__sp_importResidualUid" = "$__sp_initialUid" ] && [ "$__sp_importResidualGid" = "$__sp_initialGid" ]; } || { [ "$__sp_importResidualMode" = "$__sp_initialMode" ] && [ "$__sp_importResidualUid" = "$__sp_targetUid" ] && [ "$__sp_importResidualGid" = "$__sp_targetGid" ]; } || { [ "$__sp_importResidualMode" = "$__sp_targetMode" ] && [ "$__sp_importResidualUid" = "$__sp_targetUid" ] && [ "$__sp_importResidualGid" = "$__sp_targetGid" ]; }; }',
   '__sp_import_residual_parents_match || return 1',
   '__sp_import_residual_exact_count',
+  'if [ "$__sp_importResidualExactCount" -eq 0 ]; then __sp_emit_import_cleanup 1 none; return $?; fi',
   '[ "$__sp_importResidualExactCount" -eq 1 ] || return 1',
   '__sp_importResidualDeletePath="$__sp_importResidualExactPath"',
   '[ ! -L "$__sp_importResidualDeletePath" ] && [ -f "$__sp_importResidualDeletePath" ] || return 1',
@@ -901,7 +902,8 @@ const stageImportCleanupBody = [
   '__sp_import_residual_parents_match || { exec 3<&-; return 1; }',
   '__sp_import_residual_exact_count',
   '[ "$__sp_importResidualExactCount" -eq 0 ] || { exec 3<&-; return 1; }',
-  'exec 3<&-'
+  'exec 3<&-',
+  '__sp_emit_import_cleanup 1 none'
 ].join('; ')
 
 const digestCleanupBody = [
@@ -1600,7 +1602,7 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
   const mutationOperations = new Set([
     'probe', 'remove-bound',
     'rename-bound', 'metadata-bound', 'touch-bound',
-    'stage-import-cleanup', 'stage-cleanup', 'digest-cleanup'
+    'stage-cleanup', 'digest-cleanup'
   ])
 
   function consumeStart (fields) {
@@ -1653,6 +1655,18 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
         throw new Error('root 文件协议文件名无效')
       }
       entries.push(Object.freeze({ name, ...parseMetadata(payload[1]) }))
+      return
+    }
+    if (normalized.operation === 'stage-import-cleanup') {
+      if (kind !== 'import-cleanup' || payload.length !== 2 ||
+        decodeUtf8Base64(payload[0], 'cleanup status') !== '1' ||
+        decodeUtf8Base64(payload[1], 'residual location') !== 'none') {
+        throw new Error('root 文件协议 stage-import-cleanup status 无效')
+      }
+      structuredData = Object.freeze({
+        cleanupSucceeded: true,
+        residualLocation: 'none'
+      })
       return
     }
     if (normalized.operation === 'stage-import') {

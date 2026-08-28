@@ -1110,6 +1110,10 @@ test('stage-import-cleanup has an exact frozen dual-path proof contract', async 
   assert.ok(postcheck > unlink, 'cleanup must postcheck both paths after unlink')
   assert.match(command, /__sp_import_residual_exact_count.*-eq 1/s)
   assert.match(command, /__sp_import_residual_exact_count.*-eq 0/s)
+  assert.match(
+    command,
+    /__sp_import_residual_parents_match.*__sp_import_residual_exact_count.*ExactCount" -eq 0.*__sp_emit_import_cleanup 1 none/s
+  )
 
   for (const args of [
     { ...request.args, targetPath: '/root/../foreign' },
@@ -1127,6 +1131,72 @@ test('stage-import-cleanup has an exact frozen dual-path proof contract', async 
       /参数|绑定|mode|maxSize|合同|proof/
     )
   }
+})
+
+test('stage-import-cleanup success requires an authoritative cleanup marker', async () => {
+  const { createPrivilegedFileParser } = await importModule(protocolModule)
+  const token = 'af'.repeat(24)
+  const request = {
+    operation: 'stage-import-cleanup',
+    args: importCleanupBinding()
+  }
+  const createParser = () => {
+    const parser = createPrivilegedFileParser({ token, request })
+    parser.push(startMarker(token))
+    return parser
+  }
+
+  const missingStatus = createParser()
+  assert.throws(
+    () => missingStatus.push(fileMarker(token, 'end', '0')),
+    /结束边界|cleanup/
+  )
+
+  const confirmed = createParser()
+  confirmed.push(fileMarker(
+    token,
+    'data',
+    '1',
+    '1',
+    'import-cleanup',
+    encodeMarkerField('1'),
+    encodeMarkerField('none')
+  ))
+  confirmed.push(fileMarker(token, 'end', '0'))
+  assert.deepEqual(confirmed.result(), {
+    kind: 'stage-import-cleanup',
+    capabilities: allCapabilityObject,
+    cleanupSucceeded: true,
+    residualLocation: 'none'
+  })
+  assert.equal(Object.isFrozen(confirmed.result()), true)
+
+  for (const values of [
+    ['0', 'none'],
+    ['1', 'target'],
+    ['true', 'none']
+  ]) {
+    const invalid = createParser()
+    assert.throws(
+      () => invalid.push(fileMarker(
+        token,
+        'data',
+        '1',
+        '1',
+        'import-cleanup',
+        ...values.map(encodeMarkerField)
+      )),
+      /cleanup|数据类型|状态/
+    )
+  }
+
+  const failed = createParser()
+  failed.push(fileMarker(token, 'end', '1'))
+  assert.deepEqual(failed.result(), {
+    kind: 'stage-import-cleanup',
+    capabilities: allCapabilityObject,
+    ok: false
+  })
 })
 
 test('request constructor immediately rejects script and every unknown argument', async () => {
@@ -2695,10 +2765,13 @@ test('privileged parser normalizes every fixed result shape', async () => {
     capabilities: allCapabilityObject,
     ok: true
   })
-  assert.deepEqual(parse('stage-import-cleanup'), {
+  assert.deepEqual(parse('stage-import-cleanup', 'import-cleanup', [
+    '1', 'none'
+  ]), {
     kind: 'stage-import-cleanup',
     capabilities: allCapabilityObject,
-    ok: true
+    cleanupSucceeded: true,
+    residualLocation: 'none'
   })
   assert.deepEqual(parse('stat', 'metadata', ['41ed;4;1;2;3;4']), {
     kind: 'stat',

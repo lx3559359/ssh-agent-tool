@@ -918,7 +918,7 @@ export async function createPrivilegedFileBackend ({
       )
     }
     if (record.residualLocation === 'moving') {
-      await executeRequest('stage-import-cleanup', {
+      const result = await executeRequest('stage-import-cleanup', {
         ...staging.rootBinding,
         objectName: record.objectName,
         tempPath: claim.tempPath,
@@ -946,6 +946,12 @@ export async function createPrivilegedFileBackend ({
         targetUid: claim.targetUid,
         targetGid: claim.targetGid
       }, { signal })
+      if (result.cleanupSucceeded !== true ||
+        result.residualLocation !== 'none') {
+        throw new Error(
+          'root 文件后端 stage-import cleanup authoritative status 无效'
+        )
+      }
       pendingImportCleanups.delete(record.objectName)
       return true
     }

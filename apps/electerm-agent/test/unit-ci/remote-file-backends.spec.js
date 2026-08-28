@@ -633,6 +633,17 @@ function createBackendHarness (options = {}) {
             node.inode === args.targetInode
         })
       const initialExact = exactLocations()
+      if (initialExact.length === 0) {
+        if (options.importCleanupUntrustedSuccess) {
+          return { exitCode: 0, kind: 'stage-import-cleanup', ok: true }
+        }
+        return {
+          exitCode: 0,
+          kind: 'stage-import-cleanup',
+          cleanupSucceeded: true,
+          residualLocation: 'none'
+        }
+      }
       if (initialExact.length !== 1) {
         throw new Error('stage-import cleanup exact claim conflicted')
       }
@@ -683,10 +694,35 @@ function createBackendHarness (options = {}) {
       if (exactLocations().length !== 0) {
         throw new Error('stage-import cleanup postcheck failed')
       }
+      if (options.importCleanupCompletionLosses > 0) {
+        options.importCleanupCompletionLosses -= 1
+        if (options.importCleanupForeignReplacementAfterLoss) {
+          privilegedNodes.set(args.targetPath, ensurePrivilegedBinding({
+            type: 'file',
+            mode: Number.parseInt(args.targetMode, 8),
+            uid: Number(args.targetUid),
+            gid: Number(args.targetGid),
+            content: Buffer.from(options.importCleanupForeignContent || 'safe')
+          }))
+        }
+        if (options.importCleanupParentReplacementAfterLoss) {
+          privilegedNodes.set(args.targetParentRealPath,
+            ensurePrivilegedBinding({
+              type: 'directory', mode: 0o755, uid: 0, gid: 0
+            }))
+        }
+        const error = new Error('PTY disconnected after import cleanup')
+        error.name = 'DisconnectedError'
+        throw error
+      }
+      if (options.importCleanupUntrustedSuccess) {
+        return { exitCode: 0, kind: 'stage-import-cleanup', ok: true }
+      }
       return {
         exitCode: 0,
         kind: 'stage-import-cleanup',
-        ok: true
+        cleanupSucceeded: true,
+        residualLocation: 'none'
       }
     }
     if (request.operation === 'list' || request.operation === 'list-bound') {
@@ -2133,6 +2169,84 @@ test('moving stage-import retains an exact claim if a second hardlink appears du
   assert.equal(harness.privilegedNodes.has(tempPath), true)
 })
 
+test('moving stage-import cleanup converges after lost completion and preserves a foreign replacement', async () => {
+  const targetPath = '/root/moving-cleanup-lost-completion'
+  const harness = createBackendHarness({
+    importFailure: true,
+    importMovingResidual: 'target',
+    importCleanupCompletionLosses: 1,
+    importCleanupForeignReplacementAfterLoss: true,
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.writeFile(targetPath, Buffer.from('safe')),
+    error => {
+      assert.match(error.cleanupError?.message || '', /disconnected/i)
+      return true
+    }
+  )
+  const foreign = harness.privilegedNodes.get(targetPath)
+  assert.equal(foreign.content.toString(), 'safe')
+  assert.equal(harness.requests.filter(item =>
+    item.operation === 'stage-import-cleanup').length, 1)
+
+  assert.equal(await backend.release(), true)
+  assert.equal(harness.requests.filter(item =>
+    item.operation === 'stage-import-cleanup').length, 2)
+  assert.equal(harness.privilegedNodes.get(targetPath), foreign)
+})
+
+test('moving stage-import cleanup does not infer idempotent success after parent replacement', async () => {
+  const targetPath = '/root/moving-cleanup-parent-replaced'
+  const harness = createBackendHarness({
+    importFailure: true,
+    importMovingResidual: 'target',
+    importCleanupCompletionLosses: 1,
+    importCleanupParentReplacementAfterLoss: true,
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.writeFile(targetPath, Buffer.from('safe')),
+    /stage-import/
+  )
+  await assert.rejects(backend.release(), /parent binding changed/)
+  assert.equal(harness.requests.filter(item =>
+    item.operation === 'stage-import-cleanup').length, 2)
+  assert.equal(harness.leaseReleases, 1)
+})
+
+test('moving stage-import pending cleanup requires authoritative protocol status', async () => {
+  const targetPath = '/root/moving-cleanup-untrusted-status'
+  const harness = createBackendHarness({
+    importFailure: true,
+    importMovingResidual: 'target',
+    importCleanupUntrustedSuccess: true,
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.writeFile(targetPath, Buffer.from('safe')),
+    error => {
+      assert.match(error.cleanupError?.message || '', /authoritative|status/i)
+      return true
+    }
+  )
+  await assert.rejects(backend.release(), /authoritative|status/i)
+  assert.equal(harness.requests.filter(item =>
+    item.operation === 'stage-import-cleanup').length, 2)
+})
+
 test('moving stage-import cleans only its exact inode beside a foreign path', async () => {
   for (const scenario of [
     {
@@ -2173,31 +2287,29 @@ test('moving stage-import cleans only its exact inode beside a foreign path', as
   }
 })
 
-test('moving stage-import fails safe when its exact inode is absent or at both paths', async () => {
-  for (const option of ['importMovingNoExact', 'importMovingBothExact']) {
-    const targetPath = `/root/moving-ambiguous-${option}`
-    const harness = createBackendHarness({
-      importFailure: true,
-      importMovingResidual: 'target',
-      [option]: true,
-      privilegedTree: {
-        '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
-      }
-    })
-    const backend = await createRootBackend(harness)
+test('moving stage-import fails safe when its exact inode remains at both paths', async () => {
+  const targetPath = '/root/moving-ambiguous-both'
+  const harness = createBackendHarness({
+    importFailure: true,
+    importMovingResidual: 'target',
+    importMovingBothExact: true,
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
+    }
+  })
+  const backend = await createRootBackend(harness)
 
-    await assert.rejects(
-      backend.sftp.writeFile(targetPath, Buffer.from('safe')),
-      error => {
-        assert.match(error.cleanupError?.message || '', /unresolved|conflicted/)
-        return true
-      }
-    )
-    assert.equal(harness.requests.some(item =>
-      item.operation === 'remove-bound'), false)
-    await assert.rejects(backend.release(), /unresolved|conflicted/)
-    assert.equal(harness.privilegedNodes.has(targetPath), true)
-  }
+  await assert.rejects(
+    backend.sftp.writeFile(targetPath, Buffer.from('safe')),
+    error => {
+      assert.match(error.cleanupError?.message || '', /conflicted/)
+      return true
+    }
+  )
+  assert.equal(harness.requests.some(item =>
+    item.operation === 'remove-bound'), false)
+  await assert.rejects(backend.release(), /conflicted/)
+  assert.equal(harness.privilegedNodes.has(targetPath), true)
 })
 
 test('direct privileged remove APIs reject an over-budget file before digest', async () => {
