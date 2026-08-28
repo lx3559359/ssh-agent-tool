@@ -194,6 +194,38 @@ function targetStageBinding (overrides = {}) {
   })
 }
 
+function importCleanupBinding (overrides = {}) {
+  const tempPath = overrides.tempPath || '/root/.shellpilot-operation-token.tmp'
+  const targetPath = overrides.targetPath || '/root/target'
+  return stageBinding({
+    tempPath,
+    tempParentRealPath: parentRemotePath(tempPath),
+    tempParentDevice: '4001',
+    tempParentInode: '4002',
+    tempParentUid: '0',
+    tempParentMode: '755',
+    targetPath,
+    targetParentRealPath: parentRemotePath(targetPath),
+    targetParentDevice: '4001',
+    targetParentInode: '4002',
+    targetParentUid: '0',
+    targetParentMode: '755',
+    targetDevice: '4001',
+    targetInode: '4004',
+    targetType: 'file',
+    sha256: sha256Text('safe'),
+    size: '4',
+    maxSize: '4',
+    initialMode: '0',
+    initialUid: '0',
+    initialGid: '0',
+    targetMode: '600',
+    targetUid: '1000',
+    targetGid: '1000',
+    ...overrides
+  })
+}
+
 function nativeSourceBinding (remotePath) {
   const parentPath = path.dirname(remotePath)
   const parentStat = fs.statSync(parentPath, { bigint: true })
@@ -284,7 +316,7 @@ function sha256Text (value) {
 }
 
 function stageImportCleanupFunctions (command) {
-  const cleanupStart = command.indexOf('__sp_import_cleanup_candidate()')
+  const cleanupStart = command.indexOf('__sp_import_cleanup_exact_locations()')
   const cleanupEnd = command.indexOf('; __sp_importSignalled=', cleanupStart)
   assert.ok(cleanupStart >= 0 && cleanupEnd > cleanupStart)
   return command.slice(cleanupStart, cleanupEnd)
@@ -334,6 +366,7 @@ function runTrackedImportCleanup ({
       '__sp_targetParentUid=0',
       '__sp_targetParentMode=700',
       '__sp_trusted_parent_path_matches() { return 0; }',
+      '__sp_entry_matches() { [ ! -L "$1" ] && [ -f "$1" ]; }',
       '__sp_path_matches_fd() { return 0; }',
       '__sp_fd_entry_matches() { return 0; }',
       '__sp_bounded_digest() { dd bs=65536 iflag=count_bytes count="$2" <&3 2>/dev/null | sha256sum | cut -d" " -f1; }',
@@ -430,6 +463,65 @@ test('linux stage fixture tokens satisfy the protocol token contract before plat
       token,
       request: { operation: 'probe', args: {} }
     }))
+  }
+})
+
+test('linux bound import cleanup preserves a second exact hardlink created during digest', {
+  skip: linuxRootOnly || !bashAvailable
+}, async () => {
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-import-cleanup-race-'))
+  try {
+    const fixture = await createLinuxStageFixture(nativeRoot, 'cleanup-race')
+    const targetParent = path.join(nativeRoot, 'target-parent')
+    fs.mkdirSync(targetParent, { mode: 0o700 })
+    fs.chmodSync(targetParent, 0o700)
+    const targetPath = path.join(targetParent, 'target')
+    const tempPath = path.join(targetParent, 'temp')
+    fs.writeFileSync(targetPath, 'safe', { mode: 0o600 })
+    fs.chmodSync(targetPath, 0o600)
+    const parentStat = fs.statSync(targetParent, { bigint: true })
+    const targetStat = fs.statSync(targetPath, { bigint: true })
+    const objectName = 'cleanup-hardlink-race'
+    const scratchPath = `/tmp/.shellpilot-digest-${fixture.binding.rootDevice}-${fixture.binding.rootInode}-${objectName}`
+    const operation = await runRealProtocolOperation({
+      operation: 'stage-import-cleanup',
+      token: linuxStageFixtureToken('cleanup-hardlink-race'),
+      args: importCleanupBinding({
+        ...fixture.binding,
+        objectName,
+        tempPath,
+        tempParentRealPath: targetParent,
+        tempParentDevice: String(parentStat.dev),
+        tempParentInode: String(parentStat.ino),
+        tempParentUid: String(parentStat.uid),
+        tempParentMode: (parentStat.mode & 0o7777n).toString(8),
+        targetPath,
+        targetParentRealPath: targetParent,
+        targetParentDevice: String(parentStat.dev),
+        targetParentInode: String(parentStat.ino),
+        targetParentUid: String(parentStat.uid),
+        targetParentMode: (parentStat.mode & 0o7777n).toString(8),
+        targetDevice: String(targetStat.dev),
+        targetInode: String(targetStat.ino),
+        sha256: sha256Text('safe'),
+        size: '4',
+        maxSize: '4',
+        initialMode: (targetStat.mode & 0o7777n).toString(8),
+        initialUid: String(targetStat.uid),
+        initialGid: String(targetStat.gid),
+        targetMode: (targetStat.mode & 0o7777n).toString(8),
+        targetUid: String(targetStat.uid),
+        targetGid: String(targetStat.gid)
+      }),
+      prelude: `( __sp_wait=0; while [ ! -p ${quoteForBash(`${scratchPath}/input`)} ] && [ "$__sp_wait" -lt 500 ]; do __sp_wait=$((__sp_wait + 1)); sleep 0.01; done; [ -p ${quoteForBash(`${scratchPath}/input`)} ] && ln -- ${quoteForBash(targetPath)} ${quoteForBash(tempPath)} ) &`
+    })
+    assert.notEqual(operation.execution.status, 0)
+    assert.equal(operation.result.ok, false)
+    assert.equal(fs.existsSync(targetPath), true)
+    assert.equal(fs.existsSync(tempPath), true)
+    assert.equal(fs.statSync(targetPath).ino, fs.statSync(tempPath).ino)
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
   }
 })
 
@@ -988,6 +1080,53 @@ test('request constructor canonicalizes octal modes and SHA-256 fields', async (
     operation: 'stage-import',
     args: withoutNoClobber
   }), /mustBeAbsent|缺少必要参数/)
+})
+
+test('stage-import-cleanup has an exact frozen dual-path proof contract', async () => {
+  const {
+    buildPrivilegedFileCommand,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const request = createPrivilegedFileRequest({
+    operation: 'stage-import-cleanup',
+    args: importCleanupBinding()
+  })
+  assert.equal(Object.isFrozen(request), true)
+  assert.equal(Object.isFrozen(request.args), true)
+  assert.equal(request.args.sha256, sha256Text('safe'))
+  assert.equal(request.args.initialMode, '0')
+
+  const command = buildPrivilegedFileCommand({
+    token: 'ae'.repeat(24),
+    request
+  })
+  const digest = command.indexOf('__sp_bounded_digest')
+  const finalScan = command.indexOf('__sp_import_residual_exact_count', digest)
+  const unlink = command.indexOf('rm -f --', finalScan)
+  const postcheck = command.indexOf('__sp_import_residual_exact_count', unlink)
+  assert.ok(digest >= 0, 'cleanup must use the bounded digest helper')
+  assert.ok(finalScan > digest, 'cleanup must rescan both paths after digest')
+  assert.ok(unlink > finalScan, 'cleanup may unlink only after the final rescan')
+  assert.ok(postcheck > unlink, 'cleanup must postcheck both paths after unlink')
+  assert.match(command, /__sp_import_residual_exact_count.*-eq 1/s)
+  assert.match(command, /__sp_import_residual_exact_count.*-eq 0/s)
+
+  for (const args of [
+    { ...request.args, targetPath: '/root/../foreign' },
+    { ...request.args, tempPath: '/root/other/.tmp' },
+    { ...request.args, maxSize: '3' },
+    { ...request.args, initialMode: '888' },
+    { ...request.args, tempParentUid: '-1' },
+    { ...request.args, injected: 'rm -rf /' }
+  ]) {
+    assert.throws(
+      () => createPrivilegedFileRequest({
+        operation: 'stage-import-cleanup',
+        args
+      }),
+      /参数|绑定|mode|maxSize|合同|proof/
+    )
+  }
 })
 
 test('request constructor immediately rejects script and every unknown argument', async () => {
@@ -1693,6 +1832,7 @@ test('stage-import moving cleanup refuses two exact hardlink locations', async (
     const result = runBash([
       `cd -- ${quoteForBash(toBashPath(nativeRoot))}`,
       'printf safe > temp',
+      'chmod 600 temp',
       'ln temp target',
       '__sp_importTempName=temp',
       '__sp_targetName=target',
@@ -1730,6 +1870,108 @@ test('stage-import moving cleanup refuses two exact hardlink locations', async (
   } finally {
     fs.rmSync(nativeRoot, { recursive: true, force: true })
   }
+})
+
+test('stage-import moving cleanup rescans both paths after digest before unlink', async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: 'e5'.repeat(24),
+    request: {
+      operation: 'stage-import',
+      args: targetStageBinding({
+        sha256: sha256Text('safe'),
+        size: '4',
+        targetMode: '600',
+        targetUid: '0',
+        targetGid: '0'
+      })
+    }
+  })
+  const cleanup = stageImportCleanupFunctions(command)
+  const nativeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-import-rescan-'))
+  try {
+    const statusPath = path.join(nativeRoot, 'cleanup-status')
+    const result = runBash([
+      `cd -- ${quoteForBash(toBashPath(nativeRoot))}`,
+      'printf safe > temp',
+      'chmod 600 temp',
+      '__sp_importTempName=temp',
+      '__sp_targetName=target',
+      '__sp_importTempCreated=1',
+      '__sp_importInstalled=0',
+      '__sp_importMoving=1',
+      '__sp_importClaimMayExist=0',
+      '__sp_tempDevice="$(stat -c %d -- temp)"',
+      '__sp_tempInode="$(stat -c %i -- temp)"',
+      `__sp_expectedSha256=${sha256Text('safe')}`,
+      '__sp_expectedSize=4',
+      '__sp_importMetadataKnown=1',
+      '__sp_importMetadataUid="$(stat -c %u -- temp)"',
+      '__sp_importMetadataGid="$(stat -c %g -- temp)"',
+      '__sp_importMetadataMode=600',
+      '__sp_targetParentRealPath=.',
+      '__sp_targetParentDevice=1',
+      '__sp_targetParentInode=2',
+      '__sp_targetParentUid=0',
+      '__sp_targetParentMode=700',
+      '__sp_trusted_parent_path_matches() { return 0; }',
+      '__sp_path_matches_fd() { [ "$(stat -L -c %d -- "$1")" = "$2" ] && [ "$(stat -L -c %i -- "$1")" = "$3" ]; }',
+      '__sp_fd_entry_matches() { [ "$(stat -L -c %d -- "$1")" = "$2" ] && [ "$(stat -L -c %i -- "$1")" = "$3" ] && [ -f "$1" ]; }',
+      '__sp_entry_matches() { [ "$(stat -L -c %d -- "$1")" = "$2" ] && [ "$(stat -L -c %i -- "$1")" = "$3" ] && [ -f "$1" ]; }',
+      '__sp_bounded_digest() { ln temp target || return 1; dd bs=65536 iflag=count_bytes count="$2" <&3 2>/dev/null | sha256sum | cut -d" " -f1; }',
+      cleanup,
+      '__sp_import_cleanup',
+      '__sp_cleanup_status=$?',
+      `printf %s "$__sp_cleanup_status" > ${quoteForBash(toBashPath(statusPath))}`
+    ].join('\n'))
+    assert.equal(result.status, 0, result.stdout + result.stderr)
+    assert.notEqual(fs.readFileSync(statusPath, 'utf8'), '0')
+    assert.equal(fs.existsSync(path.join(nativeRoot, 'temp')), true)
+    assert.equal(fs.existsSync(path.join(nativeRoot, 'target')), true)
+    assert.equal(
+      fs.statSync(path.join(nativeRoot, 'temp')).ino,
+      fs.statSync(path.join(nativeRoot, 'target')).ino
+    )
+  } finally {
+    fs.rmSync(nativeRoot, { recursive: true, force: true })
+  }
+})
+
+test('stage-import synchronous cleanup makes uniqueness proof adjacent to unlink', async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: 'e6'.repeat(24),
+    request: {
+      operation: 'stage-import',
+      args: targetStageBinding({
+        sha256: sha256Text('safe'),
+        size: '4',
+        targetMode: '600',
+        targetUid: '0',
+        targetGid: '0'
+      })
+    }
+  })
+  const cleanup = stageImportCleanupFunctions(command)
+  const candidateStart = cleanup.indexOf('__sp_import_cleanup_candidate()')
+  const candidateEnd = cleanup.indexOf('; __sp_import_cleanup()', candidateStart)
+  const candidate = cleanup.slice(candidateStart, candidateEnd)
+  const digest = candidate.indexOf('__sp_bounded_digest')
+  const finalScan = candidate.indexOf(
+    '__sp_import_cleanup_exact_locations',
+    digest
+  )
+  const unlink = candidate.indexOf('rm -f --', finalScan)
+  const postcheck = candidate.indexOf(
+    '__sp_import_cleanup_exact_locations',
+    unlink
+  )
+  assert.ok(digest >= 0)
+  assert.ok(finalScan > digest)
+  assert.ok(unlink > finalScan)
+  assert.ok(postcheck > unlink)
+  assert.match(candidate, /ExactCount.*-eq 1/)
+  assert.match(candidate, /ExactCount.*-eq 0/)
 })
 
 test('digest cleanup identity is stable across PTY request tokens', async () => {
@@ -1830,6 +2072,10 @@ test('new bound mutation and digest commands have valid outer and inner shell sy
         targetUid: '0',
         targetGid: '0'
       })
+    },
+    {
+      operation: 'stage-import-cleanup',
+      args: importCleanupBinding()
     },
     { operation: 'rename-bound', args: renameBinding() },
     { operation: 'digest-cleanup', args: stageBinding() },
@@ -1974,6 +2220,8 @@ test('privileged command builder exposes every fixed operation and fails closed 
       targetUid: '0',
       targetGid: '0'
     }), /exec 4> "\.\/\$__sp_importTempName"/],
+    ['stage-import-cleanup', importCleanupBinding(),
+      /__sp_import_residual_exact_count/],
     ['stage-cleanup', cleanupBinding(), /rm -f/]
   ]
   for (const [operation, args, source] of stageCases) {
@@ -2386,7 +2634,9 @@ test('privileged parser normalizes every fixed result shape', async () => {
             targetGid: '0'
           })
         }
-      : { operation }
+      : operation === 'stage-import-cleanup'
+        ? { operation, args: importCleanupBinding() }
+        : { operation }
     const parser = createPrivilegedFileParser({ token, request })
     parser.push(startMarker(token, allCapabilities))
     if (kind) {
@@ -2442,6 +2692,11 @@ test('privileged parser normalizes every fixed result shape', async () => {
   })
   assert.deepEqual(parse('digest-cleanup'), {
     kind: 'digest-cleanup',
+    capabilities: allCapabilityObject,
+    ok: true
+  })
+  assert.deepEqual(parse('stage-import-cleanup'), {
+    kind: 'stage-import-cleanup',
     capabilities: allCapabilityObject,
     ok: true
   })

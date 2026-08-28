@@ -917,52 +917,54 @@ export async function createPrivilegedFileBackend ({
         'root 文件后端 stage-import cleanup status unresolved without exact claim'
       )
     }
-    let candidate = record.residualLocation === 'temp'
+    if (record.residualLocation === 'moving') {
+      await executeRequest('stage-import-cleanup', {
+        ...staging.rootBinding,
+        objectName: record.objectName,
+        tempPath: claim.tempPath,
+        tempParentRealPath: claim.tempParentRealPath,
+        tempParentDevice: claim.tempParentDevice,
+        tempParentInode: claim.tempParentInode,
+        tempParentUid: claim.tempParentUid,
+        tempParentMode: claim.tempParentMode.toString(8),
+        targetPath: claim.targetPath,
+        targetParentRealPath: claim.targetParentRealPath,
+        targetParentDevice: claim.targetParentDevice,
+        targetParentInode: claim.targetParentInode,
+        targetParentUid: claim.targetParentUid,
+        targetParentMode: claim.targetParentMode.toString(8),
+        targetDevice: claim.tempDevice,
+        targetInode: claim.tempInode,
+        targetType: claim.tempType,
+        sha256: claim.sha256,
+        size: String(claim.size),
+        maxSize: String(claim.size),
+        initialMode: claim.initialMode.toString(8),
+        initialUid: claim.initialUid,
+        initialGid: claim.initialGid,
+        targetMode: claim.targetMode.toString(8),
+        targetUid: claim.targetUid,
+        targetGid: claim.targetGid
+      }, { signal })
+      pendingImportCleanups.delete(record.objectName)
+      return true
+    }
+    const candidate = record.residualLocation === 'temp'
       ? record.tempPath
       : record.targetPath
     let entry
-    if (record.residualLocation === 'moving') {
-      const exactLocations = []
-      for (const path of [record.tempPath, record.targetPath]) {
-        let current
-        try {
-          current = await boundMutationEntry(
-            path,
-            'stage-import moving residual cleanup',
-            signal
-          )
-        } catch (error) {
-          if (error?.code === 'ENOENT') continue
-          throw error
-        }
-        if (parentBindingMatches(current.parent, record.parent) &&
-          current.metadata.type === claim.tempType &&
-          String(current.metadata.device) === claim.tempDevice &&
-          String(current.metadata.inode) === claim.tempInode) {
-          exactLocations.push({ path, entry: current })
-        }
+    try {
+      entry = await boundMutationEntry(
+        candidate,
+        'stage-import residual cleanup',
+        signal
+      )
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        pendingImportCleanups.delete(record.objectName)
+        return true
       }
-      if (exactLocations.length !== 1) {
-        throw new Error(
-          `root 文件后端 stage-import moving exact claim ${exactLocations.length === 0 ? 'unresolved' : 'conflicted'}`
-        )
-      }
-      candidate = exactLocations[0].path
-      entry = exactLocations[0].entry
-    } else {
-      try {
-        entry = await boundMutationEntry(
-          candidate,
-          'stage-import residual cleanup',
-          signal
-        )
-      } catch (error) {
-        if (error?.code === 'ENOENT') {
-          pendingImportCleanups.delete(record.objectName)
-          return true
-        }
-        throw error
-      }
+      throw error
     }
     const claimedDevice = ['temp', 'moving'].includes(record.residualLocation)
       ? claim.tempDevice
@@ -986,35 +988,6 @@ export async function createPrivilegedFileBackend ({
       Number(entry.metadata.uid) !== claim.uid ||
       Number(entry.metadata.gid) !== claim.gid)) {
       throw new Error('root 文件后端 stage-import exact target claim 发生变化')
-    }
-    if (record.residualLocation === 'moving') {
-      const current = {
-        mode: normalizeMode(entry.metadata.mode & 0o7777),
-        uid: Number(entry.metadata.uid),
-        gid: Number(entry.metadata.gid)
-      }
-      const allowed = [
-        {
-          mode: claim.initialMode,
-          uid: claim.initialUid,
-          gid: claim.initialGid
-        },
-        {
-          mode: claim.initialMode,
-          uid: claim.targetUid,
-          gid: claim.targetGid
-        },
-        {
-          mode: claim.targetMode,
-          uid: claim.targetUid,
-          gid: claim.targetGid
-        }
-      ]
-      if (!allowed.some(expected =>
-        expected.mode === current.mode && expected.uid === current.uid &&
-        expected.gid === current.gid)) {
-        throw new Error('root 文件后端 stage-import moving metadata 发生变化')
-      }
     }
     const proof = await boundDigest({
       path: candidate,

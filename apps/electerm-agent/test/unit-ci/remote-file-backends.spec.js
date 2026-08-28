@@ -607,6 +607,88 @@ function createBackendHarness (options = {}) {
         residualLocation: 'complete'
       }
     }
+    if (request.operation === 'stage-import-cleanup') {
+      const tempParent = ensurePrivilegedBinding(privilegedNodes.get(
+        args.tempParentRealPath
+      ))
+      const targetParent = ensurePrivilegedBinding(privilegedNodes.get(
+        args.targetParentRealPath
+      ))
+      const parentMatches = (parent, prefix) => parent &&
+        parent.type === 'directory' &&
+        parent.device === args[`${prefix}ParentDevice`] &&
+        parent.inode === args[`${prefix}ParentInode`] &&
+        String(parent.uid) === args[`${prefix}ParentUid`] &&
+        (parent.mode & 0o7777).toString(8) === args[`${prefix}ParentMode`] &&
+        parent.uid === 0 && (parent.mode & 0o022) === 0
+      if (!parentMatches(tempParent, 'temp') ||
+        !parentMatches(targetParent, 'target')) {
+        throw new Error('stage-import cleanup parent binding changed')
+      }
+      const exactLocations = () => [args.tempPath, args.targetPath]
+        .filter(remotePath => {
+          const node = privilegedNodes.get(remotePath)
+          return node?.type === args.targetType &&
+            node.device === args.targetDevice &&
+            node.inode === args.targetInode
+        })
+      const initialExact = exactLocations()
+      if (initialExact.length !== 1) {
+        throw new Error('stage-import cleanup exact claim conflicted')
+      }
+      const candidatePath = initialExact[0]
+      const candidate = privilegedNodes.get(candidatePath)
+      const bytes = privilegedBytes(candidate)
+      const currentMetadata = {
+        mode: candidate.mode & 0o7777,
+        uid: candidate.uid,
+        gid: candidate.gid
+      }
+      const allowedMetadata = [
+        {
+          mode: Number.parseInt(args.initialMode, 8),
+          uid: Number(args.initialUid),
+          gid: Number(args.initialGid)
+        },
+        {
+          mode: Number.parseInt(args.initialMode, 8),
+          uid: Number(args.targetUid),
+          gid: Number(args.targetGid)
+        },
+        {
+          mode: Number.parseInt(args.targetMode, 8),
+          uid: Number(args.targetUid),
+          gid: Number(args.targetGid)
+        }
+      ]
+      if (bytes.length !== Number(args.size) ||
+        bytes.length > Number(args.maxSize) || sha256(bytes) !== args.sha256 ||
+        !allowedMetadata.some(expected =>
+          expected.mode === currentMetadata.mode &&
+          expected.uid === currentMetadata.uid &&
+          expected.gid === currentMetadata.gid)) {
+        throw new Error('stage-import cleanup proof changed')
+      }
+      if (options.importMovingSecondLinkDuringCleanup) {
+        const otherPath = candidatePath === args.tempPath
+          ? args.targetPath
+          : args.tempPath
+        privilegedNodes.set(otherPath, candidate)
+      }
+      const finalExact = exactLocations()
+      if (finalExact.length !== 1 || finalExact[0] !== candidatePath) {
+        throw new Error('stage-import cleanup exact claim conflicted')
+      }
+      privilegedNodes.delete(candidatePath)
+      if (exactLocations().length !== 0) {
+        throw new Error('stage-import cleanup postcheck failed')
+      }
+      return {
+        exitCode: 0,
+        kind: 'stage-import-cleanup',
+        ok: true
+      }
+    }
     if (request.operation === 'list' || request.operation === 'list-bound') {
       if (options.privilegedTree) {
         if (request.operation === 'list-bound' &&
@@ -1979,8 +2061,11 @@ test('moving stage-import locates an exact target after the temp path disappears
     /stage-import/
   )
   assert.equal(harness.privilegedNodes.has(targetPath), false)
-  assert.ok(harness.requests.some(request =>
-    request.operation === 'remove-bound' && request.args.targetPath === targetPath))
+  assert.equal(harness.requests.filter(request =>
+    request.operation === 'stage-import-cleanup').length, 1)
+  assert.equal(harness.requests.some(request =>
+    ['sha256-bound', 'remove-bound'].includes(request.operation) &&
+      [request.args.path, request.args.targetPath].includes(targetPath)), false)
   assert.equal(await backend.release(), true)
 })
 
@@ -2002,9 +2087,50 @@ test('moving stage-import locates an exact temp when the no-clobber move fails',
   const request = harness.requests.find(item => item.operation === 'stage-import')
   const tempPath = `/root/.shellpilot-${request.args.objectName}.tmp`
   assert.equal(harness.privilegedNodes.has(tempPath), false)
-  assert.ok(harness.requests.some(item =>
-    item.operation === 'remove-bound' && item.args.targetPath === tempPath))
+  assert.equal(harness.requests.filter(item =>
+    item.operation === 'stage-import-cleanup').length, 1)
+  assert.equal(harness.requests.some(item =>
+    ['sha256-bound', 'remove-bound'].includes(item.operation) &&
+      (item.args.path === tempPath || item.args.targetPath === tempPath)), false)
   assert.equal(await backend.release(), true)
+})
+
+test('moving stage-import retains an exact claim if a second hardlink appears during cleanup proof', async () => {
+  const targetPath = '/root/moving-hardlink-race'
+  const harness = createBackendHarness({
+    importFailure: true,
+    importMovingResidual: 'target',
+    importMovingSecondLinkDuringCleanup: true,
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.writeFile(targetPath, Buffer.from('safe')),
+    error => {
+      assert.match(error.cleanupError?.message || '', /cleanup|claim|conflict/i)
+      return true
+    }
+  )
+  const importRequest = harness.requests.find(item =>
+    item.operation === 'stage-import')
+  const tempPath = `/root/.shellpilot-${importRequest.args.objectName}.tmp`
+  assert.equal(harness.privilegedNodes.has(targetPath), true)
+  assert.equal(harness.privilegedNodes.has(tempPath), true)
+  assert.equal(
+    harness.privilegedNodes.get(targetPath).inode,
+    harness.privilegedNodes.get(tempPath).inode
+  )
+  assert.equal(harness.requests.filter(item =>
+    item.operation === 'stage-import-cleanup').length, 1)
+  assert.equal(harness.requests.some(item =>
+    ['sha256-bound', 'remove-bound'].includes(item.operation)), false)
+
+  await assert.rejects(backend.release(), /cleanup|claim|conflict/i)
+  assert.equal(harness.privilegedNodes.has(targetPath), true)
+  assert.equal(harness.privilegedNodes.has(tempPath), true)
 })
 
 test('moving stage-import cleans only its exact inode beside a foreign path', async () => {

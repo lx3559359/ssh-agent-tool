@@ -21,6 +21,7 @@ const allowedOperations = new Set([
   'stage-export',
   'stage-export-range',
   'stage-import',
+  'stage-import-cleanup',
   'stage-cleanup',
   'digest-cleanup',
   'sha256',
@@ -48,6 +49,11 @@ const requiredStageCapabilities = Object.freeze({
     'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256', 'procFd',
     'noclobber', 'cat', 'gnuStat', 'gnuMv', 'realpath', 'chown', 'chmod', 'rm',
     'gnuDd', 'mkfifo', 'rmdir'
+  ]),
+  'stage-import-cleanup': Object.freeze([
+    'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256',
+    'procFd', 'noclobber', 'gnuStat', 'realpath', 'rm', 'gnuDd',
+    'mkfifo', 'rmdir', 'cat'
   ]),
   'stage-cleanup': Object.freeze([
     'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256', 'procFd',
@@ -278,6 +284,17 @@ const operationArguments = Object.freeze({
     'targetParentRealPath', 'targetParentDevice', 'targetParentInode',
     'targetParentUid', 'targetParentMode', 'targetDevice', 'targetInode'
   ],
+  'stage-import-cleanup': [
+    'rootPath', 'rootRealPath', 'rootDevice', 'rootInode',
+    'rootUid', 'rootGid', 'rootMode', 'objectName',
+    'tempPath', 'tempParentRealPath', 'tempParentDevice',
+    'tempParentInode', 'tempParentUid', 'tempParentMode',
+    'targetPath', 'targetParentRealPath', 'targetParentDevice',
+    'targetParentInode', 'targetParentUid', 'targetParentMode',
+    'targetDevice', 'targetInode', 'targetType', 'sha256', 'size',
+    'maxSize', 'initialMode', 'initialUid', 'initialGid',
+    'targetMode', 'targetUid', 'targetGid'
+  ],
   'stage-cleanup': [
     'rootPath', 'rootRealPath', 'rootDevice', 'rootInode',
     'rootUid', 'rootGid', 'rootMode', 'objectName', 'sha256', 'size'
@@ -326,6 +343,12 @@ const argumentVariables = Object.freeze({
   sourceInode: '__sp_sourceInode',
   sourceType: '__sp_sourceType',
   targetPath: '__sp_targetPath',
+  tempPath: '__sp_tempPath',
+  tempParentRealPath: '__sp_tempParentRealPath',
+  tempParentDevice: '__sp_tempParentDevice',
+  tempParentInode: '__sp_tempParentInode',
+  tempParentUid: '__sp_tempParentUid',
+  tempParentMode: '__sp_tempParentMode',
   sha256: '__sp_expectedSha256',
   size: '__sp_expectedSize',
   targetMode: '__sp_targetMode',
@@ -340,6 +363,9 @@ const argumentVariables = Object.freeze({
   targetDevice: '__sp_targetDevice',
   targetInode: '__sp_targetInode',
   targetType: '__sp_targetType',
+  initialMode: '__sp_initialMode',
+  initialUid: '__sp_initialUid',
+  initialGid: '__sp_initialGid',
   expectedSize: '__sp_expectedSize',
   maxSize: '__sp_maxSize',
   offset: '__sp_offset',
@@ -370,6 +396,12 @@ const argumentEnvironmentVariables = Object.freeze({
   sourceInode: 'SHELLPILOT_ARG_SOURCE_INODE',
   sourceType: 'SHELLPILOT_ARG_SOURCE_TYPE',
   targetPath: 'SHELLPILOT_ARG_TARGET_PATH',
+  tempPath: 'SHELLPILOT_ARG_TEMP_PATH',
+  tempParentRealPath: 'SHELLPILOT_ARG_TEMP_PARENT_REAL_PATH',
+  tempParentDevice: 'SHELLPILOT_ARG_TEMP_PARENT_DEVICE',
+  tempParentInode: 'SHELLPILOT_ARG_TEMP_PARENT_INODE',
+  tempParentUid: 'SHELLPILOT_ARG_TEMP_PARENT_UID',
+  tempParentMode: 'SHELLPILOT_ARG_TEMP_PARENT_MODE',
   sha256: 'SHELLPILOT_ARG_SHA256',
   size: 'SHELLPILOT_ARG_SIZE',
   targetMode: 'SHELLPILOT_ARG_TARGET_MODE',
@@ -384,6 +416,9 @@ const argumentEnvironmentVariables = Object.freeze({
   targetDevice: 'SHELLPILOT_ARG_TARGET_DEVICE',
   targetInode: 'SHELLPILOT_ARG_TARGET_INODE',
   targetType: 'SHELLPILOT_ARG_TARGET_TYPE',
+  initialMode: 'SHELLPILOT_ARG_INITIAL_MODE',
+  initialUid: 'SHELLPILOT_ARG_INITIAL_UID',
+  initialGid: 'SHELLPILOT_ARG_INITIAL_GID',
   expectedSize: 'SHELLPILOT_ARG_EXPECTED_SIZE',
   maxSize: 'SHELLPILOT_ARG_MAX_SIZE',
   offset: 'SHELLPILOT_ARG_OFFSET',
@@ -405,7 +440,8 @@ function assertRequestContract (request) {
     'targetUid', 'targetGid', 'sourceParentDevice', 'sourceParentUid',
     'sourceParentInode', 'sourceDevice', 'sourceInode',
     'targetParentDevice', 'targetParentInode', 'targetParentUid',
-    'targetDevice', 'targetInode'
+    'targetDevice', 'targetInode', 'tempParentDevice', 'tempParentInode',
+    'tempParentUid', 'initialUid', 'initialGid'
   ]) {
     if (Object.hasOwn(request.args, key) &&
       !/^(?:0|[1-9]\d*)$/.test(request.args[key])) {
@@ -413,7 +449,7 @@ function assertRequestContract (request) {
     }
   }
   for (const key of ['rootMode', 'targetMode', 'sourceParentMode',
-    'targetParentMode']) {
+    'targetParentMode', 'tempParentMode', 'initialMode']) {
     if (Object.hasOwn(request.args, key) &&
       !/^(?:0|[1-7][0-7]{0,3})$/.test(request.args[key])) {
       throw new Error(`root 文件操作参数值无效：${key}`)
@@ -452,9 +488,17 @@ function assertRequestContract (request) {
     Number(request.args.offset) > Number(request.args.expectedSize)) {
     throw new Error('root 文件操作 offset 超过 expectedSize')
   }
-  if (['stage-import', 'stage-cleanup', 'remove-bound'].includes(request.operation) &&
+  if (['stage-import', 'stage-import-cleanup', 'stage-cleanup',
+    'remove-bound'].includes(request.operation) &&
     Number(request.args.size) > maxPrivilegedTransferBytes) {
     throw new Error('root 文件操作 size 超过传输上限')
+  }
+  if (request.operation === 'stage-import-cleanup' && (
+    Number(request.args.size) > Number(request.args.maxSize) ||
+    Number(request.args.maxSize) > maxPrivilegedTransferBytes ||
+    request.args.targetType !== 'file' ||
+    request.args.tempPath === request.args.targetPath)) {
+    throw new Error('root 文件操作 stage-import-cleanup proof 无效')
   }
   if (request.operation === 'stage-export' &&
     Number(request.args.maxSize) > maxPrivilegedTransferBytes) {
@@ -720,8 +764,9 @@ const stageImportBody = [
   '__sp_importMetadataUid=',
   '__sp_importMetadataGid=',
   '__sp_importMetadataMode=',
-  '__sp_import_cleanup_candidate() { __sp_importCleanupPath="$1"; __sp_importCleanupUid="$2"; __sp_importCleanupGid="$3"; __sp_importCleanupMode="$4"; __sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || return 1; [ ! -L "$__sp_importCleanupPath" ] && [ -f "$__sp_importCleanupPath" ] || return 1; exec 3< "$__sp_importCleanupPath" || return $?; __sp_fd3="/proc/$$/fd/3"; __sp_fd_entry_matches "$__sp_fd3" "$__sp_tempDevice" "$__sp_tempInode" file || { exec 3<&-; return 1; }; [ "$(stat -L -c %s -- "$__sp_fd3")" = "$__sp_expectedSize" ] || { exec 3<&-; return 1; }; __sp_importCleanupDigest="$(__sp_bounded_digest 0 "$__sp_expectedSize")" || { exec 3<&-; return 1; }; __sp_importCleanupSize="$(stat -L -c %s -- "$__sp_fd3")" || { exec 3<&-; return 1; }; __sp_importCleanupActualUid="$(stat -L -c %u -- "$__sp_fd3")" || { exec 3<&-; return 1; }; __sp_importCleanupActualGid="$(stat -L -c %g -- "$__sp_fd3")" || { exec 3<&-; return 1; }; __sp_importCleanupActualMode="$(stat -L -c %a -- "$__sp_fd3")" || { exec 3<&-; return 1; }; [ "$__sp_importCleanupDigest" = "$__sp_expectedSha256" ] && [ "$__sp_importCleanupSize" = "$__sp_expectedSize" ] && [ "$__sp_importCleanupActualUid" = "$__sp_importCleanupUid" ] && [ "$__sp_importCleanupActualGid" = "$__sp_importCleanupGid" ] && [ "$__sp_importCleanupActualMode" = "$__sp_importCleanupMode" ] || { exec 3<&-; return 1; }; __sp_path_matches_fd "$__sp_importCleanupPath" "$__sp_tempDevice" "$__sp_tempInode" || { exec 3<&-; return 1; }; __sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || { exec 3<&-; return 1; }; rm -f -- "$__sp_importCleanupPath"; __sp_importCleanupStatus=$?; exec 3<&-; return "$__sp_importCleanupStatus"; }',
-  '__sp_import_cleanup() { exec 4>&- 2>/dev/null; if [ "$__sp_importTempCreated" = 0 ] && [ "$__sp_importInstalled" = 0 ] && [ "$__sp_importMoving" = 0 ] && [ "$__sp_importClaimMayExist" = 0 ]; then return 0; fi; [ -n "$__sp_tempDevice" ] && [ -n "$__sp_tempInode" ] && [ "$__sp_importMetadataKnown" = 1 ] || return 1; if [ "$__sp_importMoving" = 1 ]; then __sp_importExactCount=0; __sp_importExactPath=; for __sp_importCandidate in "./$__sp_importTempName" "./$__sp_targetName"; do if [ -e "$__sp_importCandidate" ] || [ -L "$__sp_importCandidate" ]; then if __sp_entry_matches "$__sp_importCandidate" "$__sp_tempDevice" "$__sp_tempInode" file; then __sp_importExactCount=$((__sp_importExactCount + 1)); __sp_importExactPath="$__sp_importCandidate"; fi; fi; done; [ "$__sp_importExactCount" -eq 1 ] || return 1; __sp_import_cleanup_candidate "$__sp_importExactPath" "$__sp_importMetadataUid" "$__sp_importMetadataGid" "$__sp_importMetadataMode"; return $?; fi; if [ -e "./$__sp_importTempName" ] || [ -L "./$__sp_importTempName" ]; then [ "$__sp_importTempCreated" = 1 ] || return 1; __sp_import_cleanup_candidate "./$__sp_importTempName" "$__sp_importMetadataUid" "$__sp_importMetadataGid" "$__sp_importMetadataMode"; return $?; fi; if [ -e "./$__sp_targetName" ] || [ -L "./$__sp_targetName" ]; then [ "$__sp_importInstalled" = 1 ] || return 1; __sp_import_cleanup_candidate "./$__sp_targetName" "$__sp_importMetadataUid" "$__sp_importMetadataGid" "$__sp_importMetadataMode"; return $?; fi; [ "$__sp_importTempCreated" = 0 ] && [ "$__sp_importInstalled" = 0 ]; }',
+  '__sp_import_cleanup_exact_locations() { __sp_importExactCount=0; __sp_importExactPath=; for __sp_importCandidate in "./$__sp_importTempName" "./$__sp_targetName"; do if [ -e "$__sp_importCandidate" ] || [ -L "$__sp_importCandidate" ]; then if __sp_entry_matches "$__sp_importCandidate" "$__sp_tempDevice" "$__sp_tempInode" file; then __sp_importExactCount=$((__sp_importExactCount + 1)); __sp_importExactPath="$__sp_importCandidate"; fi; fi; done; }',
+  '__sp_import_cleanup_candidate() { __sp_importCleanupPath="$1"; __sp_importCleanupUid="$2"; __sp_importCleanupGid="$3"; __sp_importCleanupMode="$4"; __sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || return 1; [ ! -L "$__sp_importCleanupPath" ] && [ -f "$__sp_importCleanupPath" ] || return 1; exec 3< "$__sp_importCleanupPath" || return $?; __sp_fd3="/proc/$$/fd/3"; __sp_fd_entry_matches "$__sp_fd3" "$__sp_tempDevice" "$__sp_tempInode" file || { exec 3<&-; return 1; }; [ "$(stat -L -c %s -- "$__sp_fd3")" = "$__sp_expectedSize" ] || { exec 3<&-; return 1; }; __sp_importCleanupDigest="$(__sp_bounded_digest 0 "$__sp_expectedSize")" || { exec 3<&-; return 1; }; __sp_importCleanupSize="$(stat -L -c %s -- "$__sp_fd3")" || { exec 3<&-; return 1; }; __sp_importCleanupActualUid="$(stat -L -c %u -- "$__sp_fd3")" || { exec 3<&-; return 1; }; __sp_importCleanupActualGid="$(stat -L -c %g -- "$__sp_fd3")" || { exec 3<&-; return 1; }; __sp_importCleanupActualMode="$(stat -L -c %a -- "$__sp_fd3")" || { exec 3<&-; return 1; }; [ "$__sp_importCleanupDigest" = "$__sp_expectedSha256" ] && [ "$__sp_importCleanupSize" = "$__sp_expectedSize" ] && [ "$__sp_importCleanupActualUid" = "$__sp_importCleanupUid" ] && [ "$__sp_importCleanupActualGid" = "$__sp_importCleanupGid" ] && [ "$__sp_importCleanupActualMode" = "$__sp_importCleanupMode" ] || { exec 3<&-; return 1; }; __sp_path_matches_fd "$__sp_importCleanupPath" "$__sp_tempDevice" "$__sp_tempInode" || { exec 3<&-; return 1; }; __sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode" || { exec 3<&-; return 1; }; __sp_import_cleanup_exact_locations; [ "$__sp_importExactCount" -eq 1 ] && [ "$__sp_importExactPath" = "$__sp_importCleanupPath" ] || { exec 3<&-; return 1; }; rm -f -- "$__sp_importCleanupPath"; __sp_importCleanupStatus=$?; if [ "$__sp_importCleanupStatus" -eq 0 ]; then __sp_import_cleanup_exact_locations; [ "$__sp_importExactCount" -eq 0 ] || __sp_importCleanupStatus=1; fi; exec 3<&-; return "$__sp_importCleanupStatus"; }',
+  '__sp_import_cleanup() { exec 4>&- 2>/dev/null; if [ "$__sp_importTempCreated" = 0 ] && [ "$__sp_importInstalled" = 0 ] && [ "$__sp_importMoving" = 0 ] && [ "$__sp_importClaimMayExist" = 0 ]; then return 0; fi; [ -n "$__sp_tempDevice" ] && [ -n "$__sp_tempInode" ] && [ "$__sp_importMetadataKnown" = 1 ] || return 1; if [ "$__sp_importMoving" = 1 ]; then __sp_import_cleanup_exact_locations; [ "$__sp_importExactCount" -eq 1 ] || return 1; __sp_import_cleanup_candidate "$__sp_importExactPath" "$__sp_importMetadataUid" "$__sp_importMetadataGid" "$__sp_importMetadataMode"; return $?; fi; if [ -e "./$__sp_importTempName" ] || [ -L "./$__sp_importTempName" ]; then [ "$__sp_importTempCreated" = 1 ] || return 1; __sp_import_cleanup_candidate "./$__sp_importTempName" "$__sp_importMetadataUid" "$__sp_importMetadataGid" "$__sp_importMetadataMode"; return $?; fi; if [ -e "./$__sp_targetName" ] || [ -L "./$__sp_targetName" ]; then [ "$__sp_importInstalled" = 1 ] || return 1; __sp_import_cleanup_candidate "./$__sp_targetName" "$__sp_importMetadataUid" "$__sp_importMetadataGid" "$__sp_importMetadataMode"; return $?; fi; [ "$__sp_importTempCreated" = 0 ] && [ "$__sp_importInstalled" = 0 ]; }',
   '__sp_import_emit_residual() { if [ "$__sp_importInstalled" = 1 ] && [ "$__sp_importMetadataKnown" = 1 ] && [ -n "$__sp_tempDevice" ] && [ -n "$__sp_tempInode" ]; then if [ "$__sp_importTargetClaimEmitted" != 1 ]; then __sp_emit_install "$__sp_expectedSha256" "$__sp_expectedSize" "$__sp_tempDevice" "$__sp_tempInode" "$__sp_importMetadataMode" "$__sp_importMetadataUid" "$__sp_importMetadataGid" || return 1; __sp_importTargetClaimEmitted=1; fi; __sp_emit_import_cleanup 0 target; return $?; fi; if [ "$__sp_importMoving" = 1 ]; then __sp_emit_import_cleanup 0 moving; return $?; fi; if [ "$__sp_importTempCreated" = 1 ] && [ "$__sp_importTempClaimEmitted" = 1 ]; then __sp_emit_import_cleanup 0 temp; return $?; fi; __sp_emit_import_cleanup 0 unknown; }',
   '__sp_import_finalize() { __sp_importFinalizeStatus="$1"; [ "$__sp_importFinalizeStatus" -ne 0 ] || return 0; trap - 0 HUP INT TERM; exec 3<&- 4>&- 5<&- 2>/dev/null; __sp_import_cleanup >/dev/null 2>&1; __sp_importCleanupStatus=$?; if [ "$__sp_importCleanupStatus" -eq 0 ]; then __sp_emit_import_cleanup 1 none || :; else __sp_import_emit_residual || :; fi; return "$__sp_importFinalizeStatus"; }',
   '__sp_importSignalled=0',
@@ -823,6 +868,39 @@ const stageCleanupBody = [
   '[ "$__sp_digest" = "$__sp_expectedSha256" ] && [ "$__sp_size" = "$__sp_expectedSize" ] || { exec 3<&-; return 1; }',
   '__sp_path_matches_fd "./$__sp_objectName" "$__sp_objectDevice" "$__sp_objectInode" || { exec 3<&-; return 1; }',
   'rm -f -- "./$__sp_objectName" || { __sp_status=$?; exec 3<&-; return "$__sp_status"; }',
+  'exec 3<&-'
+].join('; ')
+
+const stageImportCleanupBody = [
+  '__sp_bind_root || return $?',
+  '[ "$__sp_uid_effective" = 0 ] || return 1',
+  '__sp_import_residual_parents_match() { __sp_trusted_parent_path_matches "$__sp_tempParentRealPath" "$__sp_tempParentDevice" "$__sp_tempParentInode" "$__sp_tempParentUid" "$__sp_tempParentMode" && __sp_trusted_parent_path_matches "$__sp_targetParentRealPath" "$__sp_targetParentDevice" "$__sp_targetParentInode" "$__sp_targetParentUid" "$__sp_targetParentMode"; }',
+  '__sp_import_residual_exact_count() { __sp_importResidualExactCount=0; __sp_importResidualExactPath=; for __sp_importResidualCandidate in "$__sp_tempPath" "$__sp_targetPath"; do if [ -e "$__sp_importResidualCandidate" ] || [ -L "$__sp_importResidualCandidate" ]; then if __sp_entry_matches "$__sp_importResidualCandidate" "$__sp_targetDevice" "$__sp_targetInode" "$__sp_targetType"; then __sp_importResidualExactCount=$((__sp_importResidualExactCount + 1)); __sp_importResidualExactPath="$__sp_importResidualCandidate"; fi; fi; done; }',
+  '__sp_import_residual_metadata_matches() { __sp_importResidualMode="$(stat -L -c %a -- "$__sp_fd3")" && __sp_importResidualUid="$(stat -L -c %u -- "$__sp_fd3")" && __sp_importResidualGid="$(stat -L -c %g -- "$__sp_fd3")" || return 1; { [ "$__sp_importResidualMode" = "$__sp_initialMode" ] && [ "$__sp_importResidualUid" = "$__sp_initialUid" ] && [ "$__sp_importResidualGid" = "$__sp_initialGid" ]; } || { [ "$__sp_importResidualMode" = "$__sp_initialMode" ] && [ "$__sp_importResidualUid" = "$__sp_targetUid" ] && [ "$__sp_importResidualGid" = "$__sp_targetGid" ]; } || { [ "$__sp_importResidualMode" = "$__sp_targetMode" ] && [ "$__sp_importResidualUid" = "$__sp_targetUid" ] && [ "$__sp_importResidualGid" = "$__sp_targetGid" ]; }; }',
+  '__sp_import_residual_parents_match || return 1',
+  '__sp_import_residual_exact_count',
+  '[ "$__sp_importResidualExactCount" -eq 1 ] || return 1',
+  '__sp_importResidualDeletePath="$__sp_importResidualExactPath"',
+  '[ ! -L "$__sp_importResidualDeletePath" ] && [ -f "$__sp_importResidualDeletePath" ] || return 1',
+  'exec 3< "$__sp_importResidualDeletePath" || return $?',
+  '__sp_fd3="/proc/$$/fd/3"',
+  '__sp_fd_entry_matches "$__sp_fd3" "$__sp_targetDevice" "$__sp_targetInode" "$__sp_targetType" || { exec 3<&-; return 1; }',
+  '[ "$(stat -L -c %s -- "$__sp_fd3")" = "$__sp_expectedSize" ] || { exec 3<&-; return 1; }',
+  '__sp_import_residual_metadata_matches || { exec 3<&-; return 1; }',
+  '__sp_path_matches_fd "$__sp_importResidualDeletePath" "$__sp_targetDevice" "$__sp_targetInode" || { exec 3<&-; return 1; }',
+  '__sp_import_residual_parents_match || { exec 3<&-; return 1; }',
+  '__sp_importResidualDigest="$(__sp_bounded_digest 0 "$__sp_expectedSize")" || { exec 3<&-; return 1; }',
+  '[ "$__sp_importResidualDigest" = "$__sp_expectedSha256" ] && [ "$(stat -L -c %s -- "$__sp_fd3")" = "$__sp_expectedSize" ] || { exec 3<&-; return 1; }',
+  '__sp_fd_entry_matches "$__sp_fd3" "$__sp_targetDevice" "$__sp_targetInode" "$__sp_targetType" || { exec 3<&-; return 1; }',
+  '__sp_import_residual_metadata_matches || { exec 3<&-; return 1; }',
+  '__sp_path_matches_fd "$__sp_importResidualDeletePath" "$__sp_targetDevice" "$__sp_targetInode" || { exec 3<&-; return 1; }',
+  '__sp_import_residual_parents_match || { exec 3<&-; return 1; }',
+  '__sp_import_residual_exact_count',
+  '[ "$__sp_importResidualExactCount" -eq 1 ] && [ "$__sp_importResidualExactPath" = "$__sp_importResidualDeletePath" ] || { exec 3<&-; return 1; }',
+  'rm -f -- "$__sp_importResidualDeletePath" || { __sp_importResidualStatus=$?; exec 3<&-; return "$__sp_importResidualStatus"; }',
+  '__sp_import_residual_parents_match || { exec 3<&-; return 1; }',
+  '__sp_import_residual_exact_count',
+  '[ "$__sp_importResidualExactCount" -eq 0 ] || { exec 3<&-; return 1; }',
   'exec 3<&-'
 ].join('; ')
 
@@ -1066,6 +1144,7 @@ const operationBodies = Object.freeze({
   'stage-export': stageExportBody,
   'stage-export-range': stageExportRangeBody,
   'stage-import': stageImportBody,
+  'stage-import-cleanup': stageImportCleanupBody,
   'stage-cleanup': stageCleanupBody,
   'digest-cleanup': digestCleanupBody,
   // The legacy unbound digest request has no trusted size or inode contract.
@@ -1095,7 +1174,7 @@ export function createPrivilegedFileRequest ({ operation, args = {} } = {}) {
       throw new Error(`root 文件操作参数过长：${key}`)
     }
     if (['mode', 'rootMode', 'targetMode', 'sourceParentMode',
-      'targetParentMode'].includes(key) &&
+      'targetParentMode', 'tempParentMode', 'initialMode'].includes(key) &&
       /^[0-7]{1,4}$/.test(text)) {
       text = text.replace(/^0+(?=[0-7])/, '')
     }
@@ -1108,6 +1187,7 @@ export function createPrivilegedFileRequest ({ operation, args = {} } = {}) {
   for (const [pathKey, parentKey] of [
     ['sourcePath', 'sourceParentRealPath'],
     ['path', 'sourceParentRealPath'],
+    ['tempPath', 'tempParentRealPath'],
     ['targetPath', 'targetParentRealPath']
   ]) {
     if (Object.hasOwn(normalized, pathKey) &&
@@ -1142,9 +1222,39 @@ export function createPrivilegedFileRequest ({ operation, args = {} } = {}) {
     Number(normalized.offset) > Number(normalized.expectedSize)) {
     throw new Error('root 文件操作 offset 超过 expectedSize')
   }
-  if (['stage-import', 'stage-cleanup', 'remove-bound'].includes(operation) &&
+  if (['stage-import', 'stage-import-cleanup', 'stage-cleanup',
+    'remove-bound'].includes(operation) &&
     Number(normalized.size) > maxPrivilegedTransferBytes) {
     throw new Error('root 文件操作 size 超过传输上限')
+  }
+  if (operation === 'stage-import-cleanup' && (
+    Number(normalized.size) > Number(normalized.maxSize) ||
+    Number(normalized.maxSize) > maxPrivilegedTransferBytes ||
+    normalized.targetType !== 'file' ||
+    normalized.tempPath === normalized.targetPath)) {
+    throw new Error('root 文件操作 stage-import-cleanup proof 无效')
+  }
+  if (operation === 'stage-import-cleanup') {
+    for (const key of [
+      'rootDevice', 'rootInode', 'rootUid', 'rootGid',
+      'tempParentDevice', 'tempParentInode', 'tempParentUid',
+      'targetParentDevice', 'targetParentInode', 'targetParentUid',
+      'targetDevice', 'targetInode', 'initialUid', 'initialGid',
+      'targetUid', 'targetGid'
+    ]) {
+      if (!/^(?:0|[1-9]\d*)$/.test(normalized[key]) ||
+        !Number.isSafeInteger(Number(normalized[key]))) {
+        throw new Error(`root 文件操作参数值无效：${key}`)
+      }
+    }
+    for (const key of [
+      'rootMode', 'tempParentMode', 'targetParentMode',
+      'initialMode', 'targetMode'
+    ]) {
+      if (!/^(?:0|[1-7][0-7]{0,3})$/.test(normalized[key])) {
+        throw new Error(`root 文件操作参数值无效：${key}`)
+      }
+    }
   }
   if (operation === 'stage-export' &&
     Number(normalized.maxSize) > maxPrivilegedTransferBytes) {
@@ -1171,7 +1281,7 @@ export function createPrivilegedFileRequest ({ operation, args = {} } = {}) {
       normalized.rootRealPath !== normalized.rootPath)) {
     throw new Error('root 文件操作 rootRealPath 与 rootPath 不匹配')
   }
-  if (operation === 'stage-import' &&
+  if (['stage-import', 'stage-import-cleanup'].includes(operation) &&
     Object.hasOwn(normalized, 'targetPath') &&
     !isCanonicalAbsoluteFilePath(normalized.targetPath)) {
     throw new Error('root 文件操作 targetPath 必须为规范绝对路径')
@@ -1490,7 +1600,7 @@ export function createPrivilegedFileParser ({ token: providedToken, request }) {
   const mutationOperations = new Set([
     'probe', 'remove-bound',
     'rename-bound', 'metadata-bound', 'touch-bound',
-    'stage-cleanup', 'digest-cleanup'
+    'stage-import-cleanup', 'stage-cleanup', 'digest-cleanup'
   ])
 
   function consumeStart (fields) {
