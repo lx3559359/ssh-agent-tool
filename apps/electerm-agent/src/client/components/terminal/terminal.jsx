@@ -62,6 +62,10 @@ import { createManagedPtyTaskController } from './managed-pty-task-controller.js
 import {
   createPtyTaskToken
 } from '../operations-toolkit/runtime/pty-task-protocol.js'
+import {
+  createPrivilegedFileProtocol,
+  createPrivilegedFileRequest
+} from '../sftp/privileged-file-protocol.js'
 import iconsMap from '../sys-menu/icons-map.jsx'
 import { refs, refsStatic } from '../common/ref.js'
 import ExternalLink from '../common/external-link.jsx'
@@ -1339,6 +1343,32 @@ class Term extends Component {
 
   acquireOperationsPtyTask = ownerId => {
     return this.operationsPtyTaskController.acquire(ownerId)
+  }
+
+  acquireRemoteFilePtyTask = async ownerId => {
+    const lease = await this.operationsPtyTaskController.acquire(
+      `root-file:${ownerId}`
+    )
+    const protocol = createPrivilegedFileProtocol()
+    return Object.freeze({
+      execute: (request, options = {}) => {
+        if (!request || typeof request !== 'object' ||
+          Object.keys(request).some(key => !['operation', 'args'].includes(key))) {
+          throw new Error('root 文件 PTY 请求合同无效')
+        }
+        if (!options || typeof options !== 'object' || Array.isArray(options) ||
+          Object.keys(options).some(key => !['signal', 'timeoutMs'].includes(key))) {
+          throw new Error('root 文件 PTY 执行选项无效')
+        }
+        const boundedRequest = createPrivilegedFileRequest(request)
+        return lease.execute({
+          protocol,
+          request: boundedRequest,
+          ...options
+        })
+      },
+      release: () => lease.release()
+    })
   }
 
   handleManagedPtyInput = data => {

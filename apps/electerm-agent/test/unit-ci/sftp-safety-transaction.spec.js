@@ -855,19 +855,41 @@ test('SFTP endpoint identity survives transport refresh but rejects another secu
   )).href)
   const tab = {
     id: 'tab-stable',
-    host: 'prod.example.com',
+    host: 'Prod.Example.com.',
     port: 2222,
     username: 'deploy',
     title: 'production'
   }
   const endpoint = buildSftpSafetyEndpoint({
     tab,
-    terminalId: 'terminal-session-stable'
+    terminalId: 'terminal-session-stable',
+    terminalEndpoint: {
+      ...tab,
+      tabId: tab.id,
+      connectionUsername: tab.username,
+      pid: 'ssh-terminal-pid-1',
+      terminalPid: 'ssh-terminal-pid-1',
+      hostKeyFingerprint: 'SHA256:one'
+    }
   })
+  assert.equal(endpoint.host, tab.host)
+  assert.equal(endpoint.pid, 'sftp:tab-stable:terminal-session-stable')
+  assert.equal(endpoint.terminalPid, 'terminal-session-stable')
+  assert.equal(endpoint.sshTerminalPid, 'ssh-terminal-pid-1')
+  assert.equal(endpoint.connectionUsername, 'deploy')
+  assert.equal(endpoint.hostKeyFingerprint, 'SHA256:one')
   const operation = await createSideEffectOperation({ endpoint })
   const refreshedEndpoint = buildSftpSafetyEndpoint({
     tab: { ...tab },
-    terminalId: 'terminal-session-stable'
+    terminalId: 'terminal-session-stable',
+    terminalEndpoint: {
+      ...tab,
+      tabId: tab.id,
+      connectionUsername: tab.username,
+      pid: 'ssh-terminal-pid-1',
+      terminalPid: 'ssh-terminal-pid-1',
+      hostKeyFingerprint: 'SHA256:one'
+    }
   })
   const context = await createSideEffectRunner({
     operation,
@@ -907,6 +929,59 @@ test('SFTP endpoint identity survives transport refresh but rejects another secu
         getSftpSafetyEndpoint: () => changedEndpoint
       })
     ), undefined)
+  }
+})
+
+test('SFTP endpoint rejects a terminal from another SSH connection identity', async t => {
+  const { buildSftpSafetyEndpoint } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-safety-endpoint.js'
+  )).href)
+  const tab = {
+    id: 'tab-exact',
+    host: 'prod.example.com',
+    port: 2222,
+    username: 'deploy'
+  }
+  const terminalEndpoint = {
+    tabId: tab.id,
+    host: tab.host,
+    port: tab.port,
+    username: tab.username,
+    connectionUsername: tab.username,
+    pid: 'ssh-pid-one',
+    terminalPid: 'ssh-pid-one',
+    sessionType: 'ssh',
+    hostKeyFingerprint: 'SHA256:one'
+  }
+  const cases = [
+    ['host', { host: 'other.example.com' }],
+    ['port', { port: 22 }],
+    ['username', { connectionUsername: 'root' }],
+    ['tabId', { tabId: 'tab-other' }]
+  ]
+  for (const [label, changed] of cases) {
+    await t.test(label, () => {
+      assert.throws(() => buildSftpSafetyEndpoint({
+        tab,
+        terminalId: 'sftp-session-one',
+        terminalEndpoint: { ...terminalEndpoint, ...changed }
+      }), /端点|主机|端口|用户|标签/i)
+    })
+  }
+  for (const [label, missingField] of [
+    ['PID', 'terminalPid'],
+    ['fingerprint', 'hostKeyFingerprint']
+  ]) {
+    await t.test(label, () => {
+      const changed = { ...terminalEndpoint, [missingField]: '' }
+      if (missingField === 'terminalPid') changed.pid = ''
+      assert.throws(() => buildSftpSafetyEndpoint({
+        tab,
+        terminalId: 'sftp-session-one',
+        terminalEndpoint: changed
+      }), /进程|指纹/i)
+    })
   }
 })
 

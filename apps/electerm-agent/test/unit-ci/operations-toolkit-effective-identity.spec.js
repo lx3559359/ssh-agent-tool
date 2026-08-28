@@ -40,6 +40,33 @@ test('operations endpoint is projected from the exact verified terminal session'
   assert.match(terminal, /connectionUsername:\s*username/)
 })
 
+test('terminal exposes a fixed root-file request lease on the operations controller lock', () => {
+  const terminal = read('src/client/components/terminal/terminal.jsx')
+  const methodStart = terminal.indexOf('acquireRemoteFilePtyTask')
+  const methodEnd = terminal.indexOf('handleManagedPtyInput', methodStart)
+  const method = terminal.slice(methodStart, methodEnd)
+
+  assert.match(terminal, /createPrivilegedFileProtocol/)
+  assert.match(terminal, /createPrivilegedFileRequest/)
+  assert.match(method, /operationsPtyTaskController\.acquire/)
+  assert.match(method, /root-file:/)
+  assert.match(method, /createPrivilegedFileProtocol\(\)/)
+  assert.match(method, /createPrivilegedFileRequest\(/)
+  assert.doesNotMatch(method, /script/)
+  assert.match(terminal, /acquireOperationsPtyTask\s*=\s*ownerId\s*=>\s*\{[\s\S]*?operationsPtyTaskController\.acquire\(ownerId\)/)
+})
+
+test('SFTP reads its safety endpoint from the same-tab SSH terminal', () => {
+  const sftpEntry = read('src/client/components/sftp/sftp-entry.jsx')
+  const methodStart = sftpEntry.indexOf('getSftpSafetyEndpoint = () =>')
+  const methodEnd = sftpEntry.indexOf('assertSftpSafetyOperationEndpoint', methodStart)
+  const method = sftpEntry.slice(methodStart, methodEnd)
+
+  assert.match(method, /refs\.get\('term-' \+ this\.props\.tab\.id\)/)
+  assert.match(method, /terminal\?\.getTerminalSafetyEndpoint\?\.\(\)/)
+  assert.match(method, /terminalEndpoint/)
+})
+
 test('task panel labels login and effective shell identities separately', () => {
   const taskPanel = read(
     'src/client/components/operations-toolkit/workspace/task-panel.jsx'

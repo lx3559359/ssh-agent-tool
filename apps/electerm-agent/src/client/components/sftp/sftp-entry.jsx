@@ -542,9 +542,11 @@ export default class Sftp extends Component {
     if (!this.sftp || this.props.isFtp || this.type === 'ftp') {
       throw new Error('当前 SFTP 连接不可用，远程文件尚未修改。')
     }
+    const terminal = refs.get('term-' + this.props.tab.id)
     return buildSftpSafetyEndpoint({
       tab: this.props.tab,
-      terminalId: this.terminalId
+      terminalId: this.terminalId,
+      terminalEndpoint: terminal?.getTerminalSafetyEndpoint?.()
     })
   }
 
