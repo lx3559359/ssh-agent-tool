@@ -319,8 +319,35 @@ function createBackendHarness (options = {}) {
       }
     }
     if (request.operation === 'stage-import') {
-      if (options.importFailure) throw new Error('stage import failed')
       const bytes = nodes.get(`${args.rootPath}/${args.objectName}`).content
+      if (options.importFailure) {
+        if (options.privilegedTree && options.importResidual) {
+          const residualPath = options.importResidual === 'temp'
+            ? `${args.targetParentRealPath}/.shellpilot-${args.objectName}.tmp`
+            : args.targetPath
+          privilegedNodes.set(residualPath, ensurePrivilegedBinding({
+            type: 'file',
+            mode: Number.parseInt(args.targetMode, 8),
+            uid: Number(args.targetUid),
+            gid: Number(args.targetGid),
+            content: Buffer.from(bytes)
+          }))
+          if (options.importForeignTarget) {
+            privilegedNodes.set(args.targetPath, ensurePrivilegedBinding({
+              type: 'file',
+              mode: 0o600,
+              uid: 99,
+              gid: 99,
+              content: Buffer.from('foreign')
+            }))
+          }
+        }
+        const error = new Error(options.importCancellation
+          ? 'stage import cancelled after claim'
+          : 'stage import failed')
+        if (options.importCancellation) error.name = 'AbortError'
+        throw error
+      }
       if (args.mustBeAbsent !== '1') {
         throw new Error('stage import requires an absent target')
       }
@@ -752,6 +779,12 @@ function createBackendHarness (options = {}) {
         args.targetParentRealPath
       ))
       const node = ensurePrivilegedBinding(privilegedNodes.get(args.targetPath))
+      if (options.importCleanupFailures > 0 &&
+        (args.targetPath === options.importCleanupTarget ||
+          args.targetPath.includes('/.shellpilot-upload-'))) {
+        options.importCleanupFailures -= 1
+        throw new Error('import residual cleanup failed')
+      }
       const mutatedContent = options.mutateBeforeRemoveBound?.[args.targetPath]
       if (mutatedContent !== undefined && node?.type === 'file') {
         node.content = Buffer.from(mutatedContent)
@@ -1473,6 +1506,90 @@ test('bounded digest failures track scratch cleanup without preserving a fake st
   assert.equal(await backend.release(), true)
   assert.equal(harness.requests.filter(request =>
     request.operation === 'digest-cleanup').length, 2)
+})
+
+test('cancelled stage-import defers target proof cleanup and release retries residuals', async () => {
+  const targetPath = '/cancelled'
+  const harness = createBackendHarness({
+    importFailure: true,
+    importCancellation: true,
+    importResidual: 'target',
+    importCleanupFailures: 1,
+    importCleanupTarget: targetPath,
+    privilegedTree: {}
+  })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.writeFile(targetPath, Buffer.from('safe')),
+    error => {
+      assert.match(error.message, /stage import cancelled/)
+      assert.match(error.cleanupError?.message || '', /residual cleanup/)
+      return true
+    }
+  )
+  assert.equal(harness.privilegedNodes.has(targetPath), true)
+  const importIndex = harness.requests.findIndex(request =>
+    request.operation === 'stage-import')
+  const cleanupIndex = harness.requests.findIndex(request =>
+    request.operation === 'remove-bound' && request.args.targetPath === targetPath)
+  assert.ok(cleanupIndex > importIndex)
+  assert.equal(harness.executions[cleanupIndex].signal, undefined)
+
+  assert.equal(await backend.release(), true)
+  assert.equal(harness.privilegedNodes.has(targetPath), false)
+  assert.equal(harness.requests.filter(request =>
+    request.operation === 'remove-bound' &&
+    request.args.targetPath === targetPath).length, 2)
+})
+
+test('cancelled stage-import cleans its temp residual without touching a foreign target', async () => {
+  const targetPath = '/root/foreign'
+  const harness = createBackendHarness({
+    importFailure: true,
+    importCancellation: true,
+    importResidual: 'temp',
+    importForeignTarget: true,
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.writeFile(targetPath, Buffer.from('safe')),
+    /stage import cancelled/
+  )
+  assert.equal(harness.privilegedNodes.get(targetPath).content.toString(), 'foreign')
+  assert.equal(harness.privilegedNodes.has(
+    harness.requests.find(request => request.operation === 'remove-bound')
+      .args.targetPath
+  ), false)
+  assert.equal(await backend.release(), true)
+  assert.equal(harness.privilegedNodes.get(targetPath).content.toString(), 'foreign')
+})
+
+test('direct privileged remove APIs reject an over-budget file before digest', async () => {
+  const hugeSize = 8 * 1024 * 1024 * 1024 + 1
+  const harness = createBackendHarness({
+    digestFailure: true,
+    privilegedTree: {
+      '/root/huge': {
+        type: 'file', size: hugeSize, virtualByte: 0x61, content: ''
+      }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  for (const remove of [
+    () => backend.sftp.rm('/root/huge'),
+    () => backend.sftp.removeEntry('/root/huge', {})
+  ]) {
+    await assert.rejects(remove(), /budget|8 GiB|预算|上限/i)
+  }
+  assert.equal(harness.requests.some(request =>
+    request.operation === 'sha256-bound' && request.args.path === '/root/huge'), false)
+  await backend.release()
 })
 
 test('privileged chunk streams re-export after EOF and observe same-size source changes', async () => {

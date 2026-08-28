@@ -376,6 +376,7 @@ export async function createPrivilegedFileBackend ({
   const readStreams = new Map()
   const readLocks = new Map()
   const pendingDigestCleanups = new Set()
+  const pendingImportCleanups = new Map()
 
   function withReadLock (path, work) {
     const previous = readLocks.get(path) || Promise.resolve()
@@ -709,6 +710,9 @@ export async function createPrivilegedFileBackend ({
     }
     let proof
     if (entry.metadata.type === 'file') {
+      if (entry.metadata.size > copyLimits.maxTotalBytes) {
+        throw new Error(`root 文件后端 ${label} 超过 8 GiB 安全预算`)
+      }
       proof = await boundDigest({
         path,
         metadata: entry.metadata,
@@ -720,6 +724,91 @@ export async function createPrivilegedFileBackend ({
       }
     }
     return boundRemovalArgs(path, entry, proof)
+  }
+
+  function importTempPath (targetPath, objectName) {
+    const parentPath = parentFilePath(targetPath)
+    return canonicalFilePath(
+      `${parentPath === '/' ? '' : parentPath}/.shellpilot-${objectName}.tmp`,
+      'stage-import residual'
+    )
+  }
+
+  function parentBindingMatches (actual, expected) {
+    return String(actual.device) === String(expected.device) &&
+      String(actual.inode) === String(expected.inode) &&
+      Number(actual.uid) === Number(expected.uid) &&
+      normalizeMode(actual.mode & 0o7777) ===
+        normalizeMode(expected.mode & 0o7777)
+  }
+
+  async function cleanupImportResidual (record, signal) {
+    staging.assertCurrent()
+    for (const candidate of [record.tempPath, record.targetPath]) {
+      let entry
+      try {
+        entry = await boundMutationEntry(
+          candidate,
+          'stage-import residual cleanup',
+          signal
+        )
+      } catch (error) {
+        if (error?.code === 'ENOENT') continue
+        throw error
+      }
+      if (entry.metadata.type !== 'file' ||
+        entry.metadata.size !== record.proof.size ||
+        !parentBindingMatches(entry.parent, record.parent)) {
+        throw new Error('root 文件后端 stage-import residual proof 发生变化')
+      }
+      const proof = await boundDigest({
+        path: candidate,
+        metadata: entry.metadata,
+        maxSize: record.proof.size
+      }, 'sha256-bound', 0, readChunkBytes, signal)
+      if (proof.sha256 !== record.proof.sha256 ||
+        proof.size !== record.proof.size) {
+        throw new Error('root 文件后端 stage-import residual 内容证明发生变化')
+      }
+      await executeRequest('remove-bound',
+        boundRemovalArgs(candidate, entry, proof), { signal })
+      break
+    }
+    pendingImportCleanups.delete(record.objectName)
+    return true
+  }
+
+  async function executeStageImport (stage, targetPath, parent, args, signal) {
+    const record = Object.freeze({
+      objectName: stage.objectName,
+      targetPath,
+      tempPath: importTempPath(targetPath, stage.objectName),
+      parent: Object.freeze({ ...parent }),
+      proof: Object.freeze({
+        sha256: args.sha256,
+        size: Number(args.size)
+      })
+    })
+    pendingImportCleanups.set(record.objectName, record)
+    try {
+      const result = await executeRequest('stage-import', args, { signal })
+      pendingImportCleanups.delete(record.objectName)
+      return result
+    } catch (error) {
+      const interrupted = signal?.aborted || [
+        'AbortError', 'TimeoutError', 'CancellationUnknownError'
+      ].includes(error?.name)
+      if (!interrupted) {
+        pendingImportCleanups.delete(record.objectName)
+        throw error
+      }
+      try {
+        await cleanupImportResidual(record)
+      } catch (cleanupError) {
+        attachCleanupFailure(error, cleanupError)
+      }
+      throw error
+    }
   }
 
   async function boundLstat (path, parentMetadata, signal) {
@@ -844,20 +933,21 @@ export async function createPrivilegedFileBackend ({
         throw new Error('root 文件后端复制源在清单后发生变化')
       }
       throwIfAborted(signal)
-      const imported = digestResult(await executeRequest('stage-import', {
-        ...staging.rootBinding,
-        objectName: stage.objectName,
-        targetPath,
-        sha256: exported.sha256,
-        size: String(exported.size),
-        targetMode: normalizeMode(entry.metadata.mode & 0o7777).toString(8),
-        targetUid: String(entry.metadata.uid),
-        targetGid: String(entry.metadata.gid),
-        mustBeAbsent: '1',
-        ...targetParentBindingArgs(parentFilePath(targetPath), parentBinding),
-        targetDevice: '0',
-        targetInode: '0'
-      }, { signal }), 'stage-import')
+      const imported = digestResult(await executeStageImport(
+        stage, targetPath, parentBinding, {
+          ...staging.rootBinding,
+          objectName: stage.objectName,
+          targetPath,
+          sha256: exported.sha256,
+          size: String(exported.size),
+          targetMode: normalizeMode(entry.metadata.mode & 0o7777).toString(8),
+          targetUid: String(entry.metadata.uid),
+          targetGid: String(entry.metadata.gid),
+          mustBeAbsent: '1',
+          ...targetParentBindingArgs(parentFilePath(targetPath), parentBinding),
+          targetDevice: '0',
+          targetInode: '0'
+        }, signal), 'stage-import')
       if (imported.sha256 !== exported.sha256 || imported.size !== exported.size) {
         throw new Error('root 文件后端复制导入摘要或大小不匹配')
       }
@@ -1259,20 +1349,21 @@ export async function createPrivilegedFileBackend ({
           sha256: digest,
           size: String(bytes.byteLength)
         })
-        const imported = digestResult(await executeRequest('stage-import', {
-          ...staging.rootBinding,
-          objectName: stage.objectName,
-          targetPath,
-          sha256: digest,
-          size: String(bytes.byteLength),
-          targetMode: targetMode.toString(8),
-          targetUid: String(targetUid),
-          targetGid: String(targetGid),
-          mustBeAbsent: '1',
-          ...targetParentBindingArgs(targetParentPath, targetParentMetadata),
-          targetDevice: '0',
-          targetInode: '0'
-        }), 'stage-import')
+        const imported = digestResult(await executeStageImport(
+          stage, targetPath, targetParentMetadata, {
+            ...staging.rootBinding,
+            objectName: stage.objectName,
+            targetPath,
+            sha256: digest,
+            size: String(bytes.byteLength),
+            targetMode: targetMode.toString(8),
+            targetUid: String(targetUid),
+            targetGid: String(targetGid),
+            mustBeAbsent: '1',
+            ...targetParentBindingArgs(targetParentPath, targetParentMetadata),
+            targetDevice: '0',
+            targetInode: '0'
+          }), 'stage-import')
         if (imported.sha256 !== digest || imported.size !== bytes.byteLength) {
           throw new Error('root 文件后端 stage-import 摘要或大小不匹配')
         }
@@ -1501,6 +1592,13 @@ export async function createPrivilegedFileBackend ({
         let firstError
         await Promise.allSettled([...activePublicOperations])
         await executeTail.catch(() => {})
+        for (const record of [...pendingImportCleanups.values()]) {
+          try {
+            await cleanupImportResidual(record)
+          } catch (error) {
+            firstError ||= error
+          }
+        }
         for (const objectName of [...pendingDigestCleanups]) {
           try {
             staging.assertCurrent()

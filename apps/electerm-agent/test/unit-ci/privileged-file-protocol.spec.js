@@ -285,7 +285,7 @@ function sha256Text (value) {
 
 function stageImportCleanupFunctions (command) {
   const cleanupStart = command.indexOf('__sp_import_cleanup_candidate()')
-  const cleanupEnd = command.indexOf('; __sp_import_trap()', cleanupStart)
+  const cleanupEnd = command.indexOf('; __sp_importSignalled=', cleanupStart)
   assert.ok(cleanupStart >= 0 && cleanupEnd > cleanupStart)
   return command.slice(cleanupStart, cleanupEnd)
 }
@@ -1990,7 +1990,7 @@ test('bound creators and digest workers install interruption cleanup before clai
       })
     }
   })
-  assert.match(imported, /__sp_importTempName=.*__sp_token.*__sp_objectName/)
+  assert.match(imported, /__sp_importTempName="\.shellpilot-\$__sp_objectName\.tmp"/)
   assert.match(imported, /trap .* 0 HUP INT TERM/)
   assert.match(imported, /mv -nT -- "\.\/\$__sp_importTempName" "\.\/\$__sp_targetName"/)
   assert.doesNotMatch(imported, /exec 4> "\.\/\$__sp_targetName"/)
@@ -2025,6 +2025,10 @@ test('bound creators and digest workers install interruption cleanup before clai
     digest.indexOf('trap __sp_digest_trap') <
       digest.indexOf('mkfifo -m 600 -- "$__sp_inputFifo"')
   )
+  assert.ok(
+    digest.indexOf('trap __sp_digest_trap') <
+      digest.indexOf('mkdir -- "$__sp_scratch"')
+  )
 
   const digestCleanup = buildPrivilegedFileCommand({
     token,
@@ -2032,6 +2036,74 @@ test('bound creators and digest workers install interruption cleanup before clai
   })
   assert.match(digestCleanup, /stat -c %u -- \/tmp.*= 0/)
   assert.match(digestCleanup, /digestTmpMode.*& 01000/)
+})
+
+test('stage-import signal cleanup is constant-time and defers proof I/O', async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: 'ad'.repeat(24),
+    request: {
+      operation: 'stage-import',
+      args: targetStageBinding({
+        sha256: 'b'.repeat(64),
+        size: String(8 * 1024 * 1024),
+        targetMode: '600',
+        targetUid: '0',
+        targetGid: '0'
+      })
+    }
+  })
+  const signalStart = command.indexOf('__sp_import_signal_trap()')
+  const signalEnd = command.indexOf('; __sp_import_exit_trap()', signalStart)
+  assert.ok(signalStart >= 0 && signalEnd > signalStart)
+  const signalHandler = command.slice(signalStart, signalEnd)
+
+  assert.match(command, /trap __sp_import_signal_trap HUP INT TERM/)
+  assert.match(command, /trap __sp_import_exit_trap 0/)
+  assert.match(signalHandler, /__sp_importSignalled=1/)
+  assert.match(signalHandler, /exec 3<&- 4>&- 5<&-/)
+  assert.doesNotMatch(signalHandler, /__sp_import_cleanup|__sp_bounded_digest|sha256/)
+  assert.match(command, /__sp_import_exit_trap\(\).*__sp_importSignalled.*-ne 1.*__sp_import_cleanup/)
+  assert.match(command, /__sp_importTempName="\.shellpilot-\$__sp_objectName\.tmp"/)
+})
+
+test('linux stage-import signal returns before a slow full-proof cleanup', {
+  skip: process.platform !== 'linux' || !bashAvailable
+}, async () => {
+  const { buildPrivilegedFileCommand } = await importModule(protocolModule)
+  const command = buildPrivilegedFileCommand({
+    token: 'ae'.repeat(24),
+    request: {
+      operation: 'stage-import',
+      args: targetStageBinding({
+        sha256: 'b'.repeat(64),
+        size: String(8 * 1024 * 1024),
+        targetMode: '600',
+        targetUid: '0',
+        targetGid: '0'
+      })
+    }
+  })
+  const trapStart = command.indexOf('__sp_importSignalled=0')
+  const trapEnd = command.indexOf('; umask 077', trapStart)
+  assert.ok(trapStart >= 0 && trapEnd > trapStart)
+  const cleanupLog = path.join(os.tmpdir(), `sp-signal-cleanup-${process.pid}`)
+  fs.rmSync(cleanupLog, { force: true })
+  const startedAt = Date.now()
+  const result = spawnSync(bashExecutable, ['--noprofile', '--norc'], {
+    encoding: 'utf8',
+    timeout: 3000,
+    input: [
+      `__sp_cleanup_log=${quoteForBash(cleanupLog)}`,
+      '__sp_import_cleanup() { printf called > "$__sp_cleanup_log"; sleep 10; }',
+      command.slice(trapStart, trapEnd),
+      '( sleep 0.05; kill -TERM $$ ) &',
+      'sleep 10'
+    ].join('\n')
+  })
+  assert.notEqual(result.error?.code, 'ETIMEDOUT', result.stderr)
+  assert.ok(Date.now() - startedAt < 2500)
+  assert.equal(fs.existsSync(cleanupLog), false)
 })
 
 test('privileged parser normalizes every fixed result shape', async () => {
