@@ -49,6 +49,25 @@ function transferProtocolError (remote, fallback) {
   return error
 }
 
+function isPlainObject (value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function unwrapTransferAcknowledgement (envelope, expectedEventId) {
+  if (!isPlainObject(envelope) ||
+    !Object.prototype.hasOwnProperty.call(envelope, 'id') ||
+    envelope.id !== expectedEventId ||
+    !Object.prototype.hasOwnProperty.call(envelope, 'data') ||
+    !isPlainObject(envelope.data)) {
+    throw new Error('Transfer acknowledgement envelope is invalid')
+  }
+  return envelope.data
+}
+
 function startTransferWebSocket (start, signal, onStop) {
   throwIfTransferStartAborted(signal)
   const startupController = new AbortController()
@@ -165,6 +184,7 @@ class Transfer {
               ))
             }
             const controlId = generate()
+            const controlEventId = `transfer:control:${th.id}:${controlId}`
             const terminalControl = ['cancel', 'interrupt', 'destroy'].includes(func)
             if (terminalControl) th.terminalControlRequested = true
             const acknowledgement = new Promise((resolve, reject) => {
@@ -185,16 +205,24 @@ class Transfer {
                 settle(new Error('Transfer connection closed before control acknowledgement'))
                 return
               }
-              Promise.resolve(ws.once((result) => {
-                if (result?.ok !== true) {
-                  settle(transferProtocolError(
-                    result?.error,
-                    'Transfer control failed'
-                  ))
-                  return
+              Promise.resolve(ws.once((envelope) => {
+                try {
+                  const result = unwrapTransferAcknowledgement(
+                    envelope,
+                    controlEventId
+                  )
+                  if (result.ok !== true) {
+                    settle(transferProtocolError(
+                      result.error,
+                      'Transfer control failed'
+                    ))
+                    return
+                  }
+                  settle(null, true)
+                } catch (error) {
+                  settle(error)
                 }
-                settle(null, true)
-              }, `transfer:control:${th.id}:${controlId}`)).catch(error => {
+              }, controlEventId)).catch(error => {
                 settle(error)
               })
               try {
@@ -248,20 +276,29 @@ class Transfer {
           ws.once((arg) => {
             this.onPaused?.(arg)
           }, 'transfer:paused:' + id),
-          ws.once((result) => {
-            if (result?.id !== id || result?.sftpId !== sftpId) {
-              settleStartupAcknowledgement(new Error(
-                'Transfer startup acknowledgement identity mismatch'
-              ))
-              return
+          ws.once((envelope) => {
+            try {
+              const result = unwrapTransferAcknowledgement(
+                envelope,
+                'transfer:started:' + id
+              )
+              if (result.id !== id || result.sftpId !== sftpId) {
+                settleStartupAcknowledgement(new Error(
+                  'Transfer startup acknowledgement identity mismatch'
+                ))
+                return
+              }
+              if (result.ok !== true) {
+                settleStartupAcknowledgement(transferProtocolError(
+                  result.error,
+                  'Transfer startup failed'
+                ))
+                return
+              }
+              settleStartupAcknowledgement(null, true)
+            } catch (error) {
+              settleStartupAcknowledgement(error)
             }
-            if (result?.ok !== true) {
-              settleStartupAcknowledgement(new Error(
-                result?.error?.message || 'Transfer startup failed'
-              ))
-              return
-            }
-            settleStartupAcknowledgement(null, true)
           }, 'transfer:started:' + id)
         ])
         throwIfTransferStartAborted(startupSignal)

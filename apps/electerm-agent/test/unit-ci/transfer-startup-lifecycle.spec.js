@@ -219,6 +219,82 @@ test('worker registers and can close a websocket while it is still connecting', 
   )), false)
 })
 
+test('worker once relay preserves the exact server acknowledgement envelope', async () => {
+  let onMessage
+  const posted = []
+  const sockets = []
+  class FakeWebSocket {
+    constructor () {
+      this.listeners = new Map()
+      sockets.push(this)
+    }
+
+    send () {}
+    close () { this.onclose?.() }
+    addEventListener (type, listener) {
+      const listeners = this.listeners.get(type) || new Set()
+      listeners.add(listener)
+      this.listeners.set(type, listeners)
+    }
+
+    removeEventListener (type, listener) {
+      this.listeners.get(type)?.delete(listener)
+    }
+
+    emitMessage (message) {
+      for (const listener of this.listeners.get('message') || []) {
+        listener({ data: JSON.stringify(message) })
+      }
+    }
+  }
+  const self = {
+    postMessage: message => posted.push(message),
+    addEventListener: (type, listener) => {
+      if (type === 'message') onMessage = listener
+    }
+  }
+  vm.runInNewContext(fs.readFileSync(workerPath, 'utf8'), {
+    self,
+    WebSocket: FakeWebSocket,
+    console,
+    setTimeout: () => 1
+  }, { filename: workerPath })
+
+  const creating = onMessage({
+    data: {
+      action: 'create',
+      id: 'relay-transfer',
+      type: 'transfer',
+      persist: false,
+      args: ['transfer', 'relay-transfer', 'sftp-relay', {
+        host: '127.0.0.1',
+        port: 1234,
+        tokenElecterm: 'token'
+      }]
+    }
+  })
+  sockets[0].onopen()
+  await creating
+  const eventId = 'transfer:started:relay-transfer'
+  await onMessage({
+    data: { action: 'once', id: eventId, wsId: 'relay-transfer' }
+  })
+  const serverMessage = {
+    id: eventId,
+    data: {
+      ok: true,
+      id: 'relay-transfer',
+      sftpId: 'sftp-relay'
+    }
+  }
+  sockets[0].emitMessage(serverMessage)
+
+  const relay = posted.find(message => (
+    message.id === eventId && message.wsId === 'relay-transfer'
+  ))
+  assert.equal(JSON.stringify(relay?.data), JSON.stringify(serverMessage))
+})
+
 test('transfer factory bounds a never-resolving websocket startup', async () => {
   const { default: createTransfer } = await loadTransferModule(
     () => new Promise(() => {})
@@ -360,9 +436,12 @@ test('transfer factory resolves only after an exact startup acknowledgement', as
   assert.equal(ws.sent.some(message => message.action === 'transfer-new'), true)
   assert.equal(settled, false)
   listeners.get('transfer:started:transfer-1')({
-    ok: true,
-    id: 'transfer-1',
-    sftpId: 'wrong-session'
+    id: 'transfer:started:transfer-1',
+    data: {
+      ok: true,
+      id: 'transfer-1',
+      sftpId: 'wrong-session'
+    }
   })
   const result = await Promise.race([
     starting.then(value => ({ value }), error => ({ error })),
@@ -371,6 +450,102 @@ test('transfer factory resolves only after an exact startup acknowledgement', as
   assert.equal(result.hung, undefined)
   assert.match(result.error?.message || '', /identity|session|match/i)
   assert.equal(ws.closed, true)
+})
+
+test('transfer factory accepts the actual relayed startup acknowledgement envelope', async () => {
+  const listeners = new Map()
+  const ws = {
+    closed: false,
+    sent: [],
+    once (listener, id) {
+      listeners.set(id, listener)
+      return Promise.resolve()
+    },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    s (message) {
+      this.sent.push(message)
+      if (message.action === 'transfer-new') {
+        queueMicrotask(() => listeners.get('transfer:started:transfer-1')?.({
+          id: 'transfer:started:transfer-1',
+          data: {
+            ok: true,
+            id: 'transfer-1',
+            sftpId: 'sftp-real-envelope'
+          }
+        }))
+      }
+    },
+    close () { this.closed = true }
+  }
+  const { default: createTransfer } = await loadTransferModule(async () => ws)
+
+  const transport = await createTransfer({
+    sftpId: 'sftp-real-envelope',
+    type: 'download'
+  })
+
+  assert.equal(transport.id, 'transfer-1')
+  assert.equal(ws.closed, false)
+})
+
+test('transfer startup rejects malformed, nested, and forged relay envelopes', async t => {
+  const eventId = 'transfer:started:transfer-1'
+  const validData = {
+    ok: true,
+    id: 'transfer-1',
+    sftpId: 'sftp-envelope-validation'
+  }
+  const cases = [
+    {
+      name: 'wrong outer event id',
+      envelope: { id: 'transfer:started:foreign', data: validData }
+    },
+    {
+      name: 'wrong data identity',
+      envelope: {
+        id: eventId,
+        data: { ...validData, sftpId: 'sftp-foreign' }
+      }
+    },
+    { name: 'missing data', envelope: { id: eventId } },
+    { name: 'non-object data', envelope: { id: eventId, data: [] } },
+    {
+      name: 'nested relay envelope',
+      envelope: { id: eventId, data: { id: eventId, data: validData } }
+    },
+    { name: 'legacy direct payload', envelope: validData }
+  ]
+
+  for (const entry of cases) {
+    await t.test(entry.name, async () => {
+      const listeners = new Map()
+      const ws = {
+        closed: false,
+        once (listener, id) {
+          listeners.set(id, listener)
+          return Promise.resolve()
+        },
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        s (message) {
+          if (message.action === 'transfer-new') {
+            queueMicrotask(() => listeners.get(eventId)?.(entry.envelope))
+          }
+        },
+        close () { this.closed = true }
+      }
+      const { default: createTransfer } = await loadTransferModule(
+        async () => ws
+      )
+
+      await assert.rejects(createTransfer({
+        sftpId: 'sftp-envelope-validation',
+        type: 'upload'
+      }), /acknowledgement|identity|invalid/i)
+      assert.equal(ws.closed, true)
+    })
+  }
 })
 
 test('duplicate startup failure acknowledgement rejects promptly without waiting for timeout', async () => {
@@ -386,10 +561,13 @@ test('duplicate startup failure acknowledgement rejects promptly without waiting
     s (message) {
       if (message.action === 'transfer-new') {
         queueMicrotask(() => listeners.get('transfer:started:transfer-1')?.({
-          ok: false,
-          id: 'transfer-1',
-          sftpId: 'sftp-duplicate',
-          error: { message: 'Transfer is already active' }
+          id: 'transfer:started:transfer-1',
+          data: {
+            ok: false,
+            id: 'transfer-1',
+            sftpId: 'sftp-duplicate',
+            error: { message: 'Transfer is already active' }
+          }
         }))
       }
     },
@@ -439,9 +617,12 @@ test('missing startup acknowledgement times out, closes, and ignores a late ackn
     assert.match(result.error?.message || '', /timed out|timeout/i)
     assert.equal(ws.closed, true)
     listeners.get('transfer:started:transfer-1')?.({
-      ok: true,
-      id: 'transfer-1',
-      sftpId: 'sftp-no-start-ack'
+      id: 'transfer:started:transfer-1',
+      data: {
+        ok: true,
+        id: 'transfer-1',
+        sftpId: 'sftp-no-start-ack'
+      }
     })
     await new Promise(resolve => setImmediate(resolve))
     assert.deepEqual(unhandled, [])
@@ -501,9 +682,12 @@ test('transfer projects bounded residual fields from control and terminal errors
       this.sent.push(message)
       if (message.action === 'transfer-new') {
         queueMicrotask(() => listeners.get('transfer:started:transfer-1')?.({
-          ok: true,
-          id: 'transfer-1',
-          sftpId: 'sftp-residual'
+          id: 'transfer:started:transfer-1',
+          data: {
+            ok: true,
+            id: 'transfer-1',
+            sftpId: 'sftp-residual'
+          }
         }))
       }
     },
@@ -529,7 +713,10 @@ test('transfer projects bounded residual fields from control and terminal errors
   const control = ws.sent.find(message => message.action === 'transfer-func')
   listeners.get(
     `transfer:control:transfer-1:${control.controlId}`
-  )({ ok: false, error: remoteError })
+  )({
+    id: `transfer:control:transfer-1:${control.controlId}`,
+    data: { ok: false, error: remoteError }
+  })
   await assert.rejects(cancelling, error => {
     assert.equal(error.code, remoteError.code)
     assert.equal(error.partialResidual, true)
