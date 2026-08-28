@@ -638,46 +638,228 @@ test('remote link abort after readlink never starts stat', async () => {
   assert.equal(statCount, 0)
 })
 
-test('unmount absorbs synchronous capability release failures and completes disposal', async () => {
+test('unmount waits for an in-flight acquire to release before transport destroy', async () => {
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  const pendingAcquire = deferred()
+  const acquireStarted = deferred()
   const calls = []
+  const client = {
+    async cleanupStage () { calls.push('cleanup-stage') },
+    async destroy () { calls.push('destroy-client') }
+  }
   const entry = {
     id: 'sftp-tab-1',
+    sftp: client,
     remoteFileUnmounted: false,
-    remoteFileOperations: new Set([{
-      release () {
-        calls.push('release')
-        throw new Error('synchronous release failure')
-      }
-    }]),
-    remoteFileOperationBackends: new Map([['operation', {}]]),
-    sftpSafetyProgressHandlers: { clear: () => calls.push('clear-progress') },
-    sftpSafetyAdapter: {
-      discardAllPreparedProofs: () => calls.push('discard-proofs')
-    },
-    _sortCache: { clear: () => calls.push('clear-sort') }
+    remoteFileOperations: new Set(),
+    remoteFileOperationBackends: new Map(),
+    sftpSafetyProgressHandlers: { clear: () => {} },
+    sftpSafetyAdapter: { discardAllPreparedProofs: () => {} },
+    _sortCache: { clear: () => {} },
+    acquireRemoteFileOperation: () => {
+      acquireStarted.resolve()
+      return pendingAcquire.promise
+    }
   }
+  installClassField(entry, 'withRemoteFileOperation', {
+    abortRemoteFileOperation,
+    remoteFileOperationUnmounted
+  })
   installClassMethod(entry, 'componentWillUnmount', {
-    refs: { remove: () => calls.push('remove-ref') },
-    disposeSftpEntryClient: () => calls.push('dispose-client'),
-    disposeSftpEntryScheduling: () => calls.push('dispose-scheduling')
+    refs: { remove: () => {} },
+    detachSftpEntryClient: lifecycle.detachSftpEntryClient,
+    destroySftpClient: lifecycle.destroySftpClient,
+    disposeSftpEntryScheduling: () => {}
   })
 
-  assert.doesNotThrow(() => entry.componentWillUnmount())
-  await Promise.resolve()
-  await Promise.resolve()
+  const operation = entry.withRemoteFileOperation({}, async () => true)
+  await acquireStarted.promise
+  const disposal = entry.componentWillUnmount()
+  assert.deepEqual(calls, [])
+  pendingAcquire.resolve({
+    backend: {},
+    release: async () => client.cleanupStage()
+  })
+
+  await assert.rejects(operation, error => error.code === 'ABORT_ERR')
+  await disposal
+  assert.deepEqual(calls, ['cleanup-stage', 'destroy-client'])
+})
+
+test('unmount owns the captured remoteList transport and destroys it once', async () => {
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  const listGate = deferred()
+  const listStarted = deferred()
+  const calls = []
+  let releasePromise
+  const acquire = async ({ onIdentity }) => {
+    await onIdentity({
+      loginUsername: 'hik',
+      effectiveUid: '0',
+      effectiveUsername: 'root',
+      channel: 'pty-root'
+    })
+    return {
+      backend: {
+        async list () {
+          calls.push('list')
+          listStarted.resolve()
+          await listGate.promise
+          return []
+        }
+      },
+      release: () => {
+        releasePromise ||= (async () => {
+          await listGate.promise
+          calls.push('cleanup-stage')
+          return true
+        })()
+        return releasePromise
+      }
+    }
+  }
+  const { entry, stateWrites } = await createEntryHarness({ acquire })
+  entry.sftp.destroy = async () => { calls.push('destroy-client') }
+  entry.sftpSafetyProgressHandlers = { clear: () => {} }
+  entry.sftpSafetyAdapter = { discardAllPreparedProofs: () => {} }
+  entry._sortCache = { clear: () => {} }
+  entry.updateRemoteList = async remote => remote
+  installClassMethod(entry, 'componentWillUnmount', {
+    refs: { remove: () => {} },
+    detachSftpEntryClient: lifecycle.detachSftpEntryClient,
+    destroySftpClient: lifecycle.destroySftpClient,
+    disposeSftpEntryScheduling: () => {}
+  })
+
+  const listing = entry.remoteList(false, '/root')
+  await listStarted.promise
+  const writesAtUnmount = stateWrites.length
+  const disposal = entry.componentWillUnmount()
+  assert.equal(calls.includes('destroy-client'), false)
+  listGate.resolve()
+
+  await listing
+  await disposal
+  assert.deepEqual(calls, ['list', 'cleanup-stage', 'destroy-client'])
+  assert.equal(stateWrites.length, writesAtUnmount)
+})
+
+test('unmount waits for capability cleanup before destroying the detached transport', async () => {
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  const releaseGate = deferred()
+  const calls = []
+  const immediateCalls = []
+  let destroyed = false
+  const client = {
+    async cleanupStage () {
+      assert.equal(destroyed, false)
+      calls.push('cleanup-stage')
+    },
+    async destroy () {
+      destroyed = true
+      calls.push('destroy-client')
+    }
+  }
+  const entry = {
+    id: 'sftp-tab-1',
+    sftp: client,
+    sftpLifecycleEpoch: 4,
+    remoteFileUnmounted: false,
+    remoteFileOperations: new Set([{
+      async release () {
+        calls.push('release')
+        await client.cleanupStage()
+        await releaseGate.promise
+        calls.push('release-finished')
+      }
+    }]),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationBackends: new Map([['operation', {}]]),
+    sftpSafetyProgressHandlers: {
+      clear: () => immediateCalls.push('clear-progress')
+    },
+    sftpSafetyAdapter: {
+      discardAllPreparedProofs: () => immediateCalls.push('discard-proofs')
+    },
+    _sortCache: { clear: () => immediateCalls.push('clear-sort') }
+  }
+  installClassMethod(entry, 'componentWillUnmount', {
+    refs: { remove: () => immediateCalls.push('remove-ref') },
+    detachSftpEntryClient: lifecycle.detachSftpEntryClient,
+    destroySftpClient: lifecycle.destroySftpClient,
+    disposeSftpEntryScheduling: () => {
+      immediateCalls.push('dispose-scheduling')
+    }
+  })
+
+  const disposal = entry.componentWillUnmount()
 
   assert.equal(entry.remoteFileUnmounted, true)
+  assert.equal(entry.sftp, null)
+  assert.equal(entry.sftpLifecycleEpoch, 5)
   assert.equal(entry.remoteFileOperations.size, 0)
   assert.equal(entry.remoteFileOperationBackends.size, 0)
-  assert.deepEqual(calls, [
-    'release',
+  assert.equal(calls.includes('destroy-client'), false)
+  assert.deepEqual(immediateCalls, [
     'remove-ref',
     'clear-progress',
     'discard-proofs',
-    'dispose-client',
     'dispose-scheduling',
     'clear-sort'
   ])
+  assert.equal(entry.componentWillUnmount(), disposal)
+  assert.equal(immediateCalls.length, 5)
+  await Promise.resolve()
+  assert.deepEqual(calls, ['release', 'cleanup-stage'])
+
+  releaseGate.resolve()
+  await disposal
+  assert.deepEqual(calls, [
+    'release', 'cleanup-stage', 'release-finished', 'destroy-client'
+  ])
+})
+
+test('unmount destroys the detached transport after rejected and synchronous releases', async () => {
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  const rejectedRelease = deferred()
+  let destroyCount = 0
+  const entry = {
+    id: 'sftp-tab-1',
+    sftp: { destroy: async () => { destroyCount += 1 } },
+    remoteFileUnmounted: false,
+    remoteFileOperations: new Set([{
+      release: () => rejectedRelease.promise
+    }, {
+      release: () => { throw new Error('synchronous release failure') }
+    }]),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationBackends: new Map(),
+    sftpSafetyProgressHandlers: { clear: () => {} },
+    sftpSafetyAdapter: { discardAllPreparedProofs: () => {} },
+    _sortCache: { clear: () => {} }
+  }
+  installClassMethod(entry, 'componentWillUnmount', {
+    refs: { remove: () => {} },
+    detachSftpEntryClient: lifecycle.detachSftpEntryClient,
+    destroySftpClient: lifecycle.destroySftpClient,
+    disposeSftpEntryScheduling: () => {}
+  })
+
+  const disposal = entry.componentWillUnmount()
+  assert.equal(destroyCount, 0)
+  rejectedRelease.reject(new Error('asynchronous release failure'))
+  await disposal
+  assert.equal(destroyCount, 1)
+  assert.equal(await entry.componentWillUnmount(), true)
+  assert.equal(destroyCount, 1)
 })
 
 test('overlapping lists release both capabilities and only the latest request commits state', async () => {

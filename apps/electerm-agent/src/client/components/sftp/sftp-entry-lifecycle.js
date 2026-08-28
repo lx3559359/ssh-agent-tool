@@ -103,11 +103,15 @@ export async function commitSftpEntryRemoteClient (entry, token, client) {
   return true
 }
 
-export function disposeSftpEntryClient (entry) {
+export function detachSftpEntryClient (entry) {
   const client = entry.sftp
   entry.sftp = null
   entry.sftpLifecycleEpoch = nextEpoch(entry.sftpLifecycleEpoch)
-  return destroySftpClient(client)
+  return client
+}
+
+export function disposeSftpEntryClient (entry) {
+  return destroySftpClient(detachSftpEntryClient(entry))
 }
 
 export function reconnectSftpEntryRemote (entry) {

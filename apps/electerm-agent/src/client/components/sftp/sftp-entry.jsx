@@ -71,6 +71,7 @@ import {
   destroySftpClient,
   beginSftpEntryRemoteTask,
   commitSftpEntryRemoteClient,
+  detachSftpEntryClient,
   disposeSftpEntryClient,
   disposeSftpEntryScheduling,
   bindSftpEntryRemoteSession,
@@ -163,7 +164,9 @@ export default class Sftp extends Component {
     this.remoteFileOperationBackends = new Map()
     this.remoteFileOperationSequence = 0
     this.remoteFileOperations = new Set()
+    this.remoteFileOperationSettlements = new Set()
     this.remoteFileOperationTail = Promise.resolve()
+    this.remoteFileDetachedClient = null
     this.remoteFileUnmounted = false
     this.sftpSafetyProgressHandlers = new Map()
     this.sftpSafetyAdapter = createSftpTransactionAdapter({
@@ -242,9 +245,16 @@ export default class Sftp extends Component {
   }
 
   componentWillUnmount () {
+    if (this.remoteFileUnmounted) return this.remoteFileDisposalPromise
     this.remoteFileUnmounted = true
+    const sftpClient = detachSftpEntryClient(this)
+    this.remoteFileDetachedClient = sftpClient
     const remoteFileOperations = [...this.remoteFileOperations]
+    const remoteFileOperationSettlements = [
+      ...(this.remoteFileOperationSettlements || [])
+    ]
     this.remoteFileOperations.clear()
+    this.remoteFileOperationSettlements?.clear()
     this.remoteFileOperationBackends.clear()
     const releases = remoteFileOperations.map(capability => {
       try {
@@ -253,15 +263,18 @@ export default class Sftp extends Component {
         return Promise.reject(error)
       }
     })
-    Promise.allSettled(releases)
+    this.remoteFileDisposalPromise = Promise.allSettled([
+      ...releases,
+      ...remoteFileOperationSettlements
+    ]).then(() => destroySftpClient(sftpClient))
     refs.remove(this.id)
     this.sftpSafetyProgressHandlers.clear()
     this.sftpSafetyAdapter.discardAllPreparedProofs()
-    disposeSftpEntryClient(this)
     disposeSftpEntryScheduling(this)
     // Clear sort cache to prevent memory leaks
     this._sortCache?.clear()
     this._lastSortArgs = null
+    return this.remoteFileDisposalPromise
   }
 
   initFtpData = async () => {
@@ -1764,13 +1777,20 @@ export default class Sftp extends Component {
   }
 
   withRemoteFileOperation = async (options, work) => {
+    let settleOperation
+    const operationSettled = new Promise(resolve => {
+      settleOperation = resolve
+    })
+    const operationSettlements = this.remoteFileOperationSettlements ||
+      (this.remoteFileOperationSettlements = new Set())
+    operationSettlements.add(operationSettled)
     const previous = this.remoteFileOperationTail || Promise.resolve()
     let unlock
     this.remoteFileOperationTail = new Promise(resolve => {
       unlock = resolve
     })
-    await previous
     try {
+      await previous
       abortRemoteFileOperation(options?.signal)
       if (this.remoteFileUnmounted) throw remoteFileOperationUnmounted()
       const capability = await this.acquireRemoteFileOperation(options)
@@ -1812,6 +1832,8 @@ export default class Sftp extends Component {
       if (releaseError) throw releaseError
       return result
     } finally {
+      operationSettlements.delete(operationSettled)
+      settleOperation()
       unlock()
     }
   }
@@ -1974,7 +1996,10 @@ export default class Sftp extends Component {
       }
 
       if (!isCurrentSftpEntryRemoteTask(this, task)) {
-        if (sftp && sftp !== this.sftp) await destroySftpClient(sftp)
+        if (sftp && sftp !== this.sftp &&
+          sftp !== this.remoteFileDetachedClient) {
+          await destroySftpClient(sftp)
+        }
         return
       }
 
@@ -2075,10 +2100,14 @@ export default class Sftp extends Component {
       }
     } catch (error) {
       if (!isCurrentSftpEntryRemoteTask(this, task)) {
-        if (sftp && sftp !== this.sftp) await destroySftpClient(sftp)
+        if (sftp && sftp !== this.sftp &&
+          sftp !== this.remoteFileDetachedClient) {
+          await destroySftpClient(sftp)
+        }
         return
       }
-      if (sftp && sftp !== this.sftp) {
+      if (sftp && sftp !== this.sftp &&
+        sftp !== this.remoteFileDetachedClient) {
         await destroySftpClient(sftp)
         if (!isCurrentSftpEntryRemoteTask(this, task)) return
         this.props.editTab(tab.id, {
