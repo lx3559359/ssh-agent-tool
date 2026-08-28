@@ -166,7 +166,9 @@ test('SFTP backup accepts only authoritative missing and existing-directory code
       }
       const records = await backupRemoteFiles({ sftp, files: [file], now })
       assert.equal(records.length, 1)
-      assert.equal(calls[0][0], 'lstat')
+      assert.deepEqual(calls.slice(0, 3).map(call => call[0]), [
+        'mkdir', 'lstat', 'lstat'
+      ])
       assert.equal(calls.at(-1)[0], 'cp')
     })
   }
@@ -275,7 +277,7 @@ test('SFTP safety directory is accepted only after an exact lstat directory chec
         now
       })
       assert.deepEqual(calls.map(call => call[0]), [
-        'lstat', 'mkdir', 'lstat', 'cp'
+        'mkdir', 'lstat', 'lstat', 'cp'
       ])
     })
   }

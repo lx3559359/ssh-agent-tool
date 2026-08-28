@@ -6,6 +6,23 @@ const { Readable, PassThrough } = require('stream')
 const { posix: path } = require('path')
 const globalState = require('./global-state')
 
+const trustedFtpEntryTypes = new Set([1, 2, 3])
+
+function createFtpEntryMissingError (remotePath) {
+  const error = new Error(`stat failed: ${remotePath} not found`)
+  error.code = 'ENOENT'
+  return error
+}
+
+function requireTrustedFtpEntryType (item, remotePath) {
+  if (!trustedFtpEntryTypes.has(item?.type)) {
+    const error = new Error(`stat failed: ${remotePath} has unknown FTP entry type`)
+    error.code = 'FTP_ENTRY_TYPE_UNKNOWN'
+    throw error
+  }
+  return item.type
+}
+
 class Ftp extends TerminalBase {
   constructor (initOptions) {
     super({
@@ -192,19 +209,21 @@ class Ftp extends TerminalBase {
       const parentPath = pathParts.join('/') || '/'
       const list = await currentClient.list(parentPath)
       if (!list || !list.length) {
-        throw new Error('stat failed: parent directory listing empty')
+        throw createFtpEntryMissingError(remotePath)
       }
 
       const item = list.find(item => item.name === fileName)
       if (!item) {
-        throw new Error(`stat failed: ${fileName} not found in ${parentPath}`)
+        throw createFtpEntryMissingError(remotePath)
       }
+      const type = requireTrustedFtpEntryType(item, remotePath)
       return {
+        type,
         size: item.size,
         accessTime: new Date(item.modifiedAt).getTime(),
         modifyTime: new Date(item.modifiedAt).getTime(),
         mode: 0o777, // Default permissions since FTP doesn't provide this
-        isDirectory: item.type === 2
+        isDirectory: type === 2
       }
     }, client)
   }

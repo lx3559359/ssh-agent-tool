@@ -5,6 +5,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { pathToFileURL } = require('node:url')
 const net = require('node:net')
 const { once } = require('node:events')
 const findFreePort = require('find-free-port')
@@ -17,6 +18,11 @@ const globalState = require('../../src/app/server/global-state')
 const { Ftp } = require('../../src/app/server/session-ftp')
 const sessionSerial = require('../../src/app/server/session-serial')
 const sessionTelnet = require('../../src/app/server/session-telnet')
+
+const sftpSafetyModule = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/components/sftp/sftp-safety.js'
+)).href
 
 const FTP_USERNAME = 'test'
 const FTP_PASSWORD = 'test123'
@@ -190,6 +196,59 @@ function waitForText (emitter, matcher, timeout = 5000) {
   })
 }
 
+describe('session-ftp stat contract', () => {
+  test('stat and lstat preserve trusted numeric basic-ftp entry types', async () => {
+    const entries = [
+      { name: 'folder', type: 2, size: 0, modifiedAt: new Date(1) },
+      { name: 'file.txt', type: 1, size: 4, modifiedAt: new Date(2) },
+      { name: 'link', type: 3, size: 3, modifiedAt: new Date(3) }
+    ]
+    const ftp = Object.create(Ftp.prototype)
+    ftp.withOperationClient = async handler => handler({
+      list: async () => entries
+    })
+
+    assert.deepEqual(await ftp.stat('/folder'), {
+      type: 2,
+      size: 0,
+      accessTime: 1,
+      modifyTime: 1,
+      mode: 0o777,
+      isDirectory: true
+    })
+    assert.equal((await ftp.lstat('/file.txt')).type, 1)
+    const link = await ftp.lstat('/link')
+    assert.equal(link.type, 3)
+    assert.equal(link.isDirectory, false)
+  })
+
+  test('stat fails closed for missing or unknown basic-ftp entry types', async t => {
+    for (const [label, item] of [
+      ['unknown', { name: 'target', type: 0 }],
+      ['missing', { name: 'target' }],
+      ['string', { name: 'target', type: 'directory' }]
+    ]) {
+      await t.test(label, async () => {
+        const ftp = Object.create(Ftp.prototype)
+        ftp.withOperationClient = async handler => handler({
+          list: async () => [{ size: 0, modifiedAt: new Date(1), ...item }]
+        })
+        await assert.rejects(
+          ftp.stat('/target'),
+          error => error?.code === 'FTP_ENTRY_TYPE_UNKNOWN'
+        )
+      })
+    }
+
+    const ftp = Object.create(Ftp.prototype)
+    ftp.withOperationClient = async handler => handler({ list: async () => [] })
+    await assert.rejects(
+      ftp.lstat('/absent'),
+      error => error?.code === 'ENOENT'
+    )
+  })
+})
+
 describe('session-ftp transport flows', () => {
   let ftpServer
   let ftp
@@ -255,6 +314,27 @@ describe('session-ftp transport flows', () => {
 
     assert.equal(await ftp.rmdir('/source'), 1)
     assert.equal(await ftp.tryStat('/source'), null)
+  })
+
+  test('backs up through the safety helper using production FTP stat shapes', async () => {
+    const { backupRemoteFiles } = await import(sftpSafetyModule)
+    await ftp.mkdir('/config')
+    await ftp.writeFile('/config/app.conf', 'safe')
+
+    const records = await backupRemoteFiles({
+      sftp: ftp,
+      files: [{ path: '/config', name: 'app.conf', isDirectory: false }],
+      now: new Date('2026-07-12T08:09:10Z')
+    })
+
+    assert.equal(records.length, 1)
+    assert.equal(
+      records[0].backupPath,
+      '/config/.shellpilot-backups/app.conf-20260712-080910'
+    )
+    assert.equal(await ftp.readFile(records[0].backupPath), 'safe')
+    assert.equal((await ftp.stat('/config/.shellpilot-backups')).type, 2)
+    assert.equal((await ftp.lstat(records[0].backupPath)).type, 1)
   })
 })
 

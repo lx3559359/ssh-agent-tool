@@ -512,12 +512,13 @@ export async function backupRemoteFiles ({
   const createdDirs = new Set()
   for (const file of files) {
     const sourcePath = getFilePath(file)
+    const baseBackupPath = buildSftpSafetyPath(sourcePath, 'backup', now)
+    const backupDir = splitPath(baseBackupPath).parent
+    await ensureRemoteDir(sftp, backupDir, createdDirs)
     const backupPath = await findAvailableSftpSafetyPath(
       sftp,
-      buildSftpSafetyPath(sourcePath, 'backup', now)
+      baseBackupPath
     )
-    const backupDir = splitPath(backupPath).parent
-    await ensureRemoteDir(sftp, backupDir, createdDirs)
     await sftp.cp(sourcePath, backupPath)
     const record = createSftpRecoveryRecord({
       kind: 'backup',
@@ -539,12 +540,13 @@ export async function softDeleteRemoteFiles ({ sftp, files = [], tab, now = new 
   const createdDirs = new Set()
   for (const file of files) {
     const sourcePath = getFilePath(file)
+    const baseTrashPath = buildSftpSafetyPath(sourcePath, 'trash', now)
+    const trashDir = splitPath(baseTrashPath).parent
+    await ensureRemoteDir(sftp, trashDir, createdDirs)
     const backupPath = await findAvailableSftpSafetyPath(
       sftp,
-      buildSftpSafetyPath(sourcePath, 'trash', now)
+      baseTrashPath
     )
-    const trashDir = splitPath(backupPath).parent
-    await ensureRemoteDir(sftp, trashDir, createdDirs)
     await sftp.rename(sourcePath, backupPath)
     records.push(createSftpRecoveryRecord({
       kind: 'trash',
