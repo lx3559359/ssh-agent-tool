@@ -593,6 +593,56 @@ test('privileged overwrite preserves displacement when a foreign target wins the
   await assert.rejects(harness.backend.release(), /residual|owned/i)
 })
 
+test('privileged overwrite never deletes a foreign partial-copy displacement without an exact claim', async () => {
+  const foreignBytes = Buffer.from('foreign-partial-copy')
+  let racedPath
+  const harness = await createPrivilegedBackendHarness({
+    existingUploadBytes: Buffer.from('old-root-content'),
+    afterImport: ({ args, nodes }) => {
+      if (!racedPath && /\/download-/.test(args.targetPath)) {
+        racedPath = args.targetPath
+        nodes.set(racedPath, {
+          type: 'file',
+          mode: 0o600,
+          uid: 1000,
+          gid: 1000,
+          device: '2049',
+          inode: '9901',
+          content: foreignBytes
+        })
+      }
+    }
+  })
+  const events = []
+  await harness.backend.backend.upload({
+    localPath: 'C:\\tmp\\app.conf',
+    remotePath: '/root/app.conf',
+    options: { atomicOverwrite: true },
+    onError: error => events.push(error)
+  })
+  const native = await harness.uploadGate.promise
+  await native.onEnd({ transferred: Buffer.byteLength('root-upload') })
+
+  assert.equal(events.length, 1)
+  assert.equal(events[0].recoveryUncertain, true)
+  assert.equal(events[0].path, racedPath)
+  assert.equal(events[0].phase, 'overwrite-displacement-copy')
+  assert.ok(events[0].cause instanceof Error)
+  assert.equal(harness.nodes.get(racedPath)?.content.toString(),
+    foreignBytes.toString())
+  assert.equal(harness.requests.filter(request => (
+    ['remove-bound', 'remove-peer-bound'].includes(request.operation) &&
+    request.args.targetPath === racedPath
+  )).length, 0)
+  await assert.rejects(harness.backend.release(), /residual|owned/i)
+  assert.equal(harness.nodes.get(racedPath)?.content.toString(),
+    foreignBytes.toString())
+  assert.equal(harness.requests.filter(request => (
+    ['remove-bound', 'remove-peer-bound'].includes(request.operation) &&
+    request.args.targetPath === racedPath
+  )).length, 0)
+})
+
 test('privileged overwrite never deletes a same-inode rewrite after install', async () => {
   let rewrote = false
   const harness = await createPrivilegedBackendHarness({

@@ -3281,6 +3281,108 @@ test('transfer safety prepare and verify stay on one pinned root session without
   assert.equal(entry.transferSafetySessionPins.size, 0)
 })
 
+test('failed prepared cancellation releases old aliases and retry acquires a fresh session', async () => {
+  const cleanupUrl = pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/store/mcp-sftp-transfer-cleanup.js'
+  )).href
+  const { cleanupPreparedSftpTransfer } = await import(cleanupUrl)
+  const backends = [
+    Object.freeze({ name: 'root-session-old' }),
+    Object.freeze({ name: 'root-session-new' })
+  ]
+  let acquireCount = 0
+  let oldReleaseCount = 0
+  const oldReleaseFailure = new Error('old session release failed')
+  const safetyRecord = Object.freeze({
+    id: 'prepared-operation',
+    state: 'awaiting-confirmation'
+  })
+  const preparedToken = Object.freeze({
+    transferId: 'prepared-transfer',
+    safetyOperationId: safetyRecord.id
+  })
+  const entry = {
+    remoteFileOperationBackends: new Map(),
+    remoteFileOperationBackendPins: new Map(),
+    transferSafetySessionPins: new Map(),
+    transferSafetySessionAliases: new Map(),
+    preparedTransferFileSessions: new Map(),
+    acquireTransferFileCapability: async () => {
+      const index = acquireCount++
+      return Object.freeze({
+        backend: backends[index],
+        runtimeIdentity: rootRuntimeIdentity,
+        release () {
+          if (index === 0) oldReleaseCount += 1
+          if (index === 0) throw oldReleaseFailure
+          return true
+        }
+      })
+    }
+  }
+  for (const method of [
+    'assertTransferSafetySession',
+    'pinTransferSafetySession',
+    'unpinTransferSafetySession',
+    'unpinTransferSafetySessionsForSession',
+    'reserveTransferFileSession',
+    'getPreparedTransferFileSession',
+    'releasePreparedTransferFileSession'
+  ]) {
+    installSftpEntryClassField(entry, method)
+  }
+
+  const plan = {
+    operationId: safetyRecord.id,
+    metadata: { taskId: 'sftp-transfer-prepared-transfer' }
+  }
+  const oldSession = await entry.reserveTransferFileSession({
+    transferId: preparedToken.transferId
+  })
+  entry.pinTransferSafetySession(plan, oldSession)
+  const cancelFailure = new Error('cancel transaction failed')
+  entry.cancelTransferSafetyOperation = async () => { throw cancelFailure }
+
+  await assert.rejects(cleanupPreparedSftpTransfer({
+    sftpEntry: entry,
+    safetyOperationIds: [preparedToken.safetyOperationId],
+    transferId: preparedToken.transferId
+  }), error => {
+    assert.equal(error, cancelFailure)
+    assert.deepEqual(error.cleanupErrors, [oldReleaseFailure])
+    return true
+  })
+
+  assert.equal(oldReleaseCount, 1)
+  assert.equal(entry.getPreparedTransferFileSession(
+    preparedToken.transferId
+  ), null)
+  assert.equal(entry.transferSafetySessionPins.size, 0)
+  assert.equal(entry.transferSafetySessionAliases.size, 0)
+  assert.equal(entry.remoteFileOperationBackends.size, 0)
+  assert.equal(entry.remoteFileOperationBackendPins.size, 0)
+  assert.equal(safetyRecord.state, 'awaiting-confirmation')
+  assert.equal(preparedToken.safetyOperationId, safetyRecord.id)
+
+  const newSession = await entry.reserveTransferFileSession({
+    transferId: preparedToken.transferId
+  })
+  assert.notEqual(newSession, oldSession)
+  assert.equal(newSession.backend, backends[1])
+  entry.pinTransferSafetySession(plan, newSession)
+  entry.unpinTransferSafetySessionsForSession(oldSession)
+  assert.equal(entry.transferSafetySessionPins.get(plan.operationId),
+    newSession)
+  assert.equal(entry.transferSafetySessionPins.get(plan.metadata.taskId),
+    newSession)
+  assert.equal(entry.remoteFileOperationBackends.get(plan.operationId),
+    newSession.backend)
+  assert.equal(entry.remoteFileOperationBackendPins.get(plan.metadata.taskId),
+    newSession.backend)
+  assert.equal(entry.transferSafetySessionAliases.size, 1)
+})
+
 test('SFTP mutation runner clears the operation backend while preserving the first failure', async () => {
   const rootBackend = { name: 'root' }
   const scope = createOperationScope({ backend: rootBackend })

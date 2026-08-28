@@ -746,7 +746,10 @@ export default class Sftp extends Component {
       this.remoteFileOperationBackends.set(id, pinned.backend)
       this.remoteFileOperationBackendPins.set(id, pinned.backend)
     }
-    this.transferSafetySessionAliases.set(operationId, aliases)
+    this.transferSafetySessionAliases.set(operationId, Object.freeze({
+      session: pinned,
+      aliases: Object.freeze(aliases)
+    }))
     return pinned
   }
 
@@ -760,8 +763,12 @@ export default class Sftp extends Component {
 
   unpinTransferSafetySession = (id, session) => {
     const operationId = String(id || '')
-    const aliases = this.transferSafetySessionAliases.get(operationId) ||
-      [operationId]
+    const binding = this.transferSafetySessionAliases.get(operationId)
+    if (session && binding?.session && binding.session !== session) {
+      return false
+    }
+    const aliases = binding?.aliases ||
+      (Array.isArray(binding) ? binding : [operationId])
     for (const alias of aliases) {
       const pinned = this.transferSafetySessionPins.get(alias)
       if (session && pinned && pinned !== session) continue
@@ -775,7 +782,30 @@ export default class Sftp extends Component {
         }
       }
     }
-    this.transferSafetySessionAliases.delete(operationId)
+    if (!binding || this.transferSafetySessionAliases.get(operationId) ===
+      binding) {
+      this.transferSafetySessionAliases.delete(operationId)
+    }
+    return true
+  }
+
+  unpinTransferSafetySessionsForSession = session => {
+    if (!session) return false
+    for (const [operationId, binding] of [
+      ...this.transferSafetySessionAliases
+    ]) {
+      const aliases = binding?.aliases ||
+        (Array.isArray(binding) ? binding : [operationId])
+      const bindingSession = binding?.session || aliases
+        .map(alias => this.transferSafetySessionPins.get(alias))
+        .find(Boolean)
+      if (bindingSession !== session) continue
+      if (this.transferSafetySessionAliases.get(operationId) !== binding) {
+        continue
+      }
+      this.unpinTransferSafetySession(operationId, session)
+    }
+    return true
   }
 
   clearTransferSafetySessionPins = () => {
@@ -2551,12 +2581,15 @@ export default class Sftp extends Component {
       runtimeIdentity: acquired.runtimeIdentity,
       release: () => {
         if (releasePromise) return releasePromise
-        releasePromise = Promise.resolve(acquired.release()).finally(() => {
-          const current = this.preparedTransferFileSessions.get(id)
-          if (current?.session === session) {
-            this.preparedTransferFileSessions.delete(id)
-          }
-        })
+        releasePromise = Promise.resolve()
+          .then(() => acquired.release())
+          .finally(() => {
+            this.unpinTransferSafetySessionsForSession(session)
+            const current = this.preparedTransferFileSessions.get(id)
+            if (current?.session === session) {
+              this.preparedTransferFileSessions.delete(id)
+            }
+          })
         return releasePromise
       }
     })

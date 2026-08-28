@@ -2150,17 +2150,22 @@ export async function createPrivilegedFileBackend ({
     staging.abandon(displacement.stage.path)
   }
 
-  async function cleanupUnboundUploadDisplacement (stage, cause) {
+  function preserveUnclaimedUploadDisplacement (stage, cause) {
+    const uncertain = new Error(
+      'root 文件后端 overwrite displacement copy 未返回可信创建证明，候选残留已保留'
+    )
+    uncertain.code = 'REMOTE_FILE_RECOVERY_UNCERTAIN'
+    uncertain.recoveryUncertain = true
+    uncertain.path = stage.path
+    uncertain.residualPath = stage.path
+    uncertain.phase = 'overwrite-displacement-copy'
+    uncertain.cause = cause
     try {
-      const current = await describeRecoveryState(stage.path, undefined, true)
-      if (current.type !== 'bound-absent') {
-        await removeTree(stage.path, { expectedSource: current })
-      }
-      staging.abandon(stage.path)
-    } catch (cleanupError) {
-      try { staging.preserve(stage.path) } catch {}
-      attachCleanupFailure(cause, cleanupError)
+      staging.preserve(stage.path)
+    } catch (preserveError) {
+      attachCleanupFailure(uncertain, preserveError)
     }
+    return uncertain
   }
 
   async function cleanupFailedNewUploadTarget (
@@ -2547,14 +2552,17 @@ export async function createPrivilegedFileBackend ({
                   signal,
                   true
                 )
-                const displacementDescriptor = await copyTree(
-                  targetPath,
-                  displacementStage.path,
-                  {
-                    signal,
-                    expectedSource: originalDescriptor,
-                    expectedTarget: displacementAbsent
-                  }
+                const displacementDescriptor = normalizeRecoveryDescriptor(
+                  await copyTree(
+                    targetPath,
+                    displacementStage.path,
+                    {
+                      signal,
+                      expectedSource: originalDescriptor,
+                      expectedTarget: displacementAbsent
+                    }
+                  ),
+                  'upload displacement created'
                 )
                 displacement = Object.freeze({
                   stage: displacementStage,
@@ -2570,7 +2578,7 @@ export async function createPrivilegedFileBackend ({
                 })
               } catch (error) {
                 if (!displacement) {
-                  await cleanupUnboundUploadDisplacement(
+                  throw preserveUnclaimedUploadDisplacement(
                     displacementStage,
                     error
                   )
