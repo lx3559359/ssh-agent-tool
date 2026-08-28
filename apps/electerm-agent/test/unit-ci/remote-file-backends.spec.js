@@ -419,6 +419,62 @@ function createBackendHarness (options = {}) {
             content: Buffer.from(bytes)
           }))
         }
+        if (options.importMovingResidual) {
+          const exact = ensurePrivilegedBinding({
+            type: 'file',
+            mode: 0,
+            uid: 0,
+            gid: 0,
+            content: Buffer.from(bytes)
+          })
+          tempClaim = { ...exact }
+          const exactPath = options.importMovingResidual === 'target'
+            ? args.targetPath
+            : tempPath
+          privilegedNodes.set(exactPath, exact)
+          if (options.importMovingBothExact) {
+            privilegedNodes.set(
+              exactPath === args.targetPath ? tempPath : args.targetPath,
+              exact
+            )
+          }
+          if (options.importMovingNoExact) {
+            privilegedNodes.set(exactPath, ensurePrivilegedBinding({
+              type: 'file',
+              mode: 0,
+              uid: 0,
+              gid: 0,
+              content: Buffer.from(bytes)
+            }))
+          }
+          if (options.importMovingForeignTarget) {
+            privilegedNodes.set(args.targetPath, ensurePrivilegedBinding({
+              type: 'file',
+              mode: 0o600,
+              uid: 91,
+              gid: 92,
+              content: Buffer.from(bytes)
+            }))
+          }
+          if (options.importMovingForeignTemp) {
+            privilegedNodes.set(tempPath, ensurePrivilegedBinding({
+              type: 'file',
+              mode: 0o600,
+              uid: 93,
+              gid: 94,
+              content: Buffer.from(bytes)
+            }))
+          }
+          return parsedImportResult({
+            protocol,
+            request,
+            markers: [
+              ['temp-claim', [exact.device, exact.inode]],
+              ['moving', [exact.device, exact.inode, exact.gid]],
+              ['import-cleanup', ['0', 'moving']]
+            ]
+          })
+        }
         const error = new Error(options.importCancellation
           ? 'stage import cancelled after claim'
           : 'stage import failed')
@@ -457,6 +513,7 @@ function createBackendHarness (options = {}) {
             request,
             markers: [
               ['temp-claim', [claimed.device, claimed.inode]],
+              ['moving', [claimed.device, claimed.inode, '0']],
               ['installed', [
                 args.sha256,
                 args.size,
@@ -1904,6 +1961,117 @@ test('failed stage-import parser feed preserves its exact claim for cleanup', as
   assert.match(removal.args.targetDevice, /^(?:0|[1-9]\d*)$/)
   assert.match(removal.args.targetInode, /^(?:0|[1-9]\d*)$/)
   await backend.release()
+})
+
+test('moving stage-import locates an exact target after the temp path disappears', async () => {
+  const targetPath = '/root/moved-before-signal'
+  const harness = createBackendHarness({
+    importFailure: true,
+    importMovingResidual: 'target',
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.writeFile(targetPath, Buffer.from('safe')),
+    /stage-import/
+  )
+  assert.equal(harness.privilegedNodes.has(targetPath), false)
+  assert.ok(harness.requests.some(request =>
+    request.operation === 'remove-bound' && request.args.targetPath === targetPath))
+  assert.equal(await backend.release(), true)
+})
+
+test('moving stage-import locates an exact temp when the no-clobber move fails', async () => {
+  const targetPath = '/root/move-failed'
+  const harness = createBackendHarness({
+    importFailure: true,
+    importMovingResidual: 'temp',
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  await assert.rejects(
+    backend.sftp.writeFile(targetPath, Buffer.from('safe')),
+    /stage-import/
+  )
+  const request = harness.requests.find(item => item.operation === 'stage-import')
+  const tempPath = `/root/.shellpilot-${request.args.objectName}.tmp`
+  assert.equal(harness.privilegedNodes.has(tempPath), false)
+  assert.ok(harness.requests.some(item =>
+    item.operation === 'remove-bound' && item.args.targetPath === tempPath))
+  assert.equal(await backend.release(), true)
+})
+
+test('moving stage-import cleans only its exact inode beside a foreign path', async () => {
+  for (const scenario of [
+    {
+      importMovingResidual: 'target',
+      importMovingForeignTemp: true,
+      exactPath: 'target',
+      foreignPath: 'temp'
+    },
+    {
+      importMovingResidual: 'temp',
+      importMovingForeignTarget: true,
+      exactPath: 'temp',
+      foreignPath: 'target'
+    }
+  ]) {
+    const targetPath = `/root/moving-foreign-${scenario.exactPath}`
+    const harness = createBackendHarness({
+      importFailure: true,
+      ...scenario,
+      privilegedTree: {
+        '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
+      }
+    })
+    const backend = await createRootBackend(harness)
+    await assert.rejects(
+      backend.sftp.writeFile(targetPath, Buffer.from('safe')),
+      /stage-import/
+    )
+    const request = harness.requests.find(item => item.operation === 'stage-import')
+    const tempPath = `/root/.shellpilot-${request.args.objectName}.tmp`
+    const exactPath = scenario.exactPath === 'target' ? targetPath : tempPath
+    const foreignPath = scenario.foreignPath === 'target' ? targetPath : tempPath
+    assert.equal(harness.privilegedNodes.has(exactPath), false)
+    assert.equal(harness.privilegedNodes.get(foreignPath).content.toString(), 'safe')
+    assert.equal(harness.requests.some(item =>
+      item.operation === 'remove-bound' && item.args.targetPath === foreignPath), false)
+    assert.equal(await backend.release(), true)
+  }
+})
+
+test('moving stage-import fails safe when its exact inode is absent or at both paths', async () => {
+  for (const option of ['importMovingNoExact', 'importMovingBothExact']) {
+    const targetPath = `/root/moving-ambiguous-${option}`
+    const harness = createBackendHarness({
+      importFailure: true,
+      importMovingResidual: 'target',
+      [option]: true,
+      privilegedTree: {
+        '/root': { type: 'directory', mode: 0o755, uid: 0, gid: 0 }
+      }
+    })
+    const backend = await createRootBackend(harness)
+
+    await assert.rejects(
+      backend.sftp.writeFile(targetPath, Buffer.from('safe')),
+      error => {
+        assert.match(error.cleanupError?.message || '', /unresolved|conflicted/)
+        return true
+      }
+    )
+    assert.equal(harness.requests.some(item =>
+      item.operation === 'remove-bound'), false)
+    await assert.rejects(backend.release(), /unresolved|conflicted/)
+    assert.equal(harness.privilegedNodes.has(targetPath), true)
+  }
 })
 
 test('direct privileged remove APIs reject an over-budget file before digest', async () => {

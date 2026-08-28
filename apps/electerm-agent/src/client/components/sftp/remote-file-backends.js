@@ -814,10 +814,59 @@ export async function createPrivilegedFileBackend ({
     })
   }
 
+  function normalizeImportMovingClaim (value, record) {
+    const keys = [
+      'tempPath', 'targetPath', 'tempDevice', 'tempInode', 'tempType',
+      'tempParentRealPath', 'tempParentDevice', 'tempParentInode',
+      'tempParentUid', 'tempParentMode',
+      'targetParentRealPath', 'targetParentDevice', 'targetParentInode',
+      'targetParentUid', 'targetParentMode',
+      'sha256', 'size', 'initialMode', 'initialUid', 'initialGid',
+      'targetMode', 'targetUid', 'targetGid'
+    ]
+    const integers = [
+      value?.tempParentUid, value?.tempParentMode,
+      value?.targetParentUid, value?.targetParentMode,
+      value?.size, value?.initialMode, value?.initialUid, value?.initialGid,
+      value?.targetMode, value?.targetUid, value?.targetGid
+    ]
+    if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(value)) ||
+      Object.keys(value).length !== keys.length ||
+      keys.some(key => !Object.hasOwn(value, key)) ||
+      value.tempPath !== record.tempPath ||
+      value.targetPath !== record.targetPath ||
+      value.tempType !== 'file' ||
+      value.tempParentRealPath !== record.parentPath ||
+      value.targetParentRealPath !== record.parentPath ||
+      String(value.tempParentDevice) !== String(record.parent.device) ||
+      String(value.tempParentInode) !== String(record.parent.inode) ||
+      String(value.targetParentDevice) !== String(record.parent.device) ||
+      String(value.targetParentInode) !== String(record.parent.inode) ||
+      Number(value.tempParentUid) !== Number(record.parent.uid) ||
+      Number(value.targetParentUid) !== Number(record.parent.uid) ||
+      normalizeMode(value.tempParentMode) !==
+        normalizeMode(record.parent.mode & 0o7777) ||
+      normalizeMode(value.targetParentMode) !==
+        normalizeMode(record.parent.mode & 0o7777) ||
+      value.sha256 !== record.proof.sha256 ||
+      value.size !== record.proof.size ||
+      value.initialMode !== 0 || value.initialUid !== 0 ||
+      value.targetMode !== record.targetMetadata.mode ||
+      value.targetUid !== record.targetMetadata.uid ||
+      value.targetGid !== record.targetMetadata.gid ||
+      !/^(?:0|[1-9]\d*)$/.test(String(value.tempDevice)) ||
+      !/^(?:0|[1-9]\d*)$/.test(String(value.tempInode)) ||
+      !integers.every(Number.isSafeInteger) || integers.some(number => number < 0)) {
+      throw new Error('root 文件后端 stage-import moving claim 无效')
+    }
+    return Object.freeze(Object.fromEntries(keys.map(key => [key, value[key]])))
+  }
+
   function normalizeImportOutcome (value, record) {
     if (!value || typeof value !== 'object' ||
       typeof value.cleanupSucceeded !== 'boolean' ||
-      !['none', 'complete', 'temp', 'target', 'unknown'].includes(
+      !['none', 'complete', 'temp', 'moving', 'target', 'unknown'].includes(
         value.residualLocation
       )) {
       throw new Error('root 文件后端 stage-import cleanup status unresolved')
@@ -828,11 +877,15 @@ export async function createPrivilegedFileBackend ({
     const targetClaim = value.targetClaim
       ? normalizeImportTargetClaim(value.targetClaim, record)
       : null
+    const movingClaim = value.movingClaim
+      ? normalizeImportMovingClaim(value.movingClaim, record)
+      : null
     if ((value.cleanupSucceeded &&
         !['none', 'complete'].includes(value.residualLocation)) ||
       (!value.cleanupSucceeded &&
-        !['temp', 'target', 'unknown'].includes(value.residualLocation)) ||
+        !['temp', 'moving', 'target', 'unknown'].includes(value.residualLocation)) ||
       (value.residualLocation === 'temp' && !tempClaim) ||
+      (value.residualLocation === 'moving' && !movingClaim) ||
       (value.residualLocation === 'target' && !targetClaim) ||
       (value.residualLocation === 'complete' && !targetClaim)) {
       throw new Error('root 文件后端 stage-import cleanup status 无效')
@@ -841,6 +894,7 @@ export async function createPrivilegedFileBackend ({
       cleanupSucceeded: value.cleanupSucceeded,
       residualLocation: value.residualLocation,
       tempClaim,
+      movingClaim,
       targetClaim
     })
   }
@@ -853,38 +907,70 @@ export async function createPrivilegedFileBackend ({
     }
     const claim = record.residualLocation === 'temp'
       ? record.tempClaim
-      : record.residualLocation === 'target'
-        ? record.targetClaim
-        : null
+      : record.residualLocation === 'moving'
+        ? record.movingClaim
+        : record.residualLocation === 'target'
+          ? record.targetClaim
+          : null
     if (!claim) {
       throw new Error(
         'root 文件后端 stage-import cleanup status unresolved without exact claim'
       )
     }
-    const candidate = record.residualLocation === 'temp'
+    let candidate = record.residualLocation === 'temp'
       ? record.tempPath
       : record.targetPath
     let entry
-    try {
-      entry = await boundMutationEntry(
-        candidate,
-        'stage-import residual cleanup',
-        signal
-      )
-    } catch (error) {
-      if (error?.code === 'ENOENT') {
-        pendingImportCleanups.delete(record.objectName)
-        return true
+    if (record.residualLocation === 'moving') {
+      const exactLocations = []
+      for (const path of [record.tempPath, record.targetPath]) {
+        let current
+        try {
+          current = await boundMutationEntry(
+            path,
+            'stage-import moving residual cleanup',
+            signal
+          )
+        } catch (error) {
+          if (error?.code === 'ENOENT') continue
+          throw error
+        }
+        if (parentBindingMatches(current.parent, record.parent) &&
+          current.metadata.type === claim.tempType &&
+          String(current.metadata.device) === claim.tempDevice &&
+          String(current.metadata.inode) === claim.tempInode) {
+          exactLocations.push({ path, entry: current })
+        }
       }
-      throw error
+      if (exactLocations.length !== 1) {
+        throw new Error(
+          `root 文件后端 stage-import moving exact claim ${exactLocations.length === 0 ? 'unresolved' : 'conflicted'}`
+        )
+      }
+      candidate = exactLocations[0].path
+      entry = exactLocations[0].entry
+    } else {
+      try {
+        entry = await boundMutationEntry(
+          candidate,
+          'stage-import residual cleanup',
+          signal
+        )
+      } catch (error) {
+        if (error?.code === 'ENOENT') {
+          pendingImportCleanups.delete(record.objectName)
+          return true
+        }
+        throw error
+      }
     }
-    const claimedDevice = record.residualLocation === 'temp'
+    const claimedDevice = ['temp', 'moving'].includes(record.residualLocation)
       ? claim.tempDevice
       : claim.targetDevice
-    const claimedInode = record.residualLocation === 'temp'
+    const claimedInode = ['temp', 'moving'].includes(record.residualLocation)
       ? claim.tempInode
       : claim.targetInode
-    const claimedType = record.residualLocation === 'temp'
+    const claimedType = ['temp', 'moving'].includes(record.residualLocation)
       ? claim.tempType
       : claim.targetType
     if (entry.metadata.type !== 'file' ||
@@ -900,6 +986,35 @@ export async function createPrivilegedFileBackend ({
       Number(entry.metadata.uid) !== claim.uid ||
       Number(entry.metadata.gid) !== claim.gid)) {
       throw new Error('root 文件后端 stage-import exact target claim 发生变化')
+    }
+    if (record.residualLocation === 'moving') {
+      const current = {
+        mode: normalizeMode(entry.metadata.mode & 0o7777),
+        uid: Number(entry.metadata.uid),
+        gid: Number(entry.metadata.gid)
+      }
+      const allowed = [
+        {
+          mode: claim.initialMode,
+          uid: claim.initialUid,
+          gid: claim.initialGid
+        },
+        {
+          mode: claim.initialMode,
+          uid: claim.targetUid,
+          gid: claim.targetGid
+        },
+        {
+          mode: claim.targetMode,
+          uid: claim.targetUid,
+          gid: claim.targetGid
+        }
+      ]
+      if (!allowed.some(expected =>
+        expected.mode === current.mode && expected.uid === current.uid &&
+        expected.gid === current.gid)) {
+        throw new Error('root 文件后端 stage-import moving metadata 发生变化')
+      }
     }
     const proof = await boundDigest({
       path: candidate,
@@ -927,9 +1042,15 @@ export async function createPrivilegedFileBackend ({
         sha256: args.sha256,
         size: Number(args.size)
       }),
+      targetMetadata: Object.freeze({
+        mode: Number.parseInt(args.targetMode, 8),
+        uid: Number(args.targetUid),
+        gid: Number(args.targetGid)
+      }),
       cleanupSucceeded: null,
       residualLocation: 'unknown',
       tempClaim: null,
+      movingClaim: null,
       targetClaim: null
     })
     pendingImportCleanups.set(record.objectName, record)
