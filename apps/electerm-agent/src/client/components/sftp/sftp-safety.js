@@ -16,6 +16,8 @@ const recoveryDescriptorFields = [
   'type', 'device', 'inode', 'size', 'mode', 'uid', 'gid', 'sha256'
 ]
 
+const displacementCandidateBudget = 16
+
 function sameJsonValue (left, right) {
   return JSON.stringify(left) === JSON.stringify(right)
 }
@@ -65,15 +67,25 @@ function requireBoundAbsentRecoveryState (state, expectedPath) {
 }
 
 function requireRootRuntimeIdentity (identity) {
-  if (!identity || identity.channel !== 'pty-root' ||
-    String(identity.effectiveUid) !== '0' ||
-    !String(identity.effectiveUsername || '').trim()) {
+  const fields = [
+    'loginUsername', 'channel', 'effectiveUid', 'effectiveUsername'
+  ]
+  if (!identity || typeof identity !== 'object' || Array.isArray(identity) ||
+    Object.keys(identity).length !== fields.length ||
+    fields.some(field => !Object.hasOwn(identity, field)) ||
+    typeof identity.loginUsername !== 'string' ||
+    !identity.loginUsername.trim() ||
+    identity.channel !== 'pty-root' ||
+    identity.effectiveUid !== '0' ||
+    typeof identity.effectiveUsername !== 'string' ||
+    !identity.effectiveUsername.trim()) {
     throw new Error('root SFTP 恢复记录运行身份无效。')
   }
   return {
+    loginUsername: identity.loginUsername,
     channel: 'pty-root',
     effectiveUid: '0',
-    effectiveUsername: String(identity.effectiveUsername)
+    effectiveUsername: identity.effectiveUsername
   }
 }
 
@@ -104,6 +116,32 @@ export function createSftpRecoveryBindingMismatchError (cause) {
   error.code = 'REMOTE_FILE_RECOVERY_BINDING_MISMATCH'
   if (cause) error.cause = cause
   return error
+}
+
+export function assertSftpRecoveryIdentityProvenance (record) {
+  const binding = record?.metadata?.recoveryBinding
+  const outerIdentity = record?.metadata?.runtimeIdentity
+  if (!binding) {
+    if (outerIdentity?.channel === 'pty-root') {
+      throw createSftpRecoveryUnboundError()
+    }
+    return Object.freeze({ requiresRoot: false })
+  }
+  if (binding.version !== 1) throw createSftpRecoveryUnboundError()
+  try {
+    const boundIdentity = requireRootRuntimeIdentity(binding.runtimeIdentity)
+    const normalizedOuter = requireRootRuntimeIdentity(outerIdentity)
+    if (!sameJsonValue(boundIdentity, normalizedOuter)) {
+      throw createSftpRecoveryBindingMismatchError()
+    }
+    return Object.freeze({
+      requiresRoot: true,
+      runtimeIdentity: freezeSafetyRecoveryBinding(boundIdentity)
+    })
+  } catch (cause) {
+    if (cause?.code === 'REMOTE_FILE_RECOVERY_BINDING_MISMATCH') throw cause
+    throw createSftpRecoveryBindingMismatchError(cause)
+  }
 }
 
 export function assertRootSftpRecoveryBinding (record, {
@@ -373,7 +411,8 @@ export async function restoreSftpRecoveryRecord ({
   now = new Date(),
   describeEntry,
   persistRecord,
-  recoveryProof
+  recoveryProof,
+  generateDisplacementToken = generateSecureDisplacementToken
 }) {
   if (record.kind === 'chmod') {
     await sftp.chmod(record.sourcePath, record.previousMode)
@@ -386,8 +425,12 @@ export async function restoreSftpRecoveryRecord ({
     }
   }
   const persistedDisplacement = record.displacement
-  let displacedPath = persistedDisplacement?.path ||
-    buildSftpSafetyPath(record.sourcePath, 'displaced', now)
+  const displacedBasePath = buildSftpSafetyPath(
+    record.sourcePath,
+    'displaced',
+    now
+  )
+  let displacedPath = persistedDisplacement?.path || ''
   let currentRecord = record
   let displacement = persistedDisplacement || null
   const proofBound = Boolean(recoveryProof &&
@@ -470,11 +513,7 @@ export async function restoreSftpRecoveryRecord ({
       displacement: null
     })
     displacement = null
-    displacedPath = buildSftpSafetyPath(
-      record.sourcePath,
-      'displaced',
-      now
-    )
+    displacedPath = ''
   }
   if (!displacement || displacement.status === 'planned') {
     let sourceExists = proofBound
@@ -496,36 +535,153 @@ export async function restoreSftpRecoveryRecord ({
           : typeof describeEntry === 'function'
             ? await describeEntry(record.sourcePath)
             : await describeDisplacedEntry(sftp, record.sourcePath))
-      await ensureRemoteDir(sftp, splitPath(displacedPath).parent)
-      const displacedTargetState = proofBound
-        ? await describeEntry(displacedPath, { allowAbsent: true })
-        : undefined
-      displacement = {
-        path: displacedPath,
-        descriptor: displacedDescriptor,
-        ...(displacedTargetState
-          ? { targetState: displacedTargetState }
-          : {}),
-        status: 'planned',
-        plannedAt: displacement?.plannedAt || now.toISOString()
+      let displacedTargetState
+      let displacementAttempts = 0
+      const collisionHistory = [
+        ...(Array.isArray(displacement?.collisionHistory)
+          ? displacement.collisionHistory
+          : [])
+      ]
+      const rememberCollision = (path, descriptor, expectedDescriptor) => {
+        collisionHistory.push(freezeSafetyRecoveryBinding({
+          path,
+          descriptor,
+          ...(expectedDescriptor ? { expectedDescriptor } : {}),
+          observedAt: now.toISOString()
+        }))
       }
-      await persist({ ...currentRecord, displacement })
+      const planProofBoundDisplacement = async () => {
+        while (displacementAttempts < displacementCandidateBudget) {
+          displacementAttempts += 1
+          const token = requireDisplacementToken(
+            generateDisplacementToken()
+          )
+          const candidatePath = `${displacedBasePath}-${token}`
+          const candidateState = await describeEntry(candidatePath, {
+            allowAbsent: true
+          })
+          if (candidateState?.type !== 'bound-absent') {
+            rememberCollision(candidatePath, candidateState)
+            continue
+          }
+          displacedPath = candidatePath
+          displacedTargetState = requireBoundAbsentRecoveryState(
+            candidateState,
+            candidatePath
+          )
+          displacement = {
+            path: displacedPath,
+            descriptor: displacedDescriptor,
+            targetState: displacedTargetState,
+            collisionHistory: [...collisionHistory],
+            status: 'planned',
+            plannedAt: now.toISOString()
+          }
+          await persist({ ...currentRecord, displacement })
+          return
+        }
+        const planning = freezeSafetyRecoveryBinding({
+          status: 'collision-exhausted',
+          collisionHistory,
+          exhaustedAt: now.toISOString()
+        })
+        const uncertainRecord = {
+          ...currentRecord,
+          status: 'uncertain',
+          rollbackStatus: 'uncertain',
+          displacement: null,
+          displacementPlanning: planning,
+          error: 'SFTP 恢复位移名称冲突预算已耗尽。',
+          failedAt: now.toISOString()
+        }
+        await persist(uncertainRecord)
+        throw createSftpRecoveryCollisionError(
+          planning.collisionHistory,
+          uncertainRecord
+        )
+      }
+      if (proofBound) {
+        await ensureRemoteDir(sftp, splitPath(displacedBasePath).parent)
+        if (displacement?.status === 'planned' && displacement.path) {
+          displacedPath = displacement.path
+          const persistedTargetState = displacement.targetState
+          const candidateState = await describeEntry(displacedPath, {
+            allowAbsent: true
+          })
+          if (persistedTargetState?.type === 'bound-absent' &&
+            sameJsonValue(persistedTargetState, candidateState)) {
+            displacedTargetState = requireBoundAbsentRecoveryState(
+              candidateState,
+              displacedPath
+            )
+          } else {
+            rememberCollision(
+              displacedPath,
+              candidateState,
+              persistedTargetState
+            )
+            displacement = null
+            displacedPath = ''
+            await planProofBoundDisplacement()
+          }
+        } else {
+          await planProofBoundDisplacement()
+        }
+      } else {
+        displacedPath ||= displacedBasePath
+        await ensureRemoteDir(sftp, splitPath(displacedPath).parent)
+        displacement = {
+          path: displacedPath,
+          descriptor: displacedDescriptor,
+          status: 'planned',
+          plannedAt: displacement?.plannedAt || now.toISOString()
+        }
+        await persist({ ...currentRecord, displacement })
+      }
       if (proofBound) {
         let copiedDescriptor
-        try {
-          copiedDescriptor = await sftp.copyEntry(
-            record.sourcePath,
-            displacedPath,
-            {
-              expectedSource: displacedDescriptor,
-              expectedTarget: displacedTargetState
+        let copyCompleted = false
+        while (!copyCompleted) {
+          try {
+            copiedDescriptor = await sftp.copyEntry(
+              record.sourcePath,
+              displacedPath,
+              {
+                expectedSource: displacedDescriptor,
+                expectedTarget: displacedTargetState
+              }
+            )
+            copyCompleted = true
+          } catch (primaryCause) {
+            const targetObservation = await observeRecoveryDescriptor(
+              displacedPath
+            )
+            const targetOccupied = targetObservation.descriptor &&
+              targetObservation.descriptor.type !== 'bound-absent'
+            const targetProofCollision =
+              primaryCause?.code === 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH' &&
+              primaryCause.path === displacedPath
+            const noClobberCollision = primaryCause?.code === 'EEXIST' ||
+              /already exists|file exists|eexist/i.test(
+                String(primaryCause?.message || '')
+              )
+            if (targetOccupied &&
+              (targetProofCollision || noClobberCollision)) {
+              rememberCollision(
+                displacedPath,
+                targetObservation.descriptor,
+                displacedTargetState
+              )
+              displacement = null
+              displacedPath = ''
+              await planProofBoundDisplacement()
+              continue
             }
-          )
-        } catch (primaryCause) {
-          if (primaryCause?.code === 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH') {
-            throw await persistProofMismatch(primaryCause)
+            if (primaryCause?.code === 'REMOTE_FILE_RECOVERY_PROOF_MISMATCH') {
+              throw await persistProofMismatch(primaryCause)
+            }
+            throw primaryCause
           }
-          throw primaryCause
         }
         displacedDescriptor = await describeEntry(displacedPath)
         if (copiedDescriptor && typeof copiedDescriptor === 'object' &&
@@ -984,6 +1140,33 @@ export async function restoreSftpRecoveryRecord ({
         }
       : {})
   }
+}
+
+function generateSecureDisplacementToken () {
+  const random = globalThis.crypto?.getRandomValues
+  if (typeof random !== 'function') {
+    throw new Error('当前环境无法生成安全的 SFTP 恢复位移名称。')
+  }
+  const bytes = new Uint8Array(16)
+  globalThis.crypto.getRandomValues(bytes)
+  return [...bytes].map(value => value.toString(16).padStart(2, '0')).join('')
+}
+
+function requireDisplacementToken (value) {
+  const token = String(value || '')
+  if (!/^[a-f0-9]{24,64}$/.test(token)) {
+    throw new Error('SFTP 恢复位移随机标识无效。')
+  }
+  return token
+}
+
+function createSftpRecoveryCollisionError (history, recoveryRecord) {
+  const error = new Error('SFTP 恢复位移名称在安全尝试预算内均被占用。')
+  error.code = 'REMOTE_FILE_RECOVERY_COLLISION'
+  error.collisionHistory = history
+  error.recoveryRecord = recoveryRecord
+  error.displacementPlanning = recoveryRecord?.displacementPlanning
+  return error
 }
 
 export function mergeSftpRecoveryRecords (records = [], added = [], limit = 100) {

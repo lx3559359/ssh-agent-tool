@@ -51,6 +51,7 @@ function installSftpEntryClassField (entry, name, dependencies = {}) {
 }
 
 const rootRuntimeIdentity = Object.freeze({
+  loginUsername: 'hik',
   channel: 'pty-root',
   effectiveUid: '0',
   effectiveUsername: 'root'
@@ -3669,7 +3670,14 @@ test('quick delete backup and restore use one exact-bound root backend and persi
     name: 'root',
     describeRecoveryEntry: async path => descriptors[path]
   }
-  const scope = createOperationScope({ backend: rootBackend })
+  const scope = createOperationScope({
+    backend: rootBackend,
+    runtimeIdentity: {
+      channel: 'pty-root',
+      effectiveUid: '0',
+      effectiveUsername: 'root'
+    }
+  })
   const target = { type: 'remote', path: '/root', name: 'app.conf', isDirectory: false }
   const endpoint = Object.freeze({
     host: 'example.com',
@@ -3769,7 +3777,14 @@ test('quick delete backup and restore use one exact-bound root backend and persi
 
   assert.equal(await entry.quickDeleteRemoteFiles([target]), true)
   assert.equal(await entry.quickBackupRemoteFiles([target], { silent: true }), true)
-  assert.deepEqual(storedRecords[0].metadata.runtimeIdentity, rootRuntimeIdentity)
+  assert.equal(
+    JSON.stringify(storedRecords[0].metadata.runtimeIdentity),
+    JSON.stringify(rootRuntimeIdentity)
+  )
+  assert.equal(
+    JSON.stringify(storedRecords[0].metadata.recoveryBinding.runtimeIdentity),
+    JSON.stringify(rootRuntimeIdentity)
+  )
   assert.deepEqual(storedRecords[0].metadata.recoveryBinding.endpoint, endpoint)
   assert.deepEqual(storedRecords[0].metadata.recoveryBinding.source, descriptors['/root/app.conf'])
   assert.deepEqual(storedRecords[0].metadata.recoveryBinding.backup, descriptors['/root/.shellpilot-backups/app.conf'])
@@ -4123,7 +4138,10 @@ test('root batch backup persists an exact record before a later copy fails', asy
 })
 
 test('legacy root backup restore without an exact binding fails closed before any backend call', async () => {
-  const { createSftpRecoveryUnboundError } = await import(pathToFileURL(path.resolve(
+  const {
+    assertSftpRecoveryIdentityProvenance,
+    createSftpRecoveryUnboundError
+  } = await import(pathToFileURL(path.resolve(
     __dirname,
     '../../src/client/components/sftp/sftp-safety.js'
   )).href)
@@ -4152,6 +4170,7 @@ test('legacy root backup restore without an exact binding fails closed before an
     updateSafetyOperationRecord: (_records, _id, value) => [value],
     readSafetyOperationRecords: () => [record],
     ls: {},
+    assertSftpRecoveryIdentityProvenance,
     createSftpRecoveryUnboundError,
     createRemoteFileRootRequiredError: rootRequiredError,
     window: { store: { onError: () => {} } },
@@ -4167,6 +4186,109 @@ test('legacy root backup restore without an exact binding fails closed before an
   assert.equal(scope.acquireCount, 0)
   assert.equal(scope.releaseCount, 0)
   assert.equal(entry.remoteFileOperationBackends.size, 0)
+})
+
+test('recovery identity provenance rejects missing or altered outer root metadata before backend acquisition', async () => {
+  const recoveryHelpers = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-safety.js'
+  )).href)
+  const descriptor = {
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  }
+  const endpoint = {
+    host: 'example.com',
+    port: 22,
+    username: 'hik',
+    connectionUsername: 'hik',
+    tabId: 'tab-1',
+    pid: 'sftp:tab-1:terminal-uuid',
+    terminalId: 'terminal-uuid',
+    terminalPid: 'terminal-uuid',
+    sshTerminalPid: 4242,
+    sshSessionGeneration: 'generation-1',
+    hostKeyFingerprint: 'SHA256:one',
+    sessionType: 'sftp'
+  }
+  const binding = recoveryHelpers.createRootSftpRecoveryBinding({
+    endpoint,
+    runtimeIdentity: rootRuntimeIdentity,
+    source: descriptor,
+    backup: { ...descriptor, inode: '42' }
+  })
+  const variants = [
+    ['missing outer identity', undefined],
+    ['altered outer login', { ...rootRuntimeIdentity, loginUsername: 'mallory' }],
+    ['non-root outer identity', {
+      loginUsername: 'hik',
+      channel: 'sftp',
+      effectiveUid: '1000',
+      effectiveUsername: 'hik'
+    }],
+    ['non-string outer uid', { ...rootRuntimeIdentity, effectiveUid: 0 }],
+    ['missing binding login', rootRuntimeIdentity, {
+      ...binding,
+      runtimeIdentity: {
+        channel: 'pty-root', effectiveUid: '0', effectiveUsername: 'root'
+      }
+    }],
+    ['altered binding effective identity', rootRuntimeIdentity, {
+      ...binding,
+      runtimeIdentity: { ...rootRuntimeIdentity, effectiveUsername: 'toor' }
+    }]
+  ]
+  for (const [label, runtimeIdentity, recordBinding = binding] of variants) {
+    const record = {
+      id: `root-provenance-${label}`,
+      source: 'sftp',
+      kind: 'backup',
+      status: 'available',
+      sourcePath: '/root/app.conf',
+      backupPath: '/root/.shellpilot-backups/app.conf',
+      metadata: {
+        ...(runtimeIdentity ? { runtimeIdentity } : {}),
+        recoveryBinding: recordBinding
+      }
+    }
+    let acquisitions = 0
+    let nativeRestoreCalls = 0
+    const entry = {
+      props: { isFtp: false, tab: { id: 'tab-1', host: 'example.com' } },
+      withRemoteFileOperation: async () => {
+        acquisitions += 1
+        throw new Error('invalid provenance reached backend acquisition')
+      },
+      persistSftpRecoveryRecords: records => records,
+      remoteFileOperationBackends: new Map(),
+      remoteFileOperationBackendPins: new Map()
+    }
+    installSftpEntryClassField(entry, 'restoreSftpRecord', {
+      ...recoveryHelpers,
+      generate: () => 'unused',
+      restoreSftpRecoveryRecord: async () => { nativeRestoreCalls += 1 },
+      matchesSafetyOperationEndpoint: () => true,
+      updateSafetyOperationRecord: (_records, _id, value) => [value],
+      readSafetyOperationRecords: () => [record],
+      createRemoteFileRecoveryPersistenceError: error => error,
+      ls: {},
+      window: { store: { onError: () => {} } },
+      message: { success: () => {}, warning: () => {}, error: () => {} }
+    })
+
+    await assert.rejects(
+      entry.restoreSftpRecord(record),
+      error => error?.code === 'REMOTE_FILE_RECOVERY_BINDING_MISMATCH'
+    )
+    assert.equal(acquisitions, 0, label)
+    assert.equal(nativeRestoreCalls, 0, label)
+  }
 })
 
 test('modern root restore rejects changed endpoint or file proof before remote restore', async () => {
@@ -4385,6 +4507,125 @@ test('modern root restore accepts an authoritatively absent original target', as
   assert.equal(scope.releaseCount, 1)
   assert.equal(entry.remoteFileOperationBackends.size, 0)
   assert.equal(entry.remoteFileOperationBackendPins.size, 0)
+})
+
+test('modern root restore passes a raced planned displacement to bounded replanning', async () => {
+  const recoveryHelpers = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-safety.js'
+  )).href)
+  const endpointHelpers = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-safety-endpoint.js'
+  )).href)
+  const endpoint = {
+    host: 'example.com',
+    port: 22,
+    username: 'hik',
+    connectionUsername: 'hik',
+    tabId: 'tab-1',
+    pid: 'sftp:tab-1:terminal-uuid',
+    terminalId: 'terminal-uuid',
+    terminalPid: 'terminal-uuid',
+    sshTerminalPid: 4242,
+    sshSessionGeneration: 'generation-1',
+    hostKeyFingerprint: 'SHA256:one',
+    sessionType: 'sftp'
+  }
+  const original = {
+    type: 'file',
+    device: '1',
+    inode: '41',
+    size: 4,
+    mode: 0o600,
+    uid: 0,
+    gid: 0,
+    sha256: 'a'.repeat(64)
+  }
+  const backup = { ...original, inode: '42' }
+  const foreign = { ...original, inode: '99' }
+  const plannedPath = '/root/.shellpilot-before-restore/app.conf-planned'
+  const targetState = Object.freeze({
+    type: 'bound-absent',
+    path: plannedPath,
+    basename: 'app.conf-planned',
+    mustBeAbsent: true,
+    parent: Object.freeze({
+      path: '/root/.shellpilot-before-restore',
+      device: '1',
+      inode: '10',
+      mode: 0o700,
+      uid: 0,
+      gid: 0
+    })
+  })
+  const record = {
+    id: 'root-planned-collision',
+    source: 'sftp',
+    kind: 'backup',
+    status: 'uncertain',
+    sourcePath: '/root/app.conf',
+    backupPath: '/root/.shellpilot-backups/app.conf',
+    displacement: {
+      path: plannedPath,
+      descriptor: original,
+      targetState,
+      status: 'planned'
+    },
+    metadata: {
+      runtimeIdentity: rootRuntimeIdentity,
+      recoveryBinding: recoveryHelpers.createRootSftpRecoveryBinding({
+        endpoint, runtimeIdentity: rootRuntimeIdentity, source: original, backup
+      })
+    }
+  }
+  let restoreCalls = 0
+  let stored = [record]
+  const backend = {
+    describeRecoveryEntry: async path => {
+      if (path === record.sourcePath) return original
+      if (path === plannedPath) return foreign
+      return backup
+    }
+  }
+  const scope = createOperationScope({ backend })
+  const entry = {
+    props: {
+      isFtp: false,
+      tab: { id: 'tab-1', host: 'example.com', username: 'hik' }
+    },
+    remoteFileOperationBackends: new Map(),
+    remoteFileOperationBackendPins: new Map(),
+    withRemoteFileOperation: scope.withRemoteFileOperation,
+    getSftpSafetyEndpoint: () => endpoint,
+    persistSftpRecoveryRecords: records => {
+      stored = records
+      return records
+    },
+    remoteList: async () => {}
+  }
+  installSftpEntryClassField(entry, 'restoreSftpRecord', {
+    ...recoveryHelpers,
+    assertSameSftpSafetyEndpoint: endpointHelpers.assertSameSftpSafetyEndpoint,
+    generate: () => 'restore-planned-collision',
+    restoreSftpRecoveryRecord: async ({ record: value, recoveryProof }) => {
+      restoreCalls += 1
+      assert.deepEqual(recoveryProof.displaced, foreign)
+      return { ...value, status: 'restored', rollbackStatus: 'completed' }
+    },
+    matchesSafetyOperationEndpoint: () => true,
+    updateSafetyOperationRecord: (_records, _id, value) => [value],
+    readSafetyOperationRecords: () => stored,
+    ls: {},
+    createRemoteFileRootRequiredError: rootRequiredError,
+    createRemoteFileRecoveryPersistenceError: error => error,
+    window: { store: { onError: error => { throw error } } },
+    message: { success: () => {}, warning: () => {}, error: () => {} }
+  })
+
+  assert.equal(await entry.restoreSftpRecord(record), true)
+  assert.equal(restoreCalls, 1)
+  assert.equal(scope.releaseCount, 1)
 })
 
 test('modern root restore persists displaced proof replacement as uncertain', async () => {
@@ -4626,6 +4867,12 @@ test('modern root restore accepts an exact persisted displacement proof', async 
 })
 
 test('FTP mutation helpers remain native and never probe the PTY capability', async () => {
+  const { assertSftpRecoveryIdentityProvenance } = await import(
+    pathToFileURL(path.resolve(
+      __dirname,
+      '../../src/client/components/sftp/sftp-safety.js'
+    )).href
+  )
   let nativeDeletes = 0
   let nativeBackups = 0
   let nativeRestores = 0
@@ -4652,6 +4899,7 @@ test('FTP mutation helpers remain native and never probe the PTY capability', as
     setState: () => {}
   }
   const dependencies = {
+    assertSftpRecoveryIdentityProvenance,
     generate: () => 'ftp-token',
     buildFastDeleteTargets: () => [target],
     executeFastRemoteDelete: async ({ sftp }) => {

@@ -42,10 +42,10 @@ import message from '../common/message'
 import * as ls from '../../common/safe-local-storage'
 import {
   assertRootSftpRecoveryBinding,
+  assertSftpRecoveryIdentityProvenance,
   backupRemoteFiles,
   createRootSftpRecoveryBinding,
   createSftpRecoveryBindingMismatchError,
-  createSftpRecoveryUnboundError,
   createSftpRecoveryUncertainError,
   restoreSftpRecoveryRecord,
   findLatestSftpRecoveryRecord
@@ -1657,6 +1657,14 @@ export default class Sftp extends Component {
           try {
             if (capability?.runtimeIdentity?.channel === 'pty-root') {
               const endpoint = this.getSftpSafetyEndpoint()
+              const runtimeIdentity = Object.freeze({
+                loginUsername: capability.runtimeIdentity.loginUsername ||
+                  this.props.tab?.username || this.props.tab?.user || '',
+                channel: capability.runtimeIdentity.channel,
+                effectiveUid: capability.runtimeIdentity.effectiveUid,
+                effectiveUsername:
+                  capability.runtimeIdentity.effectiveUsername
+              })
               const source = await backend.describeRecoveryEntry(
                 record.sourcePath,
                 { signal: options.signal }
@@ -1669,10 +1677,10 @@ export default class Sftp extends Component {
                 ...record,
                 metadata: {
                   ...record.metadata,
-                  runtimeIdentity: capability.runtimeIdentity,
+                  runtimeIdentity,
                   recoveryBinding: createRootSftpRecoveryBinding({
                     endpoint,
-                    runtimeIdentity: capability.runtimeIdentity,
+                    runtimeIdentity,
                     source,
                     backup
                   })
@@ -1737,10 +1745,7 @@ export default class Sftp extends Component {
 
   restoreSftpRecord = async (record) => {
     if (!record || !['available', 'failed', 'uncertain'].includes(record.status)) return false
-    const requiresRoot = record.metadata?.runtimeIdentity?.channel === 'pty-root'
-    if (requiresRoot && !record.metadata?.recoveryBinding) {
-      throw createSftpRecoveryUnboundError()
-    }
+    const { requiresRoot } = assertSftpRecoveryIdentityProvenance(record)
     if (!requiresRoot &&
       !matchesSafetyOperationEndpoint(record, this.props.tab || {}, true)) {
       message.warning(`请先连接服务器 ${record.host} 后再恢复。`)
@@ -1749,7 +1754,16 @@ export default class Sftp extends Component {
     let restored
     try {
       const restore = async (backend, capability, mutation) => {
-        const currentIdentity = capability?.runtimeIdentity || {}
+        const capabilityIdentity = capability?.runtimeIdentity || {}
+        const currentIdentity = capabilityIdentity.channel === 'pty-root'
+          ? Object.freeze({
+            loginUsername: capabilityIdentity.loginUsername ||
+              this.props.tab?.username || this.props.tab?.user || '',
+            channel: capabilityIdentity.channel,
+            effectiveUid: capabilityIdentity.effectiveUid,
+            effectiveUsername: capabilityIdentity.effectiveUsername
+          })
+          : capabilityIdentity
         let recoveryProof
         const persistRecord = async value => {
           const records = updateSafetyOperationRecord(
@@ -1817,6 +1831,7 @@ export default class Sftp extends Component {
                 expectedSource: duplicatedSource
               })
               if (record.displacement?.path &&
+              record.displacement.status !== 'planned' &&
               JSON.stringify(expectedDisplaced) !==
                 JSON.stringify(displacedSource)) {
                 throw createSftpRecoveryBindingMismatchError()
@@ -1832,8 +1847,9 @@ export default class Sftp extends Component {
                 ? record.displacement?.status === 'duplicated'
                 : JSON.stringify(expectedSource) !== JSON.stringify(sourceState)
               const displacedChanged = Boolean(record.displacement?.path) &&
-              JSON.stringify(expectedDisplaced) !==
-                JSON.stringify(displacedSource)
+                record.displacement.status !== 'planned' &&
+                JSON.stringify(expectedDisplaced) !==
+                  JSON.stringify(displacedSource)
               const backupChanged = JSON.stringify(binding.backup) !==
               JSON.stringify(backup)
               if (!sourceChanged && !displacedChanged && !backupChanged) throw cause
