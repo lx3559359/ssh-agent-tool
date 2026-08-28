@@ -155,6 +155,31 @@ test('replacing an SFTP entry timer cancels the previous callback', async () => 
   assert.deepEqual(scheduled, [[callback, 1000]])
 })
 
+test('background SFTP observer absorbs expected aborts and reports other failures once', async () => {
+  const { runSftpBackgroundTask } = await loadModule()
+  const reports = []
+  const abort = new Error('generation drained')
+  abort.name = 'AbortError'
+  abort.code = 'ABORT_ERR'
+
+  assert.equal(await runSftpBackgroundTask(
+    () => Promise.reject(abort),
+    { reportError: error => reports.push(error) }
+  ), undefined)
+  const failure = new Error('transport failed')
+  assert.equal(await runSftpBackgroundTask(
+    () => Promise.reject(failure),
+    { reportError: error => reports.push(error) }
+  ), undefined)
+  assert.deepEqual(reports, [failure])
+
+  assert.equal(await runSftpBackgroundTask(
+    () => { throw abort },
+    { reportError: error => reports.push(error) }
+  ), undefined)
+  assert.deepEqual(reports, [failure])
+})
+
 test('remote reconnect destroys the stale SFTP transport before recreating it', async () => {
   const { reconnectSftpEntryRemote } = await loadModule()
   const calls = []

@@ -179,7 +179,12 @@ function createBackend (calls, name = 'backend', options = {}) {
   }
 }
 
-function createEntryHarness ({ acquire, replaceTimer, client } = {}) {
+function createEntryHarness ({
+  acquire,
+  replaceTimer,
+  client,
+  reportBackgroundError = () => {}
+} = {}) {
   const stateWrites = []
   const entry = {
     props: {
@@ -246,6 +251,10 @@ function createEntryHarness ({ acquire, replaceTimer, client } = {}) {
   installClassField(entry, 'createRemoteFile')
   return importModule('src/client/components/sftp/sftp-entry-lifecycle.js')
     .then(lifecycle => {
+      entry.runSftpBackgroundTask = task => lifecycle.runSftpBackgroundTask(
+        task,
+        { reportError: reportBackgroundError }
+      )
       installClassField(entry, 'remoteList', {
         Client: client || (async () => {
           throw new Error('unexpected SFTP client construction')
@@ -676,6 +685,38 @@ test('one-second compensation refresh acquires a new backend and never captures 
     'list', 'readlink', 'stat', 'release',
     'list', 'readlink', 'stat', 'release'
   ])
+})
+
+test('compensation timer observes aborts and reports non-abort failures once', async () => {
+  const timers = []
+  const reports = []
+  const acquire = async () => ({
+    backend: { list: async () => [] },
+    release: async () => true
+  })
+  const { entry } = await createEntryHarness({
+    acquire,
+    replaceTimer: (_entry, _key, callback) => {
+      timers.push(callback)
+      return timers.length
+    },
+    reportBackgroundError: error => reports.push(error)
+  })
+  entry.updateRemoteList = async remote => remote
+  await entry.remoteList(false, '/root')
+  assert.equal(timers.length, 1)
+
+  const abort = new Error('unmounted')
+  abort.name = 'AbortError'
+  abort.code = 'ABORT_ERR'
+  entry.remoteList = () => Promise.reject(abort)
+  assert.equal(await timers[0](), undefined)
+  assert.deepEqual(reports, [])
+
+  const failure = new Error('refresh transport failed')
+  entry.remoteList = () => Promise.reject(failure)
+  assert.equal(await timers[0](), undefined)
+  assert.deepEqual(reports, [failure])
 })
 
 test('operation acquired after unmount releases once without running work or setting state', async () => {
@@ -1377,7 +1418,10 @@ test('overlapping reloads drain the old generation and only latest initializes',
       calls.push(['state', update.remoteLoading])
       callback?.()
     },
-    initRemoteAll: () => calls.push('init')
+    initRemoteAll: () => calls.push('init'),
+    runSftpBackgroundTask: task => lifecycle.runSftpBackgroundTask(task, {
+      reportError: error => calls.push(['error', error.message])
+    })
   }
   installClassField(entry, 'handleReloadRemoteSftp', {
     activateRemoteFileGeneration: lifecycle.activateRemoteFileGeneration,
@@ -1396,6 +1440,37 @@ test('overlapping reloads drain the old generation and only latest initializes',
     'clear', 'discard', 'release', 'clear', 'discard', 'released', 'destroy',
     ['state', true], 'init'
   ])
+})
+
+test('reload callback observes rejected initialization without an unhandled promise', async () => {
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  const failure = new Error('reload failed')
+  const reports = []
+  const entry = {
+    sftp: null,
+    remoteFileUnmounted: false,
+    remoteFileOperations: new Set(),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationBackends: new Map(),
+    sftpSafetyProgressHandlers: { clear: () => {} },
+    sftpSafetyAdapter: { discardAllPreparedProofs: () => {} },
+    setState (_update, callback) { callback?.() },
+    initRemoteAll: () => Promise.reject(failure),
+    runSftpBackgroundTask: task => lifecycle.runSftpBackgroundTask(task, {
+      reportError: error => reports.push(error)
+    })
+  }
+  installClassField(entry, 'handleReloadRemoteSftp', {
+    activateRemoteFileGeneration: lifecycle.activateRemoteFileGeneration,
+    drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
+    isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration
+  })
+
+  await entry.handleReloadRemoteSftp()
+  await Promise.resolve()
+  assert.deepEqual(reports, [failure])
 })
 
 test('overlapping lists release both capabilities and only the latest request commits state', async () => {
@@ -1467,7 +1542,7 @@ test('routing source exposes only fixed backend operations to file items', () =>
   assert.match(entrySource, /await backend\.list\(\s*remotePath/)
   assert.match(remoteList, /withRemoteFileOperation\(/)
   assert.match(remoteList, /await this\.updateRemoteList\([^)]*backend/)
-  assert.match(remoteList, /remoteList\(true, remotePath/)
+  assert.match(remoteList, /remoteList\(\s*true,\s*remotePath/)
   assert.doesNotMatch(remoteList, /timer5[\s\S]*updateRemoteList\(/)
   assert.match(entrySource, /resolveRemoteLink = async \([^)]*backend/)
   assert.match(entrySource, /remoteDel = async \(file, backend\)/)

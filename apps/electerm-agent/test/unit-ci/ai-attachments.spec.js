@@ -67,6 +67,8 @@ test('AI attachments build bounded context for local and SFTP files', async () =
         id: 'sftp-1',
         source: 'sftp',
         name: 'error.log',
+        sourceTabId: 'tab-a',
+        sourceSftpEndpoint: sftpEndpoint(),
         file: {
           name: 'error.log',
           path: '/var/log',
@@ -84,15 +86,18 @@ test('AI attachments build bounded context for local and SFTP files', async () =
         bytesRead: 20
       })
     },
-    sftpRef: {
-      readRemoteFileContext: async file => ({
-        ok: true,
-        path: `${file.path}/${file.name}`,
-        source: 'remote',
-        content: `remote:${file.path}/${file.name}`,
-        binary: false,
-        truncated: false,
-        bytesRead: 30
+    sftpRefs: {
+      get: () => ({
+        getSftpSafetyEndpoint: () => sftpEndpoint(),
+        readRemoteFileContext: async file => ({
+          ok: true,
+          path: `${file.path}/${file.name}`,
+          source: 'remote',
+          content: `remote:${file.path}/${file.name}`,
+          binary: false,
+          truncated: false,
+          bytesRead: 30
+        })
       })
     }
   })
@@ -173,6 +178,8 @@ test('AI attachments explain continuation and archive member context', async () 
         id: 'archive-1',
         source: 'sftp',
         name: 'logs.tar.gz',
+        sourceTabId: 'tab-a',
+        sourceSftpEndpoint: sftpEndpoint(),
         file: {
           name: 'logs.tar.gz',
           path: '/tmp',
@@ -182,16 +189,19 @@ test('AI attachments explain continuation and archive member context', async () 
         }
       }
     ],
-    sftpRef: {
-      readRemoteFileContext: async file => ({
-        ok: true,
-        archiveType: 'tar.gz',
-        path: `${file.path}/${file.name}#nginx/error.log`,
-        source: 'remote',
-        content: 'nginx bind failed',
-        binary: false,
-        bytesRead: 16,
-        truncated: true
+    sftpRefs: {
+      get: () => ({
+        getSftpSafetyEndpoint: () => sftpEndpoint(),
+        readRemoteFileContext: async file => ({
+          ok: true,
+          archiveType: 'tar.gz',
+          path: `${file.path}/${file.name}#nginx/error.log`,
+          source: 'remote',
+          content: 'nginx bind failed',
+          binary: false,
+          bytesRead: 16,
+          truncated: true
+        })
       })
     }
   })
@@ -225,14 +235,17 @@ test('all SFTP text and archive attachments use the public bounded entry route',
       bytesRead: 10
     }
   }
+  raw.getSftpSafetyEndpoint = () => sftpEndpoint()
   const controller = new AbortController()
   const result = await buildAttachmentAIContent({
     attachments: names.map(name => ({
       source: 'sftp',
       name,
+      sourceTabId: 'tab-a',
+      sourceSftpEndpoint: sftpEndpoint(),
       file: { name, path: '/root', type: 'remote', isDirectory: false }
     })),
-    sftpRef: raw,
+    sftpRefs: { get: () => raw },
     signal: controller.signal
   })
 
@@ -263,15 +276,20 @@ test('SFTP binary attachments use the public bounded payload route and fail clos
     const attachment = {
       source: 'sftp',
       name: 'artifact.bin',
+      sourceTabId: 'tab-a',
+      sourceSftpEndpoint: sftpEndpoint(),
       file: { name: 'artifact.bin', path: '/root', type: 'remote' }
     }
     const result = await buildAttachmentAIContent({
       attachments: [attachment],
-      sftpRef: {
-        readRemoteFileAttachment: async (file, options) => {
-          calls.push([file, options])
-          return { base64: Buffer.from('bounded payload').toString('base64') }
-        }
+      sftpRefs: {
+        get: () => ({
+          getSftpSafetyEndpoint: () => sftpEndpoint(),
+          readRemoteFileAttachment: async (file, options) => {
+            calls.push([file, options])
+            return { base64: Buffer.from('bounded payload').toString('base64') }
+          }
+        })
       }
     })
     assert.deepEqual(result.errors, [])
@@ -280,7 +298,12 @@ test('SFTP binary attachments use the public bounded payload route and fail clos
 
     const missing = await buildAttachmentAIContent({
       attachments: [attachment],
-      sftpRef: { sftp: { readFileBase64Preview: async () => ({}) } }
+      sftpRefs: {
+        get: () => ({
+          getSftpSafetyEndpoint: () => sftpEndpoint(),
+          sftp: { readFileBase64Preview: async () => ({}) }
+        })
+      }
     })
     assert.equal(missing.prompt, '')
     assert.match(missing.errors[0], /安全读取/)
@@ -297,6 +320,192 @@ test('AI attachment source never reaches through SftpEntry to raw SFTP', () => {
   assert.doesNotMatch(source, /sftpRef\??\.sftp/)
   assert.match(source, /readRemoteFileContext/)
   assert.match(source, /readRemoteFileAttachment/)
+})
+
+function sftpEndpoint (overrides = {}) {
+  return {
+    host: 'prod.example.com',
+    port: 2222,
+    username: 'deploy',
+    connectionUsername: 'deploy',
+    tabId: 'tab-a',
+    pid: 'sftp:tab-a:terminal-a',
+    terminalId: 'terminal-a',
+    terminalPid: 'terminal-a',
+    sshTerminalPid: 4242,
+    sshSessionGeneration: 'generation-a',
+    hostKeyFingerprint: 'SHA256:host-a',
+    sessionType: 'sftp',
+    ...overrides
+  }
+}
+
+test('queued SFTP attachments pin an immutable exact source endpoint', async () => {
+  const {
+    createSftpFileAttachments,
+    parseSftpDropPayload
+  } = await import(attachmentsUrl)
+  const endpoint = sftpEndpoint()
+  const attachments = createSftpFileAttachments([{
+    name: 'app.log',
+    path: '/root',
+    type: 'remote',
+    isDirectory: false
+  }], {
+    getSftpSafetyEndpoint: () => endpoint
+  })
+
+  assert.equal(attachments[0].sourceTabId, 'tab-a')
+  assert.deepEqual(attachments[0].sourceSftpEndpoint, endpoint)
+  assert.equal(Object.isFrozen(attachments[0]), true)
+  assert.equal(Object.isFrozen(attachments[0].sourceSftpEndpoint), true)
+  endpoint.sshSessionGeneration = 'generation-mutated'
+  assert.equal(
+    attachments[0].sourceSftpEndpoint.sshSessionGeneration,
+    'generation-a'
+  )
+  const restored = parseSftpDropPayload(JSON.stringify(attachments))
+  assert.equal(restored[0].sourceTabId, 'tab-a')
+  assert.deepEqual(
+    restored[0].sourceSftpEndpoint,
+    attachments[0].sourceSftpEndpoint
+  )
+})
+
+test('empty SFTP selections preserve the no-file flow without resolving a source endpoint', async () => {
+  const { createSftpFileAttachments } = await import(attachmentsUrl)
+  let endpointReads = 0
+  const attachments = createSftpFileAttachments([], {
+    getSftpSafetyEndpoint: () => {
+      endpointReads += 1
+      throw new Error('the empty selection must not resolve an endpoint')
+    }
+  })
+
+  assert.deepEqual(attachments, [])
+  assert.equal(endpointReads, 0)
+})
+
+test('legacy SFTP attachment endpoints without terminalId fail closed', async () => {
+  const { createSftpFileAttachments } = await import(attachmentsUrl)
+  const legacyEndpoint = sftpEndpoint()
+  delete legacyEndpoint.terminalId
+
+  assert.throws(
+    () => createSftpFileAttachments([{
+      name: 'legacy.log',
+      path: '/root',
+      type: 'remote',
+      isDirectory: false
+    }], {
+      getSftpSafetyEndpoint: () => legacyEndpoint
+    }),
+    /SFTP 会话安全标识/
+  )
+})
+
+test('SFTP attachments resolve their pinned tab instead of the active tab', async () => {
+  const {
+    buildAttachmentAIContent,
+    createSftpFileAttachments
+  } = await import(attachmentsUrl)
+  let readsA = 0
+  let readsB = 0
+  const refA = {
+    getSftpSafetyEndpoint: () => sftpEndpoint(),
+    readRemoteFileContext: async file => {
+      readsA += 1
+      return {
+        ok: true,
+        path: `${file.path}/${file.name}`,
+        source: 'remote',
+        content: 'source A',
+        truncated: false
+      }
+    }
+  }
+  const refB = {
+    getSftpSafetyEndpoint: () => sftpEndpoint({
+      tabId: 'tab-b',
+      pid: 'sftp:tab-b:terminal-b',
+      terminalId: 'terminal-b',
+      terminalPid: 'terminal-b',
+      sshTerminalPid: 5252,
+      sshSessionGeneration: 'generation-b'
+    }),
+    readRemoteFileContext: async () => {
+      readsB += 1
+      throw new Error('active tab B must never read attachment A')
+    }
+  }
+  const attachments = createSftpFileAttachments([{
+    name: 'app.log',
+    path: '/root',
+    type: 'remote',
+    isDirectory: false
+  }], refA)
+  const refsByTab = new Map([
+    ['sftp-tab-a', refA],
+    ['sftp-tab-b', refB]
+  ])
+  const result = await buildAttachmentAIContent({
+    attachments,
+    sftpRefs: { get: key => refsByTab.get(key) },
+    sftpRef: refB
+  })
+
+  assert.deepEqual(result.errors, [])
+  assert.match(result.prompt, /source A/)
+  assert.equal(readsA, 1)
+  assert.equal(readsB, 0)
+})
+
+test('SFTP attachment rejects reconnect PID changes closed tabs and legacy bindings', async () => {
+  const {
+    buildAttachmentAIContent,
+    createSftpFileAttachments
+  } = await import(attachmentsUrl)
+  let reads = 0
+  const pinnedRef = { getSftpSafetyEndpoint: () => sftpEndpoint() }
+  const [attachment] = createSftpFileAttachments([{
+    name: 'app.log',
+    path: '/root',
+    type: 'remote',
+    isDirectory: false
+  }], pinnedRef)
+  for (const changed of [
+    { sshSessionGeneration: 'generation-new' },
+    { sshTerminalPid: 4343 }
+  ]) {
+    const changedRef = {
+      getSftpSafetyEndpoint: () => sftpEndpoint(changed),
+      readRemoteFileContext: async () => { reads += 1 }
+    }
+    const result = await buildAttachmentAIContent({
+      attachments: [attachment],
+      sftpRefs: { get: () => changedRef }
+    })
+    assert.equal(result.prompt, '')
+    assert.match(result.errors[0], /附件源连接已过期/)
+  }
+
+  const gone = await buildAttachmentAIContent({
+    attachments: [attachment],
+    sftpRefs: { get: () => null }
+  })
+  assert.equal(gone.prompt, '')
+  assert.match(gone.errors[0], /附件源连接已过期/)
+
+  const [legacy] = createSftpFileAttachments([{
+    name: 'legacy.log', path: '/root', type: 'remote', isDirectory: false
+  }])
+  const legacyResult = await buildAttachmentAIContent({
+    attachments: [legacy],
+    sftpRefs: { get: () => pinnedRef }
+  })
+  assert.equal(legacyResult.prompt, '')
+  assert.match(legacyResult.errors[0], /附件缺少安全源绑定/)
+  assert.equal(reads, 0)
 })
 
 test('AI chat component wires local paste drag and SFTP drop attachment UI', () => {

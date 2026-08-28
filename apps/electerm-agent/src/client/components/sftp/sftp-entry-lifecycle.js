@@ -4,6 +4,32 @@ import normalizeRemotePath from '../../common/normalize-remote-path.js'
 const TIMER_KEYS = ['timer', 'timer4', 'timer5', 'retryHandler']
 const DEBOUNCE_KEYS = ['remoteListDebounce', 'localListDebounce']
 
+function isExpectedSftpBackgroundAbort (error) {
+  return error?.name === 'AbortError' ||
+    error?.code === 'ABORT_ERR'
+}
+
+export function runSftpBackgroundTask (task, options = {}) {
+  const reportError = options.reportError || (error => (
+    globalThis.window?.store?.onError?.(error)
+  ))
+  let operation
+  try {
+    operation = typeof task === 'function' ? task() : task
+  } catch (error) {
+    operation = Promise.reject(error)
+  }
+  return Promise.resolve(operation).catch(error => {
+    if (isExpectedSftpBackgroundAbort(error)) return undefined
+    try {
+      reportError(error)
+    } catch {
+      // The background promise must always terminate observed.
+    }
+    return undefined
+  })
+}
+
 export function shouldRetryUnexpectedSftpPacket (error, {
   expectedMessage,
   retryCount,

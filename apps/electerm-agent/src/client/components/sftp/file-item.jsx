@@ -208,13 +208,23 @@ export default class FileSection extends React.Component {
     const dragFiles = selected
       ? this.props.getSelectedFiles()
       : [this.props.file]
+    let sourceSftpEndpoint
+    if (this.props.type === typeMap.remote) {
+      try {
+        sourceSftpEndpoint = this.props.getSftpSafetyEndpoint?.()
+      } catch {
+        sourceSftpEndpoint = undefined
+      }
+    }
     const filesWithMeta = dragFiles.map(file => {
       return {
         ...file,
         host: this.props.tab?.host,
         tabType: this.props.tab?.type,
         tabId: transferProps.tabId,
-        title: transferProps.title
+        title: transferProps.title,
+        sourceTabId: sourceSftpEndpoint?.tabId,
+        sourceSftpEndpoint
       }
     })
     e.dataTransfer.setData('fromFile', JSON.stringify(filesWithMeta))

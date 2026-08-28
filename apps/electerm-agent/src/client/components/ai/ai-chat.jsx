@@ -81,7 +81,14 @@ const e = window.translate
 
 function getSingleSftpAttachment (sftpRef) {
   const selectedFiles = sftpRef?.getSelectedFiles?.() || []
-  const attachments = createSftpFileAttachments(selectedFiles)
+  let attachments = []
+  try {
+    attachments = createSftpFileAttachments(selectedFiles, sftpRef)
+  } catch {
+    return {
+      error: '当前 SFTP 连接缺少安全源绑定，请重新连接后重试。'
+    }
+  }
   if (selectedFiles.length > 1) {
     return {
       error: '当前选择了多个文件，请一次只引用一个文件。'
@@ -214,7 +221,7 @@ export default function AIChat (props) {
       const selectedContent = await buildAttachmentAIContent({
         attachments: [selected.attachment],
         fsApi: window.fs,
-        sftpRef,
+        sftpRefs: refs,
         requestWebAccessAuthorization
       }).catch(err => {
         window.store.onError(err)
@@ -234,10 +241,7 @@ export default function AIChat (props) {
       const attachmentContent = await buildAttachmentAIContent({
         attachments: attachmentQueueAtSubmit,
         fsApi: window.fs,
-        sftpRef: getActiveSftpRef({
-          store: window.store,
-          refs
-        }),
+        sftpRefs: refs,
         requestWebAccessAuthorization
       }).catch(err => {
         window.store.onError(err)

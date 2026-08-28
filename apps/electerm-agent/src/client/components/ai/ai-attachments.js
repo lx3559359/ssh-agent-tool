@@ -4,6 +4,10 @@ import {
   readSftpFileContext
 } from './ai-chat-context-actions.js'
 import { readAIWebContent } from './ai-web-access-client.js'
+import {
+  assertSameSftpSafetyEndpoint,
+  canonicalizeSftpSafetyEndpoint
+} from '../sftp/sftp-safety-endpoint.js'
 
 const MAX_AI_CONTENT_BYTES = 10 * 1024 * 1024
 const LEGACY_TEXT_FILE_PATTERN = /\.(?:txt|log|md|json|csv|xml|ya?ml|ini|conf|cfg|sh|bash|zsh|fish|ps1|bat|cmd|sql|html?|css|js|jsx|ts|tsx|py|rb|php|java|go|rs|c|cc|cpp|h|hpp)$/i
@@ -15,6 +19,60 @@ const SAFE_IMAGE_MIME_TYPES = new Set([
   'image/gif'
 ])
 const SAFE_IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif'])
+
+function sftpAttachmentSourceError (message, code) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
+export function createSftpAttachmentSourceBinding (source) {
+  const endpoint = source?.sourceSftpEndpoint ||
+    source?.getSftpSafetyEndpoint?.()
+  if (!endpoint) return null
+  const sourceSftpEndpoint = canonicalizeSftpSafetyEndpoint(endpoint)
+  return Object.freeze({
+    sourceTabId: sourceSftpEndpoint.tabId,
+    sourceSftpEndpoint
+  })
+}
+
+function resolveSftpAttachmentRef (attachment, sftpRefs) {
+  if (!attachment?.sourceTabId || !attachment?.sourceSftpEndpoint) {
+    throw sftpAttachmentSourceError(
+      '远程附件缺少安全源绑定，请重新添加附件。',
+      'SFTP_ATTACHMENT_SOURCE_UNBOUND'
+    )
+  }
+  const pinned = canonicalizeSftpSafetyEndpoint(
+    attachment.sourceSftpEndpoint
+  )
+  if (String(attachment.sourceTabId) !== pinned.tabId) {
+    throw sftpAttachmentSourceError(
+      '远程附件缺少安全源绑定，请重新添加附件。',
+      'SFTP_ATTACHMENT_SOURCE_UNBOUND'
+    )
+  }
+  const sftpRef = sftpRefs?.get?.(`sftp-${pinned.tabId}`)
+  if (!sftpRef || typeof sftpRef.getSftpSafetyEndpoint !== 'function') {
+    throw sftpAttachmentSourceError(
+      '远程附件源连接已过期，请重新添加附件。',
+      'SFTP_ATTACHMENT_SOURCE_STALE'
+    )
+  }
+  try {
+    assertSameSftpSafetyEndpoint(
+      pinned,
+      sftpRef.getSftpSafetyEndpoint()
+    )
+  } catch {
+    throw sftpAttachmentSourceError(
+      '远程附件源连接已过期，请重新添加附件。',
+      'SFTP_ATTACHMENT_SOURCE_STALE'
+    )
+  }
+  return sftpRef
+}
 
 function getAttachmentExtension (name = '') {
   const match = String(name).trim().toLowerCase().match(/\.([a-z0-9]+)$/)
@@ -316,29 +374,42 @@ export function parseSftpDropPayload (payload = '') {
   } catch {
     return []
   }
-  return files
-    ? createSftpFileAttachments(files)
-    : []
+  try {
+    return files
+      ? createSftpFileAttachments(files)
+      : []
+  } catch {
+    return []
+  }
 }
 
-export function createSftpFileAttachments (files = []) {
-  return Array.from(files || [])
+export function createSftpFileAttachments (files = [], source) {
+  const candidates = Array.from(files || [])
     .filter(file => file && !file.isDirectory && file.name)
-    .map(file => ({
-      id: uid(),
-      source: 'sftp',
-      name: file.name,
-      path: file.path,
-      size: file.size,
-      mimeType: file.mimeType || '',
-      file
-    }))
+  const fallbackBinding = candidates.length
+    ? createSftpAttachmentSourceBinding(source)
+    : null
+  return candidates
+    .map(file => {
+      const binding = createSftpAttachmentSourceBinding(file) ||
+        fallbackBinding
+      return Object.freeze({
+        id: uid(),
+        source: 'sftp',
+        name: file.name,
+        path: file.path,
+        size: file.size,
+        mimeType: file.mimeType || '',
+        file,
+        ...(binding || {})
+      })
+    })
 }
 
 export async function buildAttachmentAIContent ({
   attachments = [],
   fsApi,
-  sftpRef,
+  sftpRefs,
   requestWebAccessAuthorization,
   maxBytes = AI_FILE_PREVIEW_MAX_BYTES,
   signal
@@ -348,6 +419,9 @@ export async function buildAttachmentAIContent ({
   const errors = []
   for (const attachment of attachments) {
     try {
+      const sftpRef = attachment.source === 'sftp'
+        ? resolveSftpAttachmentRef(attachment, sftpRefs)
+        : null
       if (shouldUseLegacyFileReader(attachment, { fsApi, sftpRef })) {
         const context = await readLegacyAttachmentContext(attachment, {
           fsApi,

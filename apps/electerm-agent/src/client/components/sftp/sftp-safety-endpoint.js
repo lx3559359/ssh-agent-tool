@@ -34,6 +34,76 @@ function assertEqualIdentity (actual, expected, label) {
   }
 }
 
+const canonicalSftpEndpointFields = [
+  'host',
+  'port',
+  'username',
+  'connectionUsername',
+  'tabId',
+  'pid',
+  'terminalId',
+  'terminalPid',
+  'sshTerminalPid',
+  'sshSessionGeneration',
+  'hostKeyFingerprint',
+  'sessionType'
+]
+
+export function canonicalizeSftpSafetyEndpoint (endpoint = {}) {
+  const username = requiredIdentity(endpoint.username, '登录用户名')
+  const connectionUsername = requiredIdentity(
+    endpoint.connectionUsername,
+    '连接用户名'
+  )
+  assertEqualIdentity(connectionUsername, username, '连接用户名')
+  const terminalPid = requiredIdentity(
+    endpoint.terminalPid,
+    'SFTP 会话安全标识'
+  )
+  const terminalId = requiredIdentity(
+    endpoint.terminalId,
+    'SFTP 会话安全标识'
+  )
+  assertEqualIdentity(terminalId, terminalPid, '会话安全标识')
+  const sessionType = requiredIdentity(endpoint.sessionType, '会话类型')
+    .toLowerCase()
+  if (sessionType !== 'sftp') {
+    throw new Error('SFTP 安全端点类型不一致。')
+  }
+  return Object.freeze({
+    host: normalizedHost(endpoint.host),
+    port: normalizedPort(endpoint.port),
+    username,
+    connectionUsername,
+    tabId: requiredIdentity(endpoint.tabId, '标签页标识'),
+    pid: requiredIdentity(endpoint.pid, 'SFTP 进程标识'),
+    terminalId,
+    terminalPid,
+    sshTerminalPid: requiredProcessPid(
+      endpoint.sshTerminalPid,
+      'SSH 终端进程 PID'
+    ),
+    sshSessionGeneration: requiredIdentity(
+      endpoint.sshSessionGeneration,
+      'SSH session generation'
+    ),
+    hostKeyFingerprint: requiredIdentity(
+      endpoint.hostKeyFingerprint,
+      '主机密钥指纹'
+    ),
+    sessionType
+  })
+}
+
+export function assertSameSftpSafetyEndpoint (expected, actual) {
+  const pinned = canonicalizeSftpSafetyEndpoint(expected)
+  const current = canonicalizeSftpSafetyEndpoint(actual)
+  for (const field of canonicalSftpEndpointFields) {
+    assertEqualIdentity(current[field], pinned[field], field)
+  }
+  return true
+}
+
 export function assertExactSshTerminalEndpoint ({
   tab = {},
   terminalEndpoint = {}
@@ -150,6 +220,7 @@ export function buildSftpSafetyEndpoint ({
     title: tab.title || tab.name || '',
     tabId: exact.tabId,
     pid: `sftp:${exact.tabId}:${terminalIdentity}`,
+    terminalId: terminalIdentity,
     terminalPid: terminalIdentity,
     sshTerminalPid: exact.sshTerminalPid,
     sshSessionGeneration: exact.sshSessionGeneration,

@@ -79,6 +79,7 @@ import {
   isCurrentRemoteFileGeneration,
   removeDeletedRemoteEntries,
   reconnectSftpEntryRemote,
+  runSftpBackgroundTask,
   isCurrentSftpEntryRemoteTask,
   replaceSftpEntryTimer,
   shouldRetryUnexpectedSftpPacket
@@ -229,14 +230,14 @@ export default class Sftp extends Component {
       !this.state.loadingSftp &&
       !this.state.remoteLoading
     ) {
-      this.initRemoteAll()
+      this.runSftpBackgroundTask(() => this.initRemoteAll())
     } else if (
       this.props.config.autoRefreshWhenSwitchToSftp &&
       switchedToSftp &&
       this.state.inited
     ) {
-      this.onGoto(typeMap.local)
-      this.onGoto(typeMap.remote)
+      this.runSftpBackgroundTask(() => this.onGoto(typeMap.local))
+      this.runSftpBackgroundTask(() => this.onGoto(typeMap.remote))
     }
     if (
       prevState.remotePath !== this.state.remotePath &&
@@ -462,7 +463,9 @@ export default class Sftp extends Component {
     this.setState({
       [n]: path,
       [nt]: path
-    }, () => this[`${type}List`]())
+    }, () => this.runSftpBackgroundTask(
+      () => this[`${type}List`]()
+    ))
   }
 
   updateCwd = (cwd = this.props.cwd) => {
@@ -484,7 +487,9 @@ export default class Sftp extends Component {
     this.setState({
       [n]: cwd,
       [nt]: cwd
-    }, () => this[`${type}List`]())
+    }, () => this.runSftpBackgroundTask(
+      () => this[`${type}List`]()
+    ))
   }
 
   getPwd = async (username, sftp = this.sftp) => {
@@ -1611,6 +1616,10 @@ export default class Sftp extends Component {
       : new Error(e('shellpilotSftpUnavailable'))
   }
 
+  runSftpBackgroundTask = task => runSftpBackgroundTask(task, {
+    reportError: error => window.store.onError(error)
+  })
+
   initLocalAll = () => {
     this.localListOwner()
     this.localList()
@@ -2052,7 +2061,9 @@ export default class Sftp extends Component {
                 'retryHandler',
                 () => {
                   if (isCurrentSftpEntryRemoteTask(this, task)) {
-                    reconnectSftpEntryRemote(this)
+                    this.runSftpBackgroundTask(
+                      () => reconnectSftpEntryRemote(this)
+                    )
                   }
                 },
                 sftpRetryInterval
@@ -2225,12 +2236,17 @@ export default class Sftp extends Component {
           if (!generation.accepting ||
             !isCurrentRemoteFileGeneration(this, generation) ||
             !isCurrentSftpEntryRemoteTask(this, task)) return
-          return this.remoteList(true, remotePath, undefined, {
-            commitList: true,
-            skipCompensation: true,
-            suppressLoading: true,
-            suppressVisibleError: true
-          })
+          return this.runSftpBackgroundTask(() => this.remoteList(
+            true,
+            remotePath,
+            undefined,
+            {
+              commitList: true,
+              skipCompensation: true,
+              suppressLoading: true,
+              suppressVisibleError: true
+            }
+          ))
         }, 1000)
       }
     } catch (error) {
@@ -2434,7 +2450,9 @@ export default class Sftp extends Component {
     }
   }
 
-  remoteListDebounce = debounce(this.remoteList, 1000)
+  remoteListDebounce = debounce((...args) => (
+    this.runSftpBackgroundTask(() => this.remoteList(...args))
+  ), 1000)
 
   localListDebounce = debounce(this.localList, 1000)
 
@@ -2452,7 +2470,9 @@ export default class Sftp extends Component {
     this.setState({
       [n]: path,
       [`${n}Temp`]: path
-    }, () => this[`${type}List`](undefined, undefined, oldPath))
+    }, () => this.runSftpBackgroundTask(
+      () => this[`${type}List`](undefined, undefined, oldPath)
+    ))
   }
 
   handleReloadRemoteSftp = async () => {
@@ -2467,7 +2487,7 @@ export default class Sftp extends Component {
       remoteFileTree: new Map()
     }, () => {
       if (isCurrentRemoteFileGeneration(this, drain.generation)) {
-        this.initRemoteAll()
+        this.runSftpBackgroundTask(() => this.initRemoteAll())
       }
     })
   }
@@ -2538,7 +2558,9 @@ export default class Sftp extends Component {
       [n]: np,
       [nt]: np,
       [`${type}Keyword`]: ''
-    }, () => this[`${type}List`](undefined, undefined, oldPath))
+    }, () => this.runSftpBackgroundTask(
+      () => this[`${type}List`](undefined, undefined, oldPath)
+    ))
   }
 
   goParent = (type) => {
@@ -2553,10 +2575,12 @@ export default class Sftp extends Component {
       this.setState({
         [n]: np,
         [n + 'Temp']: np
-      }, () => this[`${type}List`](
-        undefined,
-        undefined,
-        op
+      }, () => this.runSftpBackgroundTask(
+        () => this[`${type}List`](
+          undefined,
+          undefined,
+          op
+        )
       ))
     }
   }
@@ -2585,6 +2609,7 @@ export default class Sftp extends Component {
         'onGoto',
         'addTransferList',
         'renderDelConfirmTitle',
+        'getSftpSafetyEndpoint',
         'getSelectedFiles',
         'getFileItemById',
         'quickDeleteRemoteFiles',
@@ -2750,7 +2775,9 @@ export default class Sftp extends Component {
           </span>
           <ReloadOutlined
             className='pointer'
-            onClick={this.handleReloadRemoteSftp}
+            onClick={() => this.runSftpBackgroundTask(
+              this.handleReloadRemoteSftp
+            )}
           />
         </div>
       )
