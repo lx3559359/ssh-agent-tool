@@ -58,29 +58,81 @@ export async function destroySftpClient (client) {
   }
 }
 
+function nextEpoch (value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value + 1 : 1
+}
+
+function captureLifecycle (entry) {
+  return Object.freeze({
+    lifecycleEpoch: entry.sftpLifecycleEpoch || 0,
+    sshSessionGeneration: String(entry.sshSessionGeneration || '').trim(),
+    sshTerminalPid: String(entry.sshTerminalPid || '').trim()
+  })
+}
+
+function isCurrentLifecycle (entry, token) {
+  return Boolean(token) &&
+    (entry.sftpLifecycleEpoch || 0) === token.lifecycleEpoch &&
+    String(entry.sshSessionGeneration || '').trim() ===
+      token.sshSessionGeneration &&
+    String(entry.sshTerminalPid || '').trim() === token.sshTerminalPid
+}
+
+export function beginSftpEntryRemoteTask (entry, expectedGeneration) {
+  entry.sftpRemoteRequestEpoch = nextEpoch(entry.sftpRemoteRequestEpoch)
+  return Object.freeze({
+    ...captureLifecycle(entry),
+    requestEpoch: entry.sftpRemoteRequestEpoch,
+    sshSessionGeneration: String(
+      expectedGeneration ?? entry.sshSessionGeneration ?? ''
+    ).trim()
+  })
+}
+
+export function isCurrentSftpEntryRemoteTask (entry, token) {
+  return isCurrentLifecycle(entry, token) &&
+    entry.sftpRemoteRequestEpoch === token.requestEpoch
+}
+
+export async function commitSftpEntryRemoteClient (entry, token, client) {
+  if (!isCurrentSftpEntryRemoteTask(entry, token)) {
+    if (client && client !== entry.sftp) await destroySftpClient(client)
+    return false
+  }
+  entry.sftp = client
+  return true
+}
+
 export function disposeSftpEntryClient (entry) {
   const client = entry.sftp
   entry.sftp = null
+  entry.sftpLifecycleEpoch = nextEpoch(entry.sftpLifecycleEpoch)
   return destroySftpClient(client)
 }
 
 export function reconnectSftpEntryRemote (entry) {
-  return Promise.resolve(disposeSftpEntryClient(entry))
-    .then(() => entry.initRemoteAll())
+  const disposed = disposeSftpEntryClient(entry)
+  const token = captureLifecycle(entry)
+  return Promise.resolve(disposed).then(() => (
+    isCurrentLifecycle(entry, token) ? entry.initRemoteAll() : undefined
+  ))
 }
 
 export async function bindSftpEntryRemoteSession (entry, binding = {}) {
   const nextGeneration = String(binding.sshSessionGeneration || '').trim()
-  const generationChanged = Boolean(
-    entry.sftp && entry.sshSessionGeneration !== nextGeneration
-  )
+  const nextTerminalPid = String(binding.sshTerminalPid || '').trim()
+  const disposed = disposeSftpEntryClient(entry)
   entry.terminalId = binding.terminalId
   entry.port = binding.port
   entry.sshSessionGeneration = nextGeneration
-  if (generationChanged) await disposeSftpEntryClient(entry)
+  entry.sshTerminalPid = nextTerminalPid
+  const token = captureLifecycle(entry)
+  await disposed
+  if (!isCurrentLifecycle(entry, token)) return undefined
   const remote = entry.shouldRenderRemote()
     ? await entry.initRemoteAll()
     : undefined
+  if (!isCurrentLifecycle(entry, token)) return undefined
   entry.initLocalAll()
   return remote
 }

@@ -1348,7 +1348,9 @@ test('normalizes endpoint identity including IPv6 and rejects mismatches', async
     port: 22,
     username: 'root',
     tabId: 'tab-1',
-    pid: 1001
+    pid: 1001,
+    sshSessionGeneration: 'ssh-generation-1',
+    sshTerminalPid: 4242
   }
   const replacementSession = {
     host: 'PROD.EXAMPLE.COM',
@@ -1374,6 +1376,7 @@ test('normalizes endpoint identity including IPv6 and rejects mismatches', async
   const verifiedSession = {
     ...expectedSession,
     terminalPid: 1001,
+    sshTerminalPid: 4242,
     sshSessionGeneration: 'ssh-generation-1',
     sessionType: 'ssh',
     hostKeyFingerprint: 'SHA256:verified-host-key'
@@ -1390,6 +1393,7 @@ test('normalizes endpoint identity including IPv6 and rejects mismatches', async
     tabId: 'tab-1',
     pid: 1001,
     terminalPid: 1001,
+    sshTerminalPid: 4242,
     sshSessionGeneration: 'ssh-generation-1',
     sessionType: 'ssh',
     hostKeyFingerprint: 'SHA256:verified-host-key'

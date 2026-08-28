@@ -24,7 +24,9 @@ function endpoint () {
     pid: 'pid-a',
     terminalPid: 'terminal-a',
     sessionType: 'ssh',
-    hostKeyFingerprint: 'SHA256:abc'
+    hostKeyFingerprint: 'SHA256:abc',
+    sshSessionGeneration: 'session-a',
+    sshTerminalPid: 1001
   }
 }
 

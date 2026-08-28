@@ -69,11 +69,14 @@ import {
 } from './file-selection.js'
 import {
   destroySftpClient,
+  beginSftpEntryRemoteTask,
+  commitSftpEntryRemoteClient,
   disposeSftpEntryClient,
   disposeSftpEntryScheduling,
   bindSftpEntryRemoteSession,
   removeDeletedRemoteEntries,
   reconnectSftpEntryRemote,
+  isCurrentSftpEntryRemoteTask,
   replaceSftpEntryTimer,
   shouldRetryUnexpectedSftpPacket
 } from './sftp-entry-lifecycle.js'
@@ -414,11 +417,11 @@ export default class Sftp extends Component {
     }, () => this[`${type}List`]())
   }
 
-  getPwd = async (username) => {
+  getPwd = async (username, sftp = this.sftp) => {
     if (this.props.sftpPathFollowSsh && this.props.cwd) {
       return this.props.cwd
     }
-    const home = await this.sftp.getHomeDir()
+    const home = await sftp.getHomeDir()
     if (home) {
       return home.trim()
     } else {
@@ -548,6 +551,7 @@ export default class Sftp extends Component {
       tab: this.props.tab,
       terminalId: this.terminalId,
       sftpSessionGeneration: this.sftp.sshSessionGeneration,
+      sftpSshTerminalPid: this.sftp.sshTerminalPid,
       terminalEndpoint: terminal?.getTerminalSafetyEndpoint?.()
     })
   }
@@ -1510,11 +1514,12 @@ export default class Sftp extends Component {
     this[type + 'Dom'].onPaste()
   }
 
-  initData = (terminalId, port, sshSessionGeneration) => {
+  initData = (terminalId, port, sshSessionGeneration, sshTerminalPid) => {
     return bindSftpEntryRemoteSession(this, {
       terminalId,
       port,
-      sshSessionGeneration
+      sshSessionGeneration,
+      sshTerminalPid
     }).catch(window.store.onError)
   }
 
@@ -1543,8 +1548,13 @@ export default class Sftp extends Component {
   }
 
   initRemoteAll = async () => {
-    await this.remoteList()
-    this.remoteListOwner()
+    const task = beginSftpEntryRemoteTask(this)
+    await this.remoteList(false, undefined, undefined, {
+      lifecycleTask: task
+    })
+    if (isCurrentSftpEntryRemoteTask(this, task)) {
+      await this.remoteListOwner(task)
+    }
   }
 
   modifier = (...args) => {
@@ -1629,13 +1639,15 @@ export default class Sftp extends Component {
     return treeMap
   }
 
-  remoteListOwner = async () => {
+  remoteListOwner = async (task) => {
     const remoteUidTree = await owner.remoteListUsers(
       this.props.pid
     )
+    if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
     const remoteGidTree = await owner.remoteListGroups(
       this.props.pid
     )
+    if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
     this.setState({
       remoteGidTree,
       remoteUidTree
@@ -1677,6 +1689,7 @@ export default class Sftp extends Component {
     oldPath,
     options = {}
   ) => {
+    const task = options.lifecycleTask || beginSftpEntryRemoteTask(this)
     const { tab, sessionOptions } = this.props
     const { username, startDirectory } = tab
     let remotePath
@@ -1702,12 +1715,20 @@ export default class Sftp extends Component {
         const sshSessionGeneration = this.type === 'ftp'
           ? undefined
           : terminalEndpoint?.sshSessionGeneration
+        const sshTerminalPid = this.type === 'ftp'
+          ? undefined
+          : terminalEndpoint?.sshTerminalPid
         sftp = await Client(
           this.terminalId,
           this.type,
           this.port,
-          sshSessionGeneration
+          sshSessionGeneration,
+          sshTerminalPid
         )
+        if (!isCurrentSftpEntryRemoteTask(this, task)) {
+          await destroySftpClient(sftp)
+          return
+        }
         if (!sftp) {
           return
         }
@@ -1735,13 +1756,21 @@ export default class Sftp extends Component {
               replaceSftpEntryTimer(
                 this,
                 'retryHandler',
-                () => reconnectSftpEntryRemote(this),
+                () => {
+                  if (isCurrentSftpEntryRemoteTask(this, task)) {
+                    reconnectSftpEntryRemote(this)
+                  }
+                },
                 sftpRetryInterval
               )
             } else {
               throw e
             }
           })
+        if (!isCurrentSftpEntryRemoteTask(this, task)) {
+          await destroySftpClient(sftp)
+          return
+        }
         this.setState(() => {
           return {
             loadingSftp: false
@@ -1749,6 +1778,7 @@ export default class Sftp extends Component {
         })
         if (!r) {
           await destroySftpClient(sftp)
+          if (!isCurrentSftpEntryRemoteTask(this, task)) return
           return this.props.editTab(tab.id, {
             sftpCreated: false
           })
@@ -1758,25 +1788,33 @@ export default class Sftp extends Component {
               tab,
               terminalId: this.terminalId,
               sftpSessionGeneration: sftp.sshSessionGeneration,
+              sftpSshTerminalPid: sftp.sshTerminalPid,
               terminalEndpoint: refs.get('term-' + tab.id)
                 ?.getTerminalSafetyEndpoint?.()
             })
           }
-          this.sftp = sftp
+          if (!await commitSftpEntryRemoteClient(this, task, sftp)) return
           this.retryCount = 0
         }
+      }
+
+      if (!isCurrentSftpEntryRemoteTask(this, task)) {
+        if (sftp && sftp !== this.sftp) await destroySftpClient(sftp)
+        return
       }
 
       if (!remotePath) {
         if (startDirectory) {
           remotePath = normalizeRemotePath(startDirectory)
         } else {
-          remotePath = await this.getPwd(username)
+          remotePath = await this.getPwd(username, sftp)
+          if (!isCurrentSftpEntryRemoteTask(this, task)) return
         }
       }
 
       const remote = await this.sftpList(sftp, remotePath)
-      this.sftp = sftp
+      if (!isCurrentSftpEntryRemoteTask(this, task)) return
+      if (!await commitSftpEntryRemoteClient(this, task, sftp)) return
       const update = {
         remote,
         remoteFileTree: this.buildTree(remote, typeMap.remote),
@@ -1799,6 +1837,7 @@ export default class Sftp extends Component {
         ]).slice(0, maxSftpHistory)
       }
       this.setState(prevState => {
+        if (!isCurrentSftpEntryRemoteTask(this, task)) return null
         const nextRemote = preserveSftpDraftItems(prevState.remote, remote)
         const nextUpdate = nextRemote === remote
           ? update
@@ -1818,24 +1857,31 @@ export default class Sftp extends Component {
             }
           : nextUpdate
       }, () => {
+        if (!isCurrentSftpEntryRemoteTask(this, task)) return
         if (this.type !== 'ftp') {
-          this.updateRemoteList(remote, remotePath, sftp)
+          this.updateRemoteList(remote, remotePath, sftp, task)
         }
         this.props.editTab(tab.id, {
           sftpCreated: true
         })
       })
       replaceSftpEntryTimer(this, 'timer5', () => {
+        if (!isCurrentSftpEntryRemoteTask(this, task)) return
         if (this.type !== 'ftp') {
-          this.updateRemoteList(remote, remotePath, sftp)
+          this.updateRemoteList(remote, remotePath, sftp, task)
         }
         this.props.editTab(tab.id, {
           sftpCreated: true
         })
       }, 1000)
     } catch (error) {
+      if (!isCurrentSftpEntryRemoteTask(this, task)) {
+        if (sftp && sftp !== this.sftp) await destroySftpClient(sftp)
+        return
+      }
       if (sftp && sftp !== this.sftp) {
-        await sftp.destroy().catch(() => {})
+        await destroySftpClient(sftp)
+        if (!isCurrentSftpEntryRemoteTask(this, task)) return
         this.props.editTab(tab.id, {
           sftpCreated: false
         })
@@ -1862,7 +1908,8 @@ export default class Sftp extends Component {
   updateRemoteList = async (
     remotes,
     remotePath,
-    sftp
+    sftp,
+    task
   ) => {
     const remote = []
     for (const r of remotes) {
@@ -1874,12 +1921,14 @@ export default class Sftp extends Component {
             console.debug(e)
             return null
           })
+        if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
         if (!realpath) {
           continue
         }
         if (!isAbsPath(realpath)) {
           realpath = resolve(remotePath, realpath)
           realpath = await sftp.realpath(realpath)
+          if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
         }
         const realFileInfo = await getRemoteFileInfo(
           sftp,
@@ -1889,6 +1938,7 @@ export default class Sftp extends Component {
           console.debug(e)
           return null
         })
+        if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
         if (!realFileInfo) {
           continue
         }
@@ -1903,7 +1953,9 @@ export default class Sftp extends Component {
       remote,
       remoteFileTree: this.buildTree(remote, typeMap.remote)
     }
+    if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
     this.setState(prevState => {
+      if (task && !isCurrentSftpEntryRemoteTask(this, task)) return null
       const nextRemote = preserveSftpDraftItems(prevState.remote, remote)
       const nextUpdate = nextRemote === remote
         ? update

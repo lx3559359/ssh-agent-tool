@@ -11,15 +11,20 @@ import {
   createSftpAbortError,
   prepareSftpCancelableCall
 } from './sftp-operation-cancellation'
-import { bindSftpTransportGeneration } from './sftp-session-generation.js'
+import { bindSftpTransportSession } from './sftp-session-generation.js'
 
 const transferKeys = Object.keys(transferTypeMap)
 
 class Sftp {
-  async init (terminalId, port, sshSessionGeneration) {
+  async init (terminalId, port, sshSessionGeneration, sshTerminalPid) {
     const generation = String(sshSessionGeneration || '').trim()
+    const terminalPid = Number(sshTerminalPid)
     if (this.type !== 'ftp' && !generation) {
       throw new Error('SFTP 缺少 SSH session generation')
+    }
+    if (this.type !== 'ftp' &&
+      (!Number.isSafeInteger(terminalPid) || terminalPid < 1)) {
+      throw new Error('SFTP 缺少 SSH terminal process PID')
     }
     const id = generate()
     const ws = await initWs('sftp', id, terminalId, undefined, port)
@@ -27,7 +32,12 @@ class Sftp {
     this.id = id
     this.terminalId = terminalId
     this.port = port
-    if (this.type !== 'ftp') bindSftpTransportGeneration(this, generation)
+    if (this.type !== 'ftp') {
+      bindSftpTransportSession(this, {
+        sshSessionGeneration: generation,
+        sshTerminalPid: terminalPid
+      })
+    }
     ws.s({
       action: 'sftp-new',
       id,
@@ -49,7 +59,11 @@ class Sftp {
           })
         }
         const callArgs = func === 'connect' && this.type !== 'ftp'
-          ? [{ ...(args[0] || {}), sshSessionGeneration: generation }]
+          ? [{
+              ...(args[0] || {}),
+              sshSessionGeneration: generation,
+              sshTerminalPid: terminalPid
+            }]
           : args
         const fid = generate()
         const uid = func + ':' + fid
@@ -87,8 +101,9 @@ class Sftp {
               return reject(new Error(message))
             }
             if (func === 'connect' && this.type !== 'ftp' &&
-              arg.data?.sshSessionGeneration !== generation) {
-              return reject(new Error('SFTP server SSH session generation mismatch'))
+              (arg.data?.sshSessionGeneration !== generation ||
+                arg.data?.sshTerminalPid !== terminalPid)) {
+              return reject(new Error('SFTP server SSH session identity mismatch'))
             }
             resolve(arg.data)
           }, uid))
@@ -140,10 +155,16 @@ export default async (
   terminalId,
   type = 'sftp',
   port,
-  sshSessionGeneration
+  sshSessionGeneration,
+  sshTerminalPid
 ) => {
   const sftp = new Sftp()
   sftp.type = type
-  await sftp.init(terminalId, port, sshSessionGeneration)
+  await sftp.init(
+    terminalId,
+    port,
+    sshSessionGeneration,
+    sshTerminalPid
+  )
   return sftp
 }

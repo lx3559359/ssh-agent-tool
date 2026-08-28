@@ -314,6 +314,7 @@ class TerminalSshBase extends TerminalBase {
   constructor (...args) {
     super(...args)
     this.sshSessionGeneration = randomUUID()
+    this.sshTerminalPid = process.pid
   }
 
   async remoteInitProcess () {
@@ -1337,7 +1338,8 @@ class TerminalSshBase extends TerminalBase {
       ...(this.hostKeyFingerprint
         ? { hostKeyFingerprint: this.hostKeyFingerprint }
         : {}),
-      sshSessionGeneration: this.sshSessionGeneration
+      sshSessionGeneration: this.sshSessionGeneration,
+      sshTerminalPid: this.sshTerminalPid
     }
   }
 }

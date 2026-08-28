@@ -16,6 +16,7 @@ function endpoint (suffix = 'a') {
     tabId: 'tab-a',
     pid: `pid-${suffix}`,
     terminalPid: `terminal-${suffix}`,
+    sshTerminalPid: suffix === 'a' ? 4242 : 4343,
     sessionType: 'ssh',
     sshSessionGeneration: `ssh-generation-${suffix}`,
     hostKeyFingerprint: `SHA256:${suffix}`

@@ -20,6 +20,12 @@ async function loadModule () {
   return import(url)
 }
 
+function deferred () {
+  let settle
+  const promise = new Promise(resolve => { settle = resolve })
+  return { promise, resolve: settle }
+}
+
 test('unexpected SFTP packets retry once per connection attempt', async () => {
   const { shouldRetryUnexpectedSftpPacket } = await loadModule()
   const error = new Error('Unexpected packet before SFTP handshake')
@@ -139,6 +145,124 @@ test('binding a new SSH generation destroys the old SFTP transport first', async
     ['init', null, 'generation-new'],
     'local'
   ])
+})
+
+test('stale remote initialization cannot write back after dispose and new init', async () => {
+  const {
+    beginSftpEntryRemoteTask,
+    commitSftpEntryRemoteClient,
+    disposeSftpEntryClient
+  } = await loadModule()
+  const oldResult = deferred()
+  const calls = []
+  const oldClient = {
+    async destroy () { calls.push('destroy-old') }
+  }
+  const newClient = {
+    async destroy () { calls.push('destroy-new') }
+  }
+  const entry = {
+    sftp: null,
+    sshSessionGeneration: 'generation-old'
+  }
+  const oldTask = beginSftpEntryRemoteTask(entry, 'generation-old')
+  const oldWriteback = oldResult.promise.then(client =>
+    commitSftpEntryRemoteClient(entry, oldTask, client)
+  )
+
+  await disposeSftpEntryClient(entry)
+  entry.sshSessionGeneration = 'generation-new'
+  const newTask = beginSftpEntryRemoteTask(entry, 'generation-new')
+  assert.equal(
+    await commitSftpEntryRemoteClient(entry, newTask, newClient),
+    true
+  )
+  oldResult.resolve(oldClient)
+
+  assert.equal(await oldWriteback, false)
+  assert.equal(entry.sftp, newClient)
+  assert.deepEqual(calls, ['destroy-old'])
+})
+
+test('new session binding wins while the old transport destroy is pending', async () => {
+  const { bindSftpEntryRemoteSession } = await loadModule()
+  const oldDestroyed = deferred()
+  const calls = []
+  const entry = {
+    terminalId: 'tab-old',
+    port: 41001,
+    sshSessionGeneration: 'generation-old',
+    sshTerminalPid: '1001',
+    sftp: {
+      async destroy () {
+        calls.push('destroy-old')
+        await oldDestroyed.promise
+      }
+    },
+    shouldRenderRemote: () => true,
+    initRemoteAll: () => {
+      calls.push([
+        'init',
+        entry.terminalId,
+        entry.sshSessionGeneration,
+        entry.sshTerminalPid
+      ])
+      return entry.sshSessionGeneration
+    },
+    initLocalAll: () => calls.push(['local', entry.sshSessionGeneration])
+  }
+
+  const oldBinding = bindSftpEntryRemoteSession(entry, {
+    terminalId: 'tab-first',
+    port: 41002,
+    sshSessionGeneration: 'generation-first',
+    sshTerminalPid: '1002'
+  })
+  const newBinding = bindSftpEntryRemoteSession(entry, {
+    terminalId: 'tab-new',
+    port: 41003,
+    sshSessionGeneration: 'generation-new',
+    sshTerminalPid: '1003'
+  })
+
+  assert.equal(await newBinding, 'generation-new')
+  oldDestroyed.resolve()
+  assert.equal(await oldBinding, undefined)
+  assert.equal(entry.terminalId, 'tab-new')
+  assert.equal(entry.port, 41003)
+  assert.equal(entry.sshSessionGeneration, 'generation-new')
+  assert.equal(entry.sshTerminalPid, '1003')
+  assert.deepEqual(calls, [
+    'destroy-old',
+    ['init', 'tab-new', 'generation-new', '1003'],
+    ['local', 'generation-new']
+  ])
+})
+
+test('SFTP entry validates the latest lifecycle before transport and list writes', () => {
+  const source = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-entry.jsx'
+  ), 'utf8')
+  const start = source.indexOf('remoteList = async')
+  const end = source.indexOf('\n  updateRemoteList = async', start)
+  const method = source.slice(start, end)
+
+  assert.match(method, /beginSftpEntryRemoteTask\(this\)/)
+  assert.match(
+    method,
+    /sftp = await Client\([\s\S]{0,300}!isCurrentSftpEntryRemoteTask\(this, task\)[\s\S]{0,120}destroySftpClient\(sftp\)/
+  )
+  assert.match(
+    method,
+    /await sftp\.connect\(opts\)[\s\S]{0,700}!isCurrentSftpEntryRemoteTask\(this, task\)/
+  )
+  assert.match(
+    method,
+    /await this\.sftpList\(sftp, remotePath\)[\s\S]{0,180}commitSftpEntryRemoteClient\(this, task, sftp\)/
+  )
+  assert.doesNotMatch(method, /this\.sftp\s*=\s*sftp/)
+  assert.match(method, /updateRemoteList\(remote, remotePath, sftp, task\)/)
 })
 
 test('SFTP client disposal detaches first and absorbs destroy rejection', async () => {

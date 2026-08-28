@@ -5,7 +5,8 @@ export function buildTerminalSafetyEndpoint (
   tab = {},
   terminalPid,
   hostKeyFingerprint,
-  sshSessionGeneration
+  sshSessionGeneration,
+  sshTerminalPid
 ) {
   const pid = terminalPid === undefined || terminalPid === null
     ? ''
@@ -20,6 +21,7 @@ export function buildTerminalSafetyEndpoint (
     title: tab.title || tab.name || '',
     pid,
     terminalPid: pid,
+    sshTerminalPid,
     sshSessionGeneration: String(sshSessionGeneration || '').trim(),
     sessionType: tab.type || 'ssh'
   }

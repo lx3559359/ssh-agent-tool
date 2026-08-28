@@ -31,6 +31,7 @@ function terminalEndpoint (overrides = {}) {
     connectionUsername: 'hik',
     pid: 'tab-1',
     terminalPid: 'tab-1',
+    sshTerminalPid: 4242,
     sshSessionGeneration: 'ssh-generation-1',
     sessionType: 'ssh',
     hostKeyFingerprint: 'SHA256:one',
@@ -58,6 +59,7 @@ function createFakeSftp (overrides = {}) {
     port: 41001,
     type: 'sftp',
     sshSessionGeneration: 'ssh-generation-1',
+    sshTerminalPid: 4242,
     async getHomeDir () { return home },
     async realpath (remotePath) { return remotePath || home },
     async lstat (remotePath) {
@@ -300,6 +302,7 @@ test('capability resolver rejects every SSH endpoint identity mismatch before le
     ['username', { connectionUsername: 'root' }],
     ['tabId', { tabId: 'tab-other' }],
     ['PID', { pid: 'tab-other', terminalPid: 'tab-other' }],
+    ['SSH PID', { sshTerminalPid: 4343 }],
     ['generation', { sshSessionGeneration: 'ssh-generation-2' }],
     ['fingerprint', { hostKeyFingerprint: 'SHA256:two' }]
   ]
@@ -315,7 +318,7 @@ test('capability resolver rejects every SSH endpoint identity mismatch before le
         tab: tab(),
         sftp: fake.sftp,
         getTerminal: () => terminal
-      }), /端点|endpoint|主机|端口|用户|标签|进程|generation|指纹/i)
+      }), /端点|endpoint|主机|端口|用户|标签|进程|PID|generation|指纹/i)
       assert.equal(terminal.acquireCount, 0)
     })
   }
@@ -484,6 +487,7 @@ test('safety transaction identity persists and strictly compares SSH generation'
     tabId: 'tab-1',
     pid: 'tab-1',
     terminalPid: 'tab-1',
+    sshTerminalPid: 4242,
     sshSessionGeneration: 'ssh-generation-1',
     sessionType: 'ssh',
     hostKeyFingerprint: 'SHA256:one'
@@ -506,6 +510,7 @@ test('safety transaction identity persists and strictly compares SSH generation'
     endpoint: sftpEndpoint
   })
   assert.equal(operation.endpoint.sshSessionGeneration, 'ssh-generation-1')
+  assert.equal(operation.endpoint.sshTerminalPid, 4242)
   assert.equal(operation.endpoint.hostKeyFingerprint, 'SHA256:one')
   assert.doesNotThrow(() => assertSameSessionEndpoint(
     operation.endpoint,
@@ -516,12 +521,35 @@ test('safety transaction identity persists and strictly compares SSH generation'
     { ...sftpEndpoint, sshSessionGeneration: 'ssh-generation-2' }
   ), /会话端点不一致/)
   assert.throws(() => assertSameSessionEndpoint(
+    operation.endpoint,
+    { ...sftpEndpoint, sshTerminalPid: 4343 }
+  ), /会话端点不一致/)
+  assert.throws(() => assertSameSessionEndpoint(
     {
       ...operation.endpoint,
-      sshSessionGeneration: undefined,
-      sshTerminalPid: operation.endpoint.tabId
+      sshSessionGeneration: undefined
     },
     sftpEndpoint
+  ), /会话端点不一致/)
+  assert.throws(() => assertSameSessionEndpoint(
+    { ...operation.endpoint, sshTerminalPid: undefined },
+    sftpEndpoint
+  ), /会话端点不一致/)
+  const bothMissingGeneration = {
+    ...operation.endpoint,
+    sshSessionGeneration: undefined
+  }
+  assert.throws(() => assertSameSessionEndpoint(
+    bothMissingGeneration,
+    { ...bothMissingGeneration }
+  ), /会话端点不一致/)
+  const bothMissingTerminalPid = {
+    ...operation.endpoint,
+    sshTerminalPid: undefined
+  }
+  assert.throws(() => assertSameSessionEndpoint(
+    bothMissingTerminalPid,
+    { ...bothMissingTerminalPid }
   ), /会话端点不一致/)
   assert.throws(() => assertSameSessionEndpoint(
     operation.endpoint,

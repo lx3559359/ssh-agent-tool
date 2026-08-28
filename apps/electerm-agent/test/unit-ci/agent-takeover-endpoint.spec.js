@@ -14,6 +14,7 @@ test('projects complete verified SSH identity without credentials', async () => 
     tabId: 'tab-a',
     pid: 'pid-a',
     terminalPid: 'term-a',
+    sshTerminalPid: 4242,
     sessionType: 'ssh',
     sshSessionGeneration: 'ssh-generation-a',
     host: 'srv.test',
@@ -31,6 +32,7 @@ test('projects complete verified SSH identity without credentials', async () => 
     tabId: 'tab-a',
     pid: 'pid-a',
     terminalPid: 'term-a',
+    sshTerminalPid: 4242,
     sessionType: 'ssh',
     sshSessionGeneration: 'ssh-generation-a',
     hostKeyFingerprint: 'SHA256:abc'
@@ -44,6 +46,7 @@ test('rejects an incomplete or unverified SSH identity', async () => {
     tabId: 'tab-a',
     pid: 'pid-a',
     terminalPid: 'term-a',
+    sshTerminalPid: 4242,
     sessionType: 'ssh',
     sshSessionGeneration: 'ssh-generation-a',
     host: 'srv.test',
@@ -56,6 +59,7 @@ test('rejects an incomplete or unverified SSH identity', async () => {
     'tabId',
     'pid',
     'terminalPid',
+    'sshTerminalPid',
     'sessionType',
     'sshSessionGeneration',
     'hostKeyFingerprint'

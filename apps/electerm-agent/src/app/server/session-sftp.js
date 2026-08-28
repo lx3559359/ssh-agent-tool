@@ -160,15 +160,25 @@ class Sftp extends TerminalBase {
     const expectedGeneration = requireSshSessionGeneration(
       initOptions?.sshSessionGeneration
     )
+    const expectedTerminalPid = Number(initOptions?.sshTerminalPid)
+    if (!Number.isSafeInteger(expectedTerminalPid) || expectedTerminalPid < 1) {
+      throw new Error('SFTP SSH terminal process pid is unavailable')
+    }
     this.transfers = {}
     const terminalId = initOptions?.terminalId
     const terminalInst = globalState.getSession(terminalId)
     if (!terminalInst ||
-      terminalInst.sshSessionGeneration !== expectedGeneration) {
-      throw new Error('SFTP SSH session generation does not match current terminal')
+      terminalInst.sshSessionGeneration !== expectedGeneration ||
+      terminalInst.sshTerminalPid !== expectedTerminalPid) {
+      throw new Error('SFTP SSH session identity does not match current terminal')
     }
-    this.initOptions = { ...initOptions, sshSessionGeneration: expectedGeneration }
+    this.initOptions = {
+      ...initOptions,
+      sshSessionGeneration: expectedGeneration,
+      sshTerminalPid: expectedTerminalPid
+    }
     this.sshSessionGeneration = expectedGeneration
+    this.sshTerminalPid = expectedTerminalPid
     const {
       conn
     } = terminalInst
@@ -189,14 +199,18 @@ class Sftp extends TerminalBase {
     }
 
     if (globalState.getSession(terminalId) !== terminalInst ||
-      terminalInst.sshSessionGeneration !== expectedGeneration) {
+      terminalInst.sshSessionGeneration !== expectedGeneration ||
+      terminalInst.sshTerminalPid !== expectedTerminalPid) {
       await closeSftpChannel(this.sftp)
       delete this.sftp
       throw new Error('SFTP SSH session changed during initialization')
     }
 
     globalState.setSession(this.pid, this)
-    return { sshSessionGeneration: expectedGeneration }
+    return {
+      sshSessionGeneration: expectedGeneration,
+      sshTerminalPid: expectedTerminalPid
+    }
   }
 
   kill () {

@@ -108,7 +108,13 @@ async function createTerm (body, ws) {
     )) {
       throw new Error('SSH session generation is unavailable')
     }
+    const sshTerminalPid = Number(metadata?.sshTerminalPid)
+    if (!Number.isSafeInteger(sshTerminalPid) || sshTerminalPid < 1 ||
+      sshTerminalPid !== process.pid) {
+      throw new Error('SSH terminal process pid is unavailable')
+    }
     result.sshSessionGeneration = sshSessionGeneration
+    result.sshTerminalPid = sshTerminalPid
   }
   return result
 }

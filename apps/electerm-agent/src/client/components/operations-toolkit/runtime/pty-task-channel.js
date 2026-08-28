@@ -6,6 +6,7 @@ const requiredEndpointFields = Object.freeze([
   'tabId',
   'pid',
   'terminalPid',
+  'sshTerminalPid',
   'sessionType',
   'host',
   'port',

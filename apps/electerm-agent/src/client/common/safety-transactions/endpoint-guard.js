@@ -3,6 +3,7 @@ const strictSessionFields = [
   'tabId',
   'pid',
   'terminalPid',
+  'sshTerminalPid',
   'sshSessionGeneration',
   'sessionType',
   'hostKeyFingerprint'
@@ -127,15 +128,28 @@ export function projectEndpoint (endpoint = {}) {
 }
 
 function hasSameSessionIdentity (expected, actual) {
+  const hasModernSshDiscriminator = endpoint => [
+    'sshSessionGeneration',
+    'sshTerminalPid'
+  ].some(field => {
+    const value = endpoint?.[field]
+    return value !== undefined && value !== null && String(value).trim() !== ''
+  })
   return strictSessionFields.every(field => {
     const expectedValue = expected?.[field]
     const actualValue = actual?.[field]
     const expectedMissing = expectedValue === undefined ||
       expectedValue === null || String(expectedValue).trim() === ''
-    if (field !== 'sshSessionGeneration' && expectedMissing) return true
     const actualMissing = actualValue === undefined || actualValue === null ||
       String(actualValue).trim() === ''
-    if (expectedMissing || actualMissing) return expectedMissing && actualMissing
+    if (['sshSessionGeneration', 'sshTerminalPid'].includes(field) &&
+      (expectedMissing || actualMissing)) {
+      return expectedMissing && actualMissing &&
+        !hasModernSshDiscriminator(expected) &&
+        !hasModernSshDiscriminator(actual)
+    }
+    if (expectedMissing) return true
+    if (actualMissing) return false
     return String(expectedValue) === String(actualValue)
   })
 }

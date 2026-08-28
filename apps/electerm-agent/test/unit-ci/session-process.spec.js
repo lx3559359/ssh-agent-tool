@@ -17,6 +17,7 @@ test('cleans up the temporary child process when test connection fails', async (
   const children = []
   childProcess.fork = () => {
     const child = new EventEmitter()
+    child.pid = 4242
     child.killed = false
     child.kill = () => {
       child.killed = true
@@ -64,6 +65,7 @@ test('returns only verified public SSH identity metadata from child creation', a
   const children = []
   childProcess.fork = () => {
     const child = new EventEmitter()
+    child.pid = 4242
     child.connected = true
     child.kill = () => {
       child.connected = false
@@ -78,6 +80,7 @@ test('returns only verified public SSH identity metadata from child creation', a
             pid: 'tab-verified',
             hostKeyFingerprint: 'SHA256:verified-host-key',
             sshSessionGeneration: '11111111-1111-4111-8111-111111111111',
+            sshTerminalPid: 4242,
             password: 'must-not-cross-process-boundary',
             privateKey: 'must-not-cross-process-boundary'
           }
@@ -105,9 +108,48 @@ test('returns only verified public SSH identity metadata from child creation', a
     result.sshSessionGeneration,
     '11111111-1111-4111-8111-111111111111'
   )
+  assert.equal(result.sshTerminalPid, 4242)
   assert.equal(Object.hasOwn(result, 'password'), false)
   assert.equal(Object.hasOwn(result, 'privateKey'), false)
 
   await sessionProcess.closeTerminal('tab-verified', { timeoutMs: 10 })
+  assert.equal(children[0].connected, false)
+})
+
+test('rejects SSH process metadata that does not match the forked child', async () => {
+  const children = []
+  childProcess.fork = () => {
+    const child = new EventEmitter()
+    child.pid = 4242
+    child.connected = true
+    child.kill = () => {
+      child.connected = false
+      child.emit('exit', 0, null)
+    }
+    child.send = payload => {
+      if (payload?.data?.action !== 'create-terminal') return
+      queueMicrotask(() => child.emit('message', {
+        id: payload.data.id,
+        data: {
+          pid: 'tab-spoofed',
+          hostKeyFingerprint: 'SHA256:verified-host-key',
+          sshSessionGeneration: '11111111-1111-4111-8111-111111111111',
+          sshTerminalPid: 9999
+        }
+      }))
+    }
+    children.push(child)
+    queueMicrotask(() => child.emit('message', { serverInited: true }))
+    return child
+  }
+
+  const sessionProcess = require('../../src/app/server/session-process')
+  await assert.rejects(sessionProcess.terminal({
+    uid: 'tab-spoofed',
+    termType: 'ssh',
+    host: 'prod.example.com',
+    port: 22,
+    username: 'deploy'
+  }, null, 'request-spoofed'), /process pid/i)
   assert.equal(children[0].connected, false)
 })

@@ -23,6 +23,8 @@ function sessionEndpoint (overrides = {}) {
     terminalPid: 2001,
     sessionType: 'ssh',
     hostKeyFingerprint: 'SHA256:test-fingerprint',
+    sshSessionGeneration: 'session-readonly',
+    sshTerminalPid: 3001,
     ...overrides
   }
 }

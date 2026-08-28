@@ -18,6 +18,7 @@ function endpoint () {
     tabId: 'tab-concrete',
     pid: 'pid-concrete',
     terminalPid: 'pid-concrete',
+    sshTerminalPid: 4242,
     sessionType: 'ssh',
     sshSessionGeneration: 'ssh-generation-concrete',
     hostKeyFingerprint: 'SHA256:concrete'

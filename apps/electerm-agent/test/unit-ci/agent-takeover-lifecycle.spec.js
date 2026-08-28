@@ -17,6 +17,7 @@ function endpoint (suffix = 'a') {
     tabId: `tab-${suffix}`,
     pid: `pid-${suffix}`,
     terminalPid: `pid-${suffix}`,
+    sshTerminalPid: suffix === 'a' ? 4242 : 4343,
     sessionType: 'ssh',
     sshSessionGeneration: `ssh-generation-${suffix}`,
     hostKeyFingerprint: `SHA256:${suffix}`
@@ -162,14 +163,24 @@ test('terminal publishes connected status only after exact session identity is r
       connectedBlock[1].indexOf('this.setStatus(statusMap.success)'),
     'SSH generation must be assigned before the observable connected status update'
   )
+  assert.ok(
+    connectedBlock[1].indexOf('this.sshTerminalPid =') <
+      connectedBlock[1].indexOf('this.setStatus(statusMap.success)'),
+    'SSH process pid must be assigned before the observable connected status update'
+  )
   assert.match(
     connectedBlock[1],
-    /initData\([\s\S]*?this\.sshSessionGeneration[\s\S]*?\)/,
-    'SFTP initialization must capture the connected SSH generation'
+    /initData\([\s\S]*?this\.sshSessionGeneration[\s\S]*?this\.sshTerminalPid[\s\S]*?\)/,
+    'SFTP initialization must capture the connected SSH generation and process pid'
   )
   assert.match(
     terminalSource,
     /oncloseSocket = \(\) => \{[\s\S]*?this\.sshSessionGeneration = ''/,
     'disconnect must invalidate the connected SSH generation'
+  )
+  assert.match(
+    terminalSource,
+    /oncloseSocket = \(\) => \{[\s\S]*?this\.sshTerminalPid = ''/,
+    'disconnect must invalidate the connected SSH process pid'
   )
 })

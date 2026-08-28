@@ -13,6 +13,7 @@ function endpoint (overrides = {}) {
     tabId: 'tab-a',
     pid: 'pid-a',
     terminalPid: 'terminal-a',
+    sshTerminalPid: 4242,
     sessionType: 'ssh',
     sshSessionGeneration: 'ssh-generation-a',
     host: 'srv.test',
@@ -33,6 +34,7 @@ test('keeps takeover grants isolated by exact verified session identity', async 
     tabId: 'tab-b',
     pid: 'pid-b',
     terminalPid: 'terminal-b',
+    sshTerminalPid: 4343,
     sshSessionGeneration: 'ssh-generation-b'
   })
   const replacementHost = endpoint({
@@ -70,6 +72,7 @@ test('freezes normalized records and rejects duplicate or invalid grants', async
     tabId: 'tab-a',
     pid: 'pid-a',
     terminalPid: 'terminal-a',
+    sshTerminalPid: 4242,
     sshSessionGeneration: 'ssh-generation-a',
     sessionType: 'ssh',
     hostKeyFingerprint: 'SHA256:abc'

@@ -1272,6 +1272,10 @@ function installFork ({
   const children = []
   childProcess.fork = () => {
     const child = new EventEmitter()
+    child.pid = 3000 + children.length
+    child.sshSessionGeneration = `11111111-1111-4111-8111-${String(
+      children.length + 1
+    ).padStart(12, '0')}`
     child.connected = true
     child.killed = false
     child.killCalls = []
@@ -1288,7 +1292,11 @@ function installFork ({
       if (payload?.data?.action === 'create-terminal') {
         queueMicrotask(() => child.emit('message', {
           id: payload.data.id,
-          data: { connected: true }
+          data: {
+            connected: true,
+            sshSessionGeneration: child.sshSessionGeneration,
+            sshTerminalPid: child.pid
+          }
         }))
       } else if (payload?.data?.action === 'run-cmd' && !holdRunCmd) {
         queueMicrotask(() => child.emit('message', {
@@ -1312,6 +1320,10 @@ function installControlledFork () {
   childProcess.fork = (_modulePath, options) => {
     const child = new EventEmitter()
     child.label = `child-${children.length}`
+    child.pid = 4000 + children.length
+    child.sshSessionGeneration = `22222222-2222-4222-8222-${String(
+      children.length + 1
+    ).padStart(12, '0')}`
     child.connected = true
     child.killed = false
     child.emitExitOnKill = true
@@ -1349,7 +1361,14 @@ async function finishControlledConnection (child, { error } = {}) {
   const request = child.sent.find(payload => payload?.data?.action === 'create-terminal')
   child.emit('message', error
     ? { id: request.data.id, error: { message: error } }
-    : { id: request.data.id, data: { connected: true } })
+    : {
+        id: request.data.id,
+        data: {
+          connected: true,
+          sshSessionGeneration: child.sshSessionGeneration,
+          sshTerminalPid: child.pid
+        }
+      })
 }
 
 function createTrackedWs () {

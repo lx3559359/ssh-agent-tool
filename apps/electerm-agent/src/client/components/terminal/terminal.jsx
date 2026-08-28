@@ -146,6 +146,7 @@ class Term extends Component {
     this.shellType = null
     this.shellTransitionCandidate = null
     this.sshSessionGeneration = ''
+    this.sshTerminalPid = ''
     this.lastTerminalRemoteOutputAt = 0
     this.terminalRemoteOutputSequence = 0
     this.operationsPtyTaskController = createManagedPtyTaskController({
@@ -308,6 +309,7 @@ class Term extends Component {
       endpoint: this.getTerminalSafetyEndpoint()
     })
     this.sshSessionGeneration = ''
+    this.sshTerminalPid = ''
     this.onClose = true
     this.operationsPtyTaskController.invalidate('终端标签页已关闭').catch(() => {})
     this.commandSafetyEntrypoint.invalidateSession().catch(() => {})
@@ -1349,20 +1351,24 @@ class Term extends Component {
 
   acquireRemoteFilePtyTask = async ownerId => {
     const sshSessionGeneration = String(this.sshSessionGeneration || '').trim()
-    if (!sshSessionGeneration) {
-      throw new Error('当前 SSH 连接代次不可用')
+    const sshTerminalPid = Number(this.sshTerminalPid)
+    if (!sshSessionGeneration || !Number.isSafeInteger(sshTerminalPid) ||
+      sshTerminalPid < 1) {
+      throw new Error('当前 SSH 连接身份不可用')
     }
     const lease = await this.operationsPtyTaskController.acquire(
       `root-file:${ownerId}`
     )
-    if (this.sshSessionGeneration !== sshSessionGeneration) {
+    if (this.sshSessionGeneration !== sshSessionGeneration ||
+      this.sshTerminalPid !== sshTerminalPid) {
       await lease.release()
       throw new Error('SSH 连接已在 PTY 租约获取期间变化')
     }
     const protocol = createPrivilegedFileProtocol()
     return Object.freeze({
       execute: (request, options = {}) => {
-        if (this.sshSessionGeneration !== sshSessionGeneration) {
+        if (this.sshSessionGeneration !== sshSessionGeneration ||
+          this.sshTerminalPid !== sshTerminalPid) {
           throw new Error('SSH 连接已变化，root 文件请求被拒绝')
         }
         if (!request || typeof request !== 'object' ||
@@ -1381,6 +1387,7 @@ class Term extends Component {
         })
       },
       sshSessionGeneration,
+      sshTerminalPid,
       release: () => lease.release()
     })
   }
@@ -1493,7 +1500,8 @@ class Term extends Component {
       tab,
       this.pid,
       this.hostKeyFingerprint,
-      this.sshSessionGeneration
+      this.sshSessionGeneration,
+      this.sshTerminalPid
     )
   }
 
@@ -1946,6 +1954,7 @@ class Term extends Component {
     }
     this.hostKeyFingerprint = ''
     this.sshSessionGeneration = ''
+    this.sshTerminalPid = ''
     this.setState({
       loading: true,
       terminalError: null
@@ -2074,10 +2083,13 @@ class Term extends Component {
     this.sshSessionGeneration = typeof r.sshSessionGeneration === 'string'
       ? r.sshSessionGeneration.trim()
       : ''
-    if (!this.sshSessionGeneration && this.isSsh()) {
+    this.sshTerminalPid = Number(r.sshTerminalPid)
+    if ((!this.sshSessionGeneration ||
+      !Number.isSafeInteger(this.sshTerminalPid) ||
+      this.sshTerminalPid < 1) && this.isSsh()) {
       this.setStatus(statusMap.error)
       return this.handleError({
-        message: 'SSH 服务器未返回有效连接代次',
+        message: e('shellpilotSshSessionIdentityUnavailable'),
         from,
         srcId
       })
@@ -2088,7 +2100,8 @@ class Term extends Component {
     refs.get('sftp-' + id)?.initData(
       id,
       r.port,
-      this.sshSessionGeneration
+      this.sshSessionGeneration,
+      this.sshTerminalPid
     )
     if (previousEndpoint) {
       emitAgentTakeoverLifecycleEvent({
@@ -2228,6 +2241,7 @@ class Term extends Component {
       endpoint: this.getTerminalSafetyEndpoint()
     })
     this.sshSessionGeneration = ''
+    this.sshTerminalPid = ''
     this.operationsPtyTaskController.invalidate('终端连接已断开').catch(error => {
       if (!this.onClose) window.store.onError(error)
     })

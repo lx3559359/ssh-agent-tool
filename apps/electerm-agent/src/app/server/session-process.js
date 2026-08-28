@@ -419,9 +419,14 @@ exports.terminal = async function (initOptions, ws, uid) {
       )) {
         throw new Error('SSH session generation is unavailable')
       }
+      const sshTerminalPid = Number(createdSession?.sshTerminalPid)
+      if (isSsh && (!Number.isSafeInteger(sshTerminalPid) ||
+        sshTerminalPid < 1 || sshTerminalPid !== child.pid)) {
+        throw new Error('SSH terminal process pid is unavailable')
+      }
       sessionMetadata = {
         ...(hostKeyFingerprint ? { hostKeyFingerprint } : {}),
-        ...(isSsh ? { sshSessionGeneration } : {})
+        ...(isSsh ? { sshSessionGeneration, sshTerminalPid } : {})
       }
     }
     if (abortSignal?.aborted) throw childEndedError('aborted during initialization')

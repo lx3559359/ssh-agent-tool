@@ -1101,6 +1101,8 @@ test('agent cancellation finalizes persisted in-flight readonly evidence before 
     terminalPid: 'terminal-a',
     sessionType: 'ssh',
     hostKeyFingerprint: 'SHA256:host-a',
+    sshSessionGeneration: 'session-a',
+    sshTerminalPid: 1001,
     host: 'srv.test',
     port: 22,
     username: 'root',
@@ -1190,6 +1192,8 @@ test('cancel finalization update failure reports the error and still releases th
     terminalPid: 'terminal-a',
     sessionType: 'ssh',
     hostKeyFingerprint: 'SHA256:host-a',
+    sshSessionGeneration: 'session-a',
+    sshTerminalPid: 1001,
     host: 'srv.test',
     port: 22,
     username: 'root'

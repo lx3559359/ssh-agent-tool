@@ -17,6 +17,7 @@ test('create terminal exposes only the session public identity metadata', async 
         getPublicSessionMetadata: () => ({
           hostKeyFingerprint: 'SHA256:verified-host-key',
           sshSessionGeneration: '11111111-1111-4111-8111-111111111111',
+          sshTerminalPid: process.pid,
           password: 'must-not-cross-process-boundary',
           privateKey: 'must-not-cross-process-boundary'
         }),
@@ -36,7 +37,8 @@ test('create terminal exposes only the session public identity metadata', async 
     assert.deepEqual(result, {
       pid: 'tab-public',
       hostKeyFingerprint: 'SHA256:verified-host-key',
-      sshSessionGeneration: '11111111-1111-4111-8111-111111111111'
+      sshSessionGeneration: '11111111-1111-4111-8111-111111111111',
+      sshTerminalPid: process.pid
     })
   } finally {
     if (previousSession) require.cache[sessionPath] = previousSession

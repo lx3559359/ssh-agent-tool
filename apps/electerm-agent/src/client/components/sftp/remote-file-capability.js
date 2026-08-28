@@ -32,6 +32,13 @@ export function assertExactRemoteFileEndpoint ({
   if (sftpGeneration !== endpoint.sshSessionGeneration) {
     throw new Error('远程文件 SFTP 与 SSH session generation 不一致')
   }
+  const sftpTerminalPid = requiredIdentity(
+    sftp?.sshTerminalPid,
+    'SFTP SSH terminal PID'
+  )
+  if (sftpTerminalPid !== String(endpoint.sshTerminalPid)) {
+    throw new Error('远程文件 SFTP 与 SSH terminal PID 不一致')
+  }
   return endpoint
 }
 

@@ -20,16 +20,19 @@ test('subscribes to SFTP RPC results before sending the request', () => {
   )
 })
 
-test('SFTP transport captures one immutable SSH session generation', async () => {
-  const { bindSftpTransportGeneration } = await importModule(
+test('SFTP transport captures one immutable SSH process and generation', async () => {
+  const { bindSftpTransportSession } = await importModule(
     'src/client/common/sftp-session-generation.js'
   )
   const transport = {}
 
-  assert.equal(
-    bindSftpTransportGeneration(transport, 'ssh-generation-one'),
-    'ssh-generation-one'
-  )
+  assert.deepEqual(bindSftpTransportSession(transport, {
+    sshSessionGeneration: 'ssh-generation-one',
+    sshTerminalPid: 4242
+  }), {
+    sshSessionGeneration: 'ssh-generation-one',
+    sshTerminalPid: 4242
+  })
   assert.deepEqual(
     Object.getOwnPropertyDescriptor(transport, 'sshSessionGeneration'),
     {
@@ -39,21 +42,38 @@ test('SFTP transport captures one immutable SSH session generation', async () =>
       writable: false
     }
   )
-  assert.throws(
-    () => bindSftpTransportGeneration(transport, 'ssh-generation-two'),
-    /generation|redefine|重定义/i
+  assert.deepEqual(
+    Object.getOwnPropertyDescriptor(transport, 'sshTerminalPid'),
+    {
+      value: 4242,
+      enumerable: true,
+      configurable: false,
+      writable: false
+    }
   )
+  assert.throws(
+    () => bindSftpTransportSession(transport, {
+      sshSessionGeneration: 'ssh-generation-two',
+      sshTerminalPid: 4343
+    }),
+    /generation|PID|redefine|重定义/i
+  )
+  assert.throws(() => bindSftpTransportSession({}, {
+    sshSessionGeneration: 'ssh-generation-two'
+  }), /PID|process|进程/i)
 })
 
-test('SFTP connect request and response are bound to the captured generation', () => {
+test('SFTP connect request and response are bound to process and generation', () => {
   const source = fs.readFileSync(path.resolve(
     __dirname,
     '../../src/client/common/sftp.js'
   ), 'utf8')
 
   assert.match(source, /sshSessionGeneration: generation/)
+  assert.match(source, /sshTerminalPid: terminalPid/)
   assert.match(
     source,
     /arg\.data\?\.sshSessionGeneration !== generation/
   )
+  assert.match(source, /arg\.data\?\.sshTerminalPid !== terminalPid/)
 })
