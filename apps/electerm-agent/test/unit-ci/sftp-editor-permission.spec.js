@@ -33,29 +33,37 @@ test('SFTP editor root permission guidance hides transaction internals', async (
   )
   const formatted = formatSftpEditorSaveError(error, {
     path: '/etc/example.conf',
-    username: 'root'
+    loginUsername: 'hik',
+    effectiveUsername: 'root',
+    channel: 'pty-root'
   })
 
   assert.notEqual(formatted, error)
   assert.match(formatted.message, /\/etc\/example\.conf/)
-  assert.match(formatted.message, /SFTP.*root/i)
+  assert.match(formatted.message, /SSH 登录：hik/)
+  assert.match(formatted.message, /文件操作：root（当前终端）/)
   assert.match(formatted.message, /只读|ACL|不可变|chroot/i)
   assert.doesNotMatch(formatted.message, /\.shellpilot-transactions|\.execute/)
 })
 
-test('SFTP editor non-root guidance explains terminal privilege does not change SFTP identity', async () => {
+test('SFTP editor native permission guidance reports the login SFTP identity', async () => {
   const {
     formatSftpEditorSaveError,
     markSftpEditorStage
   } = await importPermissionModule()
   const formatted = formatSftpEditorSaveError(
     markSftpEditorStage('staging', new Error('EACCES')),
-    { path: '/etc/example.conf', username: 'deploy' }
+    {
+      path: '/etc/example.conf',
+      loginUsername: 'deploy',
+      effectiveUsername: 'deploy',
+      channel: 'sftp'
+    }
   )
 
-  assert.match(formatted.message, /deploy/)
-  assert.match(formatted.message, /终端.*su|终端.*sudo/i)
-  assert.match(formatted.message, /不会改变.*SFTP/i)
+  assert.match(formatted.message, /SFTP 身份：deploy/)
+  assert.doesNotMatch(formatted.message, /终端.*su|终端.*sudo/i)
+  assert.doesNotMatch(formatted.message, /不会改变.*文件操作|不会改变.*SFTP/i)
 })
 
 test('SFTP editor leaves unrelated errors unchanged', async () => {
@@ -64,6 +72,8 @@ test('SFTP editor leaves unrelated errors unchanged', async () => {
 
   assert.equal(formatSftpEditorSaveError(original, {
     path: '/etc/example.conf',
-    username: 'root'
+    loginUsername: 'hik',
+    effectiveUsername: 'root',
+    channel: 'pty-root'
   }), original)
 })

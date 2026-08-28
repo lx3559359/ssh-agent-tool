@@ -1,7 +1,12 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
+const vm = require('node:vm')
 const { pathToFileURL } = require('node:url')
+const parser = require('@babel/parser')
+const traverse = require('@babel/traverse').default
+const generateCode = require('@babel/generator').default
 
 const transactionRoot = path.resolve(
   __dirname,
@@ -10,6 +15,86 @@ const transactionRoot = path.resolve(
 
 function importTransactionModule (name) {
   return import(pathToFileURL(path.join(transactionRoot, name)).href)
+}
+
+const sftpEntryPath = path.resolve(
+  __dirname,
+  '../../src/client/components/sftp/sftp-entry.jsx'
+)
+const sftpEntrySource = fs.readFileSync(sftpEntryPath, 'utf8')
+const sftpEntryAst = parser.parse(sftpEntrySource, {
+  sourceType: 'module',
+  plugins: ['jsx', 'classProperties', 'optionalChaining']
+})
+
+function sftpEntryClassFieldInitializer (name) {
+  let initializer
+  traverse(sftpEntryAst, {
+    ClassProperty (nodePath) {
+      if (nodePath.node.key?.name === name) initializer = nodePath.node.value
+    }
+  })
+  assert.ok(initializer, `sftp-entry.jsx must define ${name}`)
+  return generateCode(initializer).code
+}
+
+function installSftpEntryClassField (entry, name, dependencies = {}) {
+  entry[name] = vm.runInNewContext(`
+    (function installClassField () {
+      return (${sftpEntryClassFieldInitializer(name)})
+    }).call(__entry)
+  `, {
+    ...dependencies,
+    __entry: entry
+  })
+  return entry[name]
+}
+
+const rootRuntimeIdentity = Object.freeze({
+  channel: 'pty-root',
+  effectiveUid: '0',
+  effectiveUsername: 'root'
+})
+
+const nativeRuntimeIdentity = Object.freeze({
+  channel: 'sftp',
+  effectiveUsername: 'hik'
+})
+
+function createOperationScope ({ backend, runtimeIdentity = rootRuntimeIdentity }) {
+  let acquireCount = 0
+  let releaseCount = 0
+  const operationIds = []
+  return {
+    operationIds,
+    get acquireCount () { return acquireCount },
+    get releaseCount () { return releaseCount },
+    withRemoteFileOperation: async (options, work) => {
+      acquireCount += 1
+      operationIds.push(options.id)
+      try {
+        return await work(backend, { backend, runtimeIdentity })
+      } finally {
+        releaseCount += 1
+      }
+    }
+  }
+}
+
+function deferredValue () {
+  let resolveDeferred
+  let rejectDeferred
+  const promise = new Promise((resolve, reject) => {
+    resolveDeferred = resolve
+    rejectDeferred = reject
+  })
+  return { promise, resolve: resolveDeferred, reject: rejectDeferred }
+}
+
+function rootRequiredError () {
+  const error = new Error('该恢复记录需要当前终端保持 root 文件身份。')
+  error.code = 'REMOTE_FILE_ROOT_REQUIRED'
+  return error
 }
 
 function clone (value) {
@@ -1538,7 +1623,11 @@ test('SFTP prepared proof rejects endpoint, recovery, path, and descriptor chang
   }
 })
 
-async function createRealSftpTransactionRunner (operation, sftp) {
+async function createRealSftpTransactionRunner (
+  operation,
+  sftp,
+  getSftp = () => sftp
+) {
   const { createTransactionRunner } = await importTransactionModule(
     'transaction-runner.js'
   )
@@ -1547,7 +1636,7 @@ async function createRealSftpTransactionRunner (operation, sftp) {
     '../../src/client/components/sftp/sftp-transaction-adapter.js'
   )).href)
   const store = createMemoryStore()
-  const adapter = createSftpTransactionAdapter({ getSftp: () => sftp })
+  const adapter = createSftpTransactionAdapter({ getSftp })
   const runner = createTransactionRunner({
     runRemote: async () => { throw new Error('SFTP side-effect must not run commands') },
     cancelRemote: async () => {},
@@ -1558,6 +1647,47 @@ async function createRealSftpTransactionRunner (operation, sftp) {
   })
   return { runner, store, adapter }
 }
+
+test('operation-id backend resolver keeps prepare execute verify and rollback on root', async () => {
+  const { digestSftpText } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const root = createFakeSftp({
+    '/root/app.conf': {
+      type: 'file',
+      content: 'old\n',
+      mode: 0o600,
+      uid: 0,
+      gid: 0
+    }
+  })
+  const native = createFakeSftp()
+  const operation = await buildSftpOperation({
+    id: 'root-editor-operation',
+    action: 'editor-save',
+    paths: { target: '/root/app.conf' },
+    type: 'file',
+    requestedMode: 0o600,
+    expected: await digestSftpText('new\n')
+  })
+  const backends = new Map([[operation.id, root]])
+  const { runner } = await createRealSftpTransactionRunner(
+    operation,
+    native,
+    current => backends.get(current?.id) || native
+  )
+
+  await runner.prepare(operation)
+  await runner.execute(operation.id, {
+    confirmed: true,
+    sideEffectInput: { text: 'new\n' }
+  })
+  assert.equal(root.text('/root/app.conf'), 'new\n')
+  await runner.rollback(operation.id)
+  assert.equal(root.text('/root/app.conf'), 'old\n')
+  assert.equal(native.calls.length, 0)
+})
 
 test('SFTP adapter rejects forged ids before constructing a transaction directory', async () => {
   const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
@@ -2852,6 +2982,641 @@ test('SFTP adapter fails closed on copy or manifest failure and reuses a verifie
   assert.equal(sftp.calls.filter(call => call[0] === 'cp').length, copyCount)
 })
 
+test('SFTP mutation runner pins one root backend from prepare through confirmation and execute', async () => {
+  const rootBackend = { name: 'root' }
+  const scope = createOperationScope({ backend: rootBackend })
+  const seen = []
+  const entry = {
+    remoteFileOperationBackends: new Map(),
+    withRemoteFileOperation: scope.withRemoteFileOperation,
+    prepareSftpSafetyOperation: async (spec, context) => {
+      assert.equal(context.backend, rootBackend)
+      assert.deepEqual(context.runtimeIdentity, rootRuntimeIdentity)
+      assert.match(spec.id, /^sftp-chmod-/)
+      seen.push(['prepare', spec.id])
+      return { id: spec.id, metadata: { runtimeIdentity: context.runtimeIdentity } }
+    },
+    confirmAndExecutePreparedOperation: async (operation, spec) => {
+      assert.equal(entry.remoteFileOperationBackends.get(operation.id), rootBackend)
+      seen.push(['confirm-execute', operation.id, spec.action])
+      return true
+    }
+  }
+  installSftpEntryClassField(entry, 'runSftpSafetyOperation', {
+    generate: () => 'operation-token'
+  })
+
+  assert.equal(await entry.runSftpSafetyOperation({
+    action: 'chmod',
+    paths: { source: '/root/app.conf' }
+  }), true)
+  assert.equal(scope.acquireCount, 1)
+  assert.equal(scope.releaseCount, 1)
+  assert.deepEqual(seen.map(item => item[0]), ['prepare', 'confirm-execute'])
+  assert.equal(entry.remoteFileOperationBackends.size, 0)
+})
+
+test('generation drain waits for a mutation confirmation before releasing its capability', async () => {
+  const lifecycle = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-entry-lifecycle.js'
+  )).href)
+  const confirmation = deferredValue()
+  const workStarted = deferredValue()
+  const calls = []
+  let closed = false
+  let releasePromise
+  const capability = {
+    backend: {
+      async mutate () {
+        assert.equal(closed, false)
+        calls.push('mutate')
+      }
+    },
+    async release () {
+      if (releasePromise) return releasePromise
+      closed = true
+      calls.push('release')
+      releasePromise = Promise.resolve(true)
+      return releasePromise
+    }
+  }
+  const entry = {
+    props: { tab: { id: 'tab-1' } },
+    sftp: { destroy: async () => calls.push('destroy') },
+    remoteFileOperationBackends: new Map(),
+    remoteFileOperationSequence: 0,
+    remoteFileOperations: new Set(),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationTail: Promise.resolve(),
+    remoteFileUnmounted: false,
+    acquireRemoteFileOperation: async () => capability
+  }
+  installSftpEntryClassField(entry, 'withRemoteFileOperation', {
+    abortRemoteFileOperation: () => {},
+    initializeRemoteFileGeneration: lifecycle.initializeRemoteFileGeneration,
+    remoteFileOperationUnmounted: () => {
+      const error = new Error('unmounted')
+      error.name = 'AbortError'
+      return error
+    },
+    remoteFileOperationStale: () => {
+      const error = new Error('stale')
+      error.name = 'AbortError'
+      return error
+    }
+  })
+
+  const mutation = entry.withRemoteFileOperation({
+    id: 'mutation-with-confirmation',
+    settlementOwnsCapability: true
+  }, async backend => {
+    workStarted.resolve()
+    await confirmation.promise
+    await backend.mutate()
+    return true
+  })
+  await workStarted.promise
+  const drain = lifecycle.drainRemoteFileGeneration(entry)
+  assert.deepEqual(calls, [])
+  confirmation.resolve()
+  assert.equal(await mutation, true)
+  await drain.promise
+  assert.deepEqual(calls, ['mutate', 'release', 'destroy'])
+})
+
+test('operation backend pin survives a generation map swap until explicit cleanup', () => {
+  const rootBackend = { name: 'root' }
+  const entry = {
+    remoteFileOperationBackends: new Map(),
+    remoteFileOperationBackendPins: new Map()
+  }
+  installSftpEntryClassField(entry, 'pinRemoteFileOperationBackend')
+  installSftpEntryClassField(entry, 'unpinRemoteFileOperationBackend')
+  installSftpEntryClassField(entry, 'getRemoteFileOperationBackend')
+
+  entry.pinRemoteFileOperationBackend('operation-1', rootBackend)
+  entry.remoteFileOperationBackends = new Map()
+  assert.equal(entry.getRemoteFileOperationBackend({ id: 'operation-1' }), rootBackend)
+  entry.unpinRemoteFileOperationBackend('operation-1')
+  assert.equal(entry.getRemoteFileOperationBackend({ id: 'operation-1' }), undefined)
+})
+
+test('SFTP mutation runner clears the operation backend while preserving the first failure', async () => {
+  const rootBackend = { name: 'root' }
+  const scope = createOperationScope({ backend: rootBackend })
+  const firstFailure = new Error('preview failed')
+  const entry = {
+    remoteFileOperationBackends: new Map(),
+    withRemoteFileOperation: scope.withRemoteFileOperation,
+    prepareSftpSafetyOperation: async (spec, context) => ({
+      id: spec.id,
+      metadata: { runtimeIdentity: context.runtimeIdentity }
+    }),
+    confirmAndExecutePreparedOperation: async operation => {
+      assert.equal(entry.remoteFileOperationBackends.get(operation.id), rootBackend)
+      throw firstFailure
+    }
+  }
+  installSftpEntryClassField(entry, 'runSftpSafetyOperation', {
+    generate: () => 'operation-token'
+  })
+
+  await assert.rejects(
+    entry.runSftpSafetyOperation({ action: 'editor-save', paths: { target: '/root/app.conf' } }),
+    error => error === firstFailure
+  )
+  assert.equal(scope.acquireCount, 1)
+  assert.equal(scope.releaseCount, 1)
+  assert.equal(entry.remoteFileOperationBackends.size, 0)
+})
+
+test('SFTP mutation decline abort and execute failure each release once and keep the first cause', async t => {
+  for (const stage of ['decline', 'preview-abort', 'execute-failure']) {
+    await t.test(stage, async () => {
+      const rootBackend = { name: 'root' }
+      const scope = createOperationScope({ backend: rootBackend })
+      const firstCause = new Error(stage)
+      if (stage === 'preview-abort') firstCause.name = 'AbortError'
+      let operationId
+      let cancelCalls = 0
+      const entry = {
+        remoteFileOperationBackends: new Map(),
+        withRemoteFileOperation: scope.withRemoteFileOperation,
+        prepareSftpSafetyOperation: async (spec, context) => {
+          operationId = spec.id
+          assert.equal(context.backend, rootBackend)
+          return { id: spec.id }
+        },
+        confirmPreparedSftpOperation: async () => stage !== 'decline',
+        sftpSafetyRunner: {
+          cancel: async id => {
+            cancelCalls += 1
+            assert.equal(entry.remoteFileOperationBackends.get(id), rootBackend)
+          },
+          execute: async id => {
+            assert.equal(entry.remoteFileOperationBackends.get(id), rootBackend)
+            if (stage === 'execute-failure') throw firstCause
+            return true
+          }
+        }
+      }
+      installSftpEntryClassField(entry, 'confirmAndExecutePreparedOperation')
+      installSftpEntryClassField(entry, 'runSftpSafetyOperation', {
+        generate: () => 'failure-token'
+      })
+      const options = stage === 'preview-abort'
+        ? { buildConfirmationDetails: async () => { throw firstCause } }
+        : {}
+      const work = entry.runSftpSafetyOperation({
+        action: 'editor-save',
+        paths: { target: '/root/app.conf' }
+      }, options)
+
+      if (stage === 'decline') assert.equal(await work, false)
+      else await assert.rejects(work, error => error === firstCause)
+      assert.match(operationId, /^sftp-editor-save-/)
+      assert.equal(cancelCalls, stage === 'execute-failure' ? 0 : 1)
+      assert.equal(scope.acquireCount, 1)
+      assert.equal(scope.releaseCount, 1)
+      assert.equal(entry.remoteFileOperationBackends.size, 0)
+    })
+  }
+})
+
+test('root editor preview and mutation routes never touch the native SFTP backend', async () => {
+  const rootBackend = { name: 'root' }
+  let nativeCalls = 0
+  const nativeSftp = new Proxy({}, {
+    get () {
+      nativeCalls += 1
+      throw new Error('native SFTP used')
+    }
+  })
+  const routed = []
+  const entry = {
+    props: { isFtp: false, tab: { username: 'hik' } },
+    state: { remoteFileIdentity: rootRuntimeIdentity },
+    sftp: nativeSftp,
+    runSftpSafetyOperation: async (spec, options) => {
+      routed.push(spec.action)
+      if (options?.buildConfirmationDetails) {
+        await options.buildConfirmationDetails({
+          plan: { resources: [{ original: { absent: false } }] }
+        }, rootBackend)
+      }
+      return true
+    }
+  }
+  const dependencies = {
+    digestSftpText: async text => ({
+      size: text.length,
+      digest: 'a'.repeat(64),
+      digestAlgorithm: 'SHA-256'
+    }),
+    readSftpSnapshotText: async backend => {
+      assert.equal(backend, rootBackend)
+      return { available: true, existed: true, text: 'old\n' }
+    },
+    buildSftpTextChangePreview: () => ({ lines: [] }),
+    formatSftpEditorSaveError: error => error,
+    e: value => value,
+    message: { success: () => {} }
+  }
+  installSftpEntryClassField(entry, 'saveRemoteEditorFile', dependencies)
+  installSftpEntryClassField(entry, 'changeRemoteFileMode', dependencies)
+  installSftpEntryClassField(entry, 'renameRemoteFile', dependencies)
+
+  assert.equal(await entry.saveRemoteEditorFile({
+    path: '/root/app.conf',
+    text: 'new\n',
+    mode: 0o600
+  }), true)
+  assert.equal(await entry.changeRemoteFileMode({
+    path: '/root/app.conf',
+    mode: 0o640,
+    type: 'file'
+  }), true)
+  assert.equal(await entry.renameRemoteFile({
+    sourcePath: '/root/app.conf',
+    targetPath: '/root/app-renamed.conf',
+    type: 'file'
+  }), true)
+  assert.deepEqual(routed, ['editor-save', 'chmod', 'rename'])
+  assert.equal(nativeCalls, 0)
+})
+
+test('root multi-editor review acquires once and keeps every operation on one backend until terminal states', async () => {
+  const rootBackend = { name: 'root' }
+  const scope = createOperationScope({ backend: rootBackend })
+  const operationIds = []
+  let nativeCalls = 0
+  const entry = {
+    props: { isFtp: false },
+    sftp: new Proxy({}, {
+      get () {
+        nativeCalls += 1
+        throw new Error('native SFTP used')
+      }
+    }),
+    remoteFileOperationBackends: new Map(),
+    withRemoteFileOperation: scope.withRemoteFileOperation,
+    prepareSftpSafetyOperation: async (spec, context) => {
+      assert.equal(context.backend, rootBackend)
+      assert.deepEqual(context.runtimeIdentity, rootRuntimeIdentity)
+      operationIds.push(spec.id)
+      return {
+        id: spec.id,
+        plan: {
+          resources: [{ original: { absent: false, size: 4, digest: 'b'.repeat(64), digestAlgorithm: 'SHA-256' } }]
+        }
+      }
+    },
+    assertSftpSafetyOperationEndpoint: async () => true,
+    sftpSafetyAdapter: {
+      validatePrepared: async operation => {
+        assert.equal(entry.remoteFileOperationBackends.get(operation.id), rootBackend)
+      }
+    },
+    sftpSafetyRunner: {
+      cancel: async id => {
+        assert.equal(entry.remoteFileOperationBackends.get(id), rootBackend)
+      },
+      execute: async id => {
+        for (const operationId of operationIds) {
+          assert.equal(entry.remoteFileOperationBackends.get(operationId), rootBackend)
+        }
+        return true
+      }
+    }
+  }
+  let id = 0
+  installSftpEntryClassField(entry, 'saveRemoteEditorFiles', {
+    generate: () => `token-${++id}`,
+    digestSftpText: async text => ({
+      size: text.length,
+      digest: 'c'.repeat(64),
+      digestAlgorithm: 'SHA-256'
+    }),
+    readSftpSnapshotText: async backend => {
+      assert.equal(backend, rootBackend)
+      return { available: true, existed: true, text: 'old\n' }
+    },
+    buildSftpTextChangePreview: () => ({ lines: [] }),
+    formatAiFileChangeDiffPreview: () => '',
+    createAiFileChangeSet: value => value,
+    requestAiFileChangeReview: async changeSet => ({
+      accepted: true,
+      changeSet: {
+        files: changeSet.files.map(file => ({ ...file, selected: true }))
+      }
+    }),
+    e: value => value,
+    message: { success: () => {} }
+  })
+
+  const result = await entry.saveRemoteEditorFiles([
+    { path: '/root/a.conf', text: 'a\n', mode: 0o600 },
+    { path: '/root/b.conf', text: 'b\n', mode: 0o600 }
+  ])
+  assert.equal(result.success, true)
+  assert.equal(scope.acquireCount, 1)
+  assert.equal(scope.releaseCount, 1)
+  assert.equal(nativeCalls, 0)
+  assert.equal(entry.remoteFileOperationBackends.size, 0)
+})
+
+test('root safe delete binds every prepared target to one backend and clears all bindings', async () => {
+  const rootBackend = { name: 'root' }
+  const scope = createOperationScope({ backend: rootBackend })
+  const operationIds = []
+  const dialog = {
+    signal: new AbortController().signal,
+    decision: Promise.resolve('confirm'),
+    progress: () => {},
+    ready: () => {},
+    complete: () => {},
+    fail: error => { throw error }
+  }
+  const entry = {
+    props: { isFtp: false },
+    remoteFileOperationBackends: new Map(),
+    sftpSafetyProgressHandlers: new Map(),
+    withRemoteFileOperation: scope.withRemoteFileOperation,
+    getRemoteSafetyTargets: files => files,
+    prepareSftpSafetyOperation: async (spec, context) => {
+      assert.equal(context.backend, rootBackend)
+      assert.deepEqual(context.runtimeIdentity, rootRuntimeIdentity)
+      operationIds.push(spec.id)
+      entry.remoteFileOperationBackends.set(spec.id, context.backend)
+      return { id: spec.id }
+    },
+    sftpSafetyAdapter: {
+      bindPreparedProof: operation => {
+        assert.equal(entry.remoteFileOperationBackends.get(operation.id), rootBackend)
+      },
+      discardPreparedProof: () => {}
+    },
+    sftpSafetyRunner: {
+      cancel: async () => {},
+      execute: async id => {
+        assert.equal(entry.remoteFileOperationBackends.get(id), rootBackend)
+      }
+    }
+  }
+  let id = 0
+  installSftpEntryClassField(entry, 'deleteRemoteFilesWithSafety', {
+    generate: () => `delete-${++id}`,
+    openSafeDeleteDialog: () => dialog,
+    wait: async () => {},
+    resolve: (parent, name) => `${parent}/${name}`.replace(/\/+/g, '/'),
+    e: value => value
+  })
+
+  const result = await entry.deleteRemoteFilesWithSafety([
+    { path: '/root', name: 'a', isDirectory: false },
+    { path: '/root', name: 'b', isDirectory: false }
+  ])
+  assert.deepEqual(result.deletedPaths, ['/root/a', '/root/b'])
+  assert.equal(scope.acquireCount, 1)
+  assert.equal(scope.releaseCount, 1)
+  assert.equal(operationIds.length, 2)
+  assert.equal(entry.remoteFileOperationBackends.size, 0)
+})
+
+test('quick delete backup and restore use the acquired root backend with complete identity metadata', async () => {
+  const rootBackend = { name: 'root' }
+  const scope = createOperationScope({ backend: rootBackend })
+  const target = { type: 'remote', path: '/root', name: 'app.conf', isDirectory: false }
+  let nativeCalls = 0
+  let storedRecords = []
+  let restoredWith
+  const entry = {
+    props: {
+      isFtp: false,
+      tab: { id: 'tab-1', username: 'hik', host: 'example.com', port: 22 }
+    },
+    sftp: new Proxy({}, {
+      get () {
+        nativeCalls += 1
+        throw new Error('native SFTP used')
+      }
+    }),
+    remoteFileOperationBackends: new Map(),
+    withRemoteFileOperation: scope.withRemoteFileOperation,
+    confirmQuickDelete: async () => true,
+    getRemoteSafetyTargets: files => files,
+    addSftpRecoveryRecords: records => { storedRecords = records },
+    persistSftpRecoveryRecords: records => { storedRecords = records },
+    remoteList: async () => {},
+    setState: () => {}
+  }
+  const common = {
+    generate: (() => {
+      let id = 0
+      return () => `quick-${++id}`
+    })(),
+    window: { store: { onError: error => { throw error } } },
+    message: { success: () => {}, warning: () => {}, error: () => {} },
+    e: value => value,
+    formatShellPilotTranslation: value => value,
+    buildFastDeleteTargets: () => [target],
+    executeFastRemoteDelete: async ({ sftp }) => {
+      assert.equal(sftp, rootBackend)
+      return { completed: [target], failed: [] }
+    },
+    backupRemoteFiles: async ({ sftp }) => {
+      assert.equal(sftp, rootBackend)
+      return [{
+        id: 'backup-1',
+        kind: 'backup',
+        status: 'available',
+        sourcePath: '/root/app.conf',
+        backupPath: '/root/.shellpilot-backups/app.conf'
+      }]
+    },
+    restoreSftpRecoveryRecord: async ({ sftp, record }) => {
+      assert.equal(sftp, rootBackend)
+      restoredWith = sftp
+      return { ...record, status: 'restored' }
+    },
+    matchesSafetyOperationEndpoint: () => true,
+    updateSafetyOperationRecord: (_records, _id, record) => [record],
+    readSafetyOperationRecords: () => storedRecords,
+    ls: {},
+    createRemoteFileRootRequiredError: rootRequiredError
+  }
+  installSftpEntryClassField(entry, 'quickDeleteRemoteFiles', common)
+  installSftpEntryClassField(entry, 'quickBackupRemoteFiles', common)
+  installSftpEntryClassField(entry, 'restoreSftpRecord', common)
+
+  assert.equal(await entry.quickDeleteRemoteFiles([target]), true)
+  assert.equal(await entry.quickBackupRemoteFiles([target], { silent: true }), true)
+  assert.deepEqual(storedRecords[0].metadata.runtimeIdentity, rootRuntimeIdentity)
+  assert.equal(await entry.restoreSftpRecord(storedRecords[0]), true)
+  assert.equal(restoredWith, rootBackend)
+  assert.equal(scope.acquireCount, 3)
+  assert.equal(scope.releaseCount, 3)
+  assert.equal(nativeCalls, 0)
+  assert.equal(entry.remoteFileOperationBackends.size, 0)
+})
+
+test('legacy root backup restore requires a fresh root capability and does not call native restore', async () => {
+  const nativeBackend = { name: 'native' }
+  const scope = createOperationScope({
+    backend: nativeBackend,
+    runtimeIdentity: nativeRuntimeIdentity
+  })
+  let restoreCalls = 0
+  const record = {
+    id: 'backup-root-1',
+    kind: 'backup',
+    sourcePath: '/root/app.conf',
+    backupPath: '/root/.shellpilot-backups/app.conf',
+    status: 'available',
+    host: 'example.com',
+    metadata: { runtimeIdentity: rootRuntimeIdentity }
+  }
+  const entry = {
+    props: { isFtp: false, tab: { id: 'tab-1', host: 'example.com' } },
+    remoteFileOperationBackends: new Map(),
+    withRemoteFileOperation: scope.withRemoteFileOperation,
+    persistSftpRecoveryRecords: () => {},
+    remoteList: async () => {}
+  }
+  installSftpEntryClassField(entry, 'restoreSftpRecord', {
+    generate: () => 'restore-token',
+    restoreSftpRecoveryRecord: async () => { restoreCalls += 1 },
+    matchesSafetyOperationEndpoint: () => true,
+    updateSafetyOperationRecord: (_records, _id, value) => [value],
+    readSafetyOperationRecords: () => [record],
+    ls: {},
+    createRemoteFileRootRequiredError: rootRequiredError,
+    window: { store: { onError: () => {} } },
+    message: { success: () => {}, warning: () => {}, error: () => {} }
+  })
+
+  await assert.rejects(
+    entry.restoreSftpRecord(record),
+    error => error?.code === 'REMOTE_FILE_ROOT_REQUIRED'
+  )
+  assert.equal(restoreCalls, 0)
+  assert.equal(scope.acquireCount, 1)
+  assert.equal(scope.releaseCount, 1)
+  assert.equal(entry.remoteFileOperationBackends.size, 0)
+})
+
+test('FTP mutation helpers remain native and never probe the PTY capability', async () => {
+  let nativeDeletes = 0
+  let nativeBackups = 0
+  let nativeRestores = 0
+  const nativeSftp = { name: 'ftp' }
+  const target = { type: 'remote', path: '/srv', name: 'app.conf', isDirectory: false }
+  const record = {
+    id: 'ftp-backup',
+    kind: 'backup',
+    sourcePath: '/srv/app.conf',
+    backupPath: '/srv/app.bak',
+    status: 'available',
+    host: 'example.com'
+  }
+  const entry = {
+    props: { isFtp: true, tab: { id: 'tab-1', host: 'example.com' } },
+    type: 'ftp',
+    sftp: nativeSftp,
+    withRemoteFileOperation: async () => { throw new Error('PTY capability probed for FTP') },
+    confirmQuickDelete: async () => true,
+    getRemoteSafetyTargets: files => files,
+    addSftpRecoveryRecords: () => {},
+    persistSftpRecoveryRecords: () => {},
+    remoteList: async () => {},
+    setState: () => {}
+  }
+  const dependencies = {
+    generate: () => 'ftp-token',
+    buildFastDeleteTargets: () => [target],
+    executeFastRemoteDelete: async ({ sftp }) => {
+      assert.equal(sftp, nativeSftp)
+      nativeDeletes += 1
+      return { completed: [target], failed: [] }
+    },
+    backupRemoteFiles: async ({ sftp }) => {
+      assert.equal(sftp, nativeSftp)
+      nativeBackups += 1
+      return [record]
+    },
+    restoreSftpRecoveryRecord: async ({ sftp }) => {
+      assert.equal(sftp, nativeSftp)
+      nativeRestores += 1
+      return { ...record, status: 'restored' }
+    },
+    matchesSafetyOperationEndpoint: () => true,
+    updateSafetyOperationRecord: (_records, _id, value) => [value],
+    readSafetyOperationRecords: () => [record],
+    ls: {},
+    window: { store: { onError: error => { throw error } } },
+    message: { success: () => {}, warning: () => {}, error: () => {} },
+    e: value => value,
+    formatShellPilotTranslation: value => value,
+    createRemoteFileRootRequiredError: rootRequiredError
+  }
+  installSftpEntryClassField(entry, 'quickDeleteRemoteFiles', dependencies)
+  installSftpEntryClassField(entry, 'quickBackupRemoteFiles', dependencies)
+  installSftpEntryClassField(entry, 'restoreSftpRecord', dependencies)
+
+  assert.equal(await entry.quickDeleteRemoteFiles([target]), true)
+  assert.equal(await entry.quickBackupRemoteFiles([target], { silent: true }), true)
+  assert.equal(await entry.restoreSftpRecord(record), true)
+  assert.deepEqual([nativeDeletes, nativeBackups, nativeRestores], [1, 1, 1])
+})
+
+test('modern root rollback reprobes identity and never falls back to native SFTP', async () => {
+  const operation = {
+    id: 'root-operation',
+    metadata: { runtimeIdentity: rootRuntimeIdentity }
+  }
+  let rollbackCalls = 0
+  const nativeScope = createOperationScope({
+    backend: { name: 'native' },
+    runtimeIdentity: nativeRuntimeIdentity
+  })
+  const entry = {
+    remoteFileOperationBackends: new Map(),
+    assertSftpSafetyOperationEndpoint: async () => operation,
+    withRemoteFileOperation: nativeScope.withRemoteFileOperation,
+    sftpSafetyRunner: {
+      rollback: async () => { rollbackCalls += 1 }
+    },
+    remoteList: async () => {}
+  }
+  installSftpEntryClassField(entry, 'rollbackSafetyOperation', {
+    createRemoteFileRootRequiredError: rootRequiredError
+  })
+
+  await assert.rejects(
+    entry.rollbackSafetyOperation(operation.id),
+    error => error?.code === 'REMOTE_FILE_ROOT_REQUIRED'
+  )
+  assert.equal(rollbackCalls, 0)
+  assert.equal(nativeScope.acquireCount, 1)
+  assert.equal(nativeScope.releaseCount, 1)
+  assert.equal(entry.remoteFileOperationBackends.size, 0)
+
+  const rootBackend = { name: 'root' }
+  const rootScope = createOperationScope({ backend: rootBackend })
+  entry.withRemoteFileOperation = rootScope.withRemoteFileOperation
+  entry.sftpSafetyRunner.rollback = async id => {
+    rollbackCalls += 1
+    assert.equal(entry.remoteFileOperationBackends.get(id), rootBackend)
+    return { state: 'restored' }
+  }
+  assert.deepEqual(await entry.rollbackSafetyOperation(operation.id), { state: 'restored' })
+  assert.equal(rollbackCalls, 1)
+  assert.equal(rootScope.acquireCount, 1)
+  assert.equal(rootScope.releaseCount, 1)
+  assert.equal(entry.remoteFileOperationBackends.size, 0)
+})
+
 test('SFTP UI routes editor save chmod rename and delete through modern transactions', () => {
   const fs = require('node:fs')
   const itemSource = fs.readFileSync(path.resolve(
@@ -2885,10 +3650,7 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
   assert.match(entrySource, /createTransactionRunner/)
   assert.match(entrySource, /createSftpTransactionAdapter/)
   assert.match(entrySource, /formatSftpEditorSaveError/)
-  assert.match(
-    entrySource,
-    /saveRemoteEditorFile[\s\S]{0,1400}catch \(error\)[\s\S]{0,200}formatSftpEditorSaveError\(error,[\s\S]{0,140}username/
-  )
+  assert.match(entrySource, /saveRemoteEditorFile[\s\S]{0,1800}formatSftpEditorSaveError/)
   assert.match(entrySource, /buildSideEffectSafetyRequest/)
   assert.match(entrySource, /runSftpSafetyOperation/)
   assert.match(entrySource, /deleteRemoteFilesWithSafety/)
@@ -2898,7 +3660,7 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
   )
   assert.match(
     entrySource,
-    /prepareSftpSafetyOperation\s*=\s*async\s*\(\{[\s\S]{0,240}signal[\s\S]{0,900}request\.signal\s*=\s*signal[\s\S]{0,300}sftpSafetyRunner\.prepare\(request\)/
+    /prepareSftpSafetyOperation\s*=\s*async\s*\(\{[\s\S]{0,240}signal[\s\S]{0,900}request\.signal\s*=\s*signal[\s\S]{0,600}sftpSafetyRunner\.prepare\(request\)/
   )
   assert.match(
     entrySource,
@@ -2920,7 +3682,7 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
   assert.match(safeDeleteSource, /discardPreparedProof\(operation\.id\)/)
   assert.match(safeDeleteSource, /dialog\.complete\(\)/)
   assert.match(safeDeleteSource, /while \(targets\.length\)/)
-  assert.match(safeDeleteSource, /if \(await dialog\.decision === 'retry'\) continue/)
+  assert.match(safeDeleteSource, /if \(attempt === 'retry'\) continue/)
   assert.match(safeDeleteSource, /cancelOperations\s*=\s*async operations[\s\S]*sftpSafetyRunner\.cancel/)
   assert.match(safeDeleteSource, /catch \(error\)[\s\S]*cancelOperations\(operations\.slice\(index\)\)/)
   assert.match(entrySource, /mode === undefined \? undefined : Number\(mode\) & 0o7777/)
@@ -2946,7 +3708,10 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
   ]) {
     assert.match(entrySource, new RegExp(method))
   }
-  assert.match(entrySource, /getSftp:\s*\(\)\s*=>\s*this\.sftp/)
+  assert.match(
+    entrySource,
+    /getSftp:\s*operation\s*=>\s*this\.getRemoteFileOperationBackend\(operation\)\s*\|\|\s*this\.sftp/
+  )
 })
 
 test('SFTP permanent fast delete validates, confirms once, bypasses recovery, and refreshes once', () => {

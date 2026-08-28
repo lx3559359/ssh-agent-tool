@@ -140,6 +140,12 @@ function remoteFileOperationStale () {
   return error
 }
 
+function createRemoteFileRootRequiredError () {
+  const error = new Error('该恢复记录由 root 文件操作创建；请先在当前终端重新进入 UID 0 Shell。')
+  error.code = 'REMOTE_FILE_ROOT_REQUIRED'
+  return error
+}
+
 function isAuthoritativeRemoteMissingError (error) {
   return error?.code === 'ENOENT' ||
     error?.code === 'SFTP_NO_SUCH_FILE' ||
@@ -180,6 +186,7 @@ export default class Sftp extends Component {
     }
     this.retryCount = 0
     this.remoteFileOperationBackends = new Map()
+    this.remoteFileOperationBackendPins = new Map()
     this.remoteFileOperationSequence = 0
     this.remoteFileOperations = new Set()
     this.remoteFileOperationSettlements = new Set()
@@ -188,7 +195,8 @@ export default class Sftp extends Component {
     initializeRemoteFileGeneration(this)
     this.sftpSafetyProgressHandlers = new Map()
     this.sftpSafetyAdapter = createSftpTransactionAdapter({
-      getSftp: () => this.sftp,
+      getSftp: operation => this.getRemoteFileOperationBackend(operation) ||
+        this.sftp,
       onProgress: (operation, progress) => {
         this.sftpSafetyProgressHandlers.get(operation.id)?.(progress)
       }
@@ -640,9 +648,46 @@ export default class Sftp extends Component {
     return operation
   }
 
+  pinRemoteFileOperationBackend = (id, backend) => {
+    this.remoteFileOperationBackends.set(id, backend)
+    this.remoteFileOperationBackendPins.set(id, backend)
+    return backend
+  }
+
+  unpinRemoteFileOperationBackend = id => {
+    this.remoteFileOperationBackends.delete(id)
+    this.remoteFileOperationBackendPins.delete(id)
+  }
+
+  getRemoteFileOperationBackend = operation => {
+    const id = operation?.id
+    return this.remoteFileOperationBackends.get(id) ||
+      this.remoteFileOperationBackendPins.get(id)
+  }
+
   rollbackSafetyOperation = async id => {
-    await this.assertSftpSafetyOperationEndpoint(id)
-    const result = await this.sftpSafetyRunner.rollback(id)
+    const operation = await this.assertSftpSafetyOperationEndpoint(id)
+    const result = await this.withRemoteFileOperation({
+      id: `rollback:${id}`,
+      settlementOwnsCapability: true
+    }, async (backend, capability) => {
+      const requiresRoot = operation.metadata?.runtimeIdentity?.channel === 'pty-root'
+      const currentIdentity = capability.runtimeIdentity || {}
+      if (requiresRoot && (
+        currentIdentity.channel !== 'pty-root' ||
+        String(currentIdentity.effectiveUid) !== '0'
+      )) {
+        throw createRemoteFileRootRequiredError()
+      }
+      this.remoteFileOperationBackends.set(operation.id, backend)
+      this.remoteFileOperationBackendPins?.set(operation.id, backend)
+      try {
+        return await this.sftpSafetyRunner.rollback(operation.id)
+      } finally {
+        this.remoteFileOperationBackends.delete(operation.id)
+        this.remoteFileOperationBackendPins?.delete(operation.id)
+      }
+    })
     await this.remoteList()
     return result
   }
@@ -736,6 +781,7 @@ export default class Sftp extends Component {
   }
 
   prepareSftpSafetyOperation = async ({
+    id,
     action,
     paths,
     type,
@@ -745,9 +791,9 @@ export default class Sftp extends Component {
     signal,
     metadata,
     onProgress
-  }) => {
+  }, { backend, runtimeIdentity } = {}) => {
     const request = buildSideEffectSafetyRequest({
-      id: `sftp-${action}-${Date.now()}-${generate()}`,
+      id: id || `sftp-${action}-${Date.now()}-${generate()}`,
       source: 'sftp',
       endpoint: this.getSftpSafetyEndpoint(),
       title,
@@ -762,10 +808,15 @@ export default class Sftp extends Component {
       },
       metadata: {
         sftpSafetyTransaction: true,
+        ...(runtimeIdentity ? { runtimeIdentity } : {}),
         ...metadata
       }
     })
     request.signal = signal
+    if (backend) {
+      this.remoteFileOperationBackends.set(request.id, backend)
+      this.remoteFileOperationBackendPins?.set(request.id, backend)
+    }
     if (typeof onProgress === 'function') {
       this.sftpSafetyProgressHandlers.set(request.id, onProgress)
     }
@@ -774,6 +825,10 @@ export default class Sftp extends Component {
     } catch (error) {
       this.sftpSafetyProgressHandlers.delete(request.id)
       this.sftpSafetyAdapter.discardPreparedProof(request.id)
+      if (backend) {
+        this.remoteFileOperationBackends.delete(request.id)
+        this.remoteFileOperationBackendPins?.delete(request.id)
+      }
       throw error
     }
   }
@@ -837,11 +892,47 @@ export default class Sftp extends Component {
   }
 
   runSftpSafetyOperation = async (spec, options = {}) => {
-    const operation = await this.prepareSftpSafetyOperation(spec)
+    const operationId = `sftp-${spec.action}-${Date.now()}-${generate()}`
+    return this.withRemoteFileOperation({
+      id: operationId,
+      signal: spec.signal,
+      settlementOwnsCapability: true
+    }, async (backend, capability) => {
+      this.remoteFileOperationBackends.set(operationId, backend)
+      this.remoteFileOperationBackendPins?.set(operationId, backend)
+      try {
+        const operation = await this.prepareSftpSafetyOperation({
+          ...spec,
+          id: operationId
+        }, {
+          backend,
+          runtimeIdentity: capability.runtimeIdentity
+        })
+        return await this.confirmAndExecutePreparedOperation(operation, spec, {
+          ...options,
+          backend,
+          capability
+        })
+      } finally {
+        this.remoteFileOperationBackends.delete(operationId)
+        this.remoteFileOperationBackendPins?.delete(operationId)
+      }
+    })
+  }
+
+  confirmAndExecutePreparedOperation = async (
+    operation,
+    spec,
+    options = {}
+  ) => {
     let confirmationDetails = options.confirmationDetails
     if (!confirmationDetails && options.buildConfirmationDetails) {
       try {
-        confirmationDetails = await options.buildConfirmationDetails(operation)
+        confirmationDetails = await options.buildConfirmationDetails(
+          operation,
+          options.backend,
+          options.capability
+        )
       } catch (error) {
         if (error?.name === 'AbortError') {
           await this.sftpSafetyRunner.cancel(operation.id)
@@ -854,7 +945,7 @@ export default class Sftp extends Component {
     }
     const confirmed = await this.confirmPreparedSftpOperation(
       options.confirmTitle || `确认${spec.title || '执行 SFTP 修改'}？`,
-      options.confirmationDetails || confirmationDetails
+      confirmationDetails
     )
     if (!confirmed) {
       await this.sftpSafetyRunner.cancel(operation.id)
@@ -916,10 +1007,10 @@ export default class Sftp extends Component {
       }, {
         input: { text },
         signal: options.signal,
-        buildConfirmationDetails: async operation => {
+        buildConfirmationDetails: async (operation, backend) => {
           const resource = operation.plan?.resources?.[0]
           if (!resource) return { path }
-          const snapshot = await readSftpSnapshotText(this.sftp, resource, {
+          const snapshot = await readSftpSnapshotText(backend, resource, {
             signal: options.signal
           })
           if (!snapshot.available) return { path }
@@ -935,9 +1026,12 @@ export default class Sftp extends Component {
         }
       })
     } catch (error) {
+      const identity = this.state.remoteFileIdentity || {}
       throw formatSftpEditorSaveError(error, {
         path,
-        username: this.props.tab.username
+        loginUsername: this.props.tab.username,
+        effectiveUsername: identity.effectiveUsername || this.props.tab.username,
+        channel: identity.channel === 'pty-root' ? 'pty-root' : 'sftp'
       })
     }
     if (result) message.success(e('shellpilotSftpEditorSaveVerified'))
@@ -952,149 +1046,177 @@ export default class Sftp extends Component {
       throw new Error('AI 多文件修改数量必须在 2 到 50 之间。')
     }
     const changeSetId = `ai-file-change-${Date.now()}-${generate()}`
-    const prepared = []
-    try {
-      for (const file of files) {
-        const expected = await digestSftpText(file.text)
-        const requestedMode = file.mode === undefined
-          ? undefined
-          : Number(file.mode) & 0o7777
-        const operation = await this.prepareSftpSafetyOperation({
-          action: 'editor-save',
-          paths: { target: file.path },
-          type: 'file',
-          requestedMode,
-          expected,
-          title: e('shellpilotSftpEditorSave'),
-          signal: options.signal,
-          metadata: {
-            aiFileChangeSetId: changeSetId,
-            aiFileChangeCount: files.length
-          }
-        })
-        const resource = operation.plan?.resources?.[0]
-        const snapshot = resource
-          ? await readSftpSnapshotText(this.sftp, resource, {
-            signal: options.signal
-          })
-          : { available: false, existed: false, text: '' }
-        const preview = snapshot.available
-          ? buildSftpTextChangePreview({
-            path: file.path,
-            beforeText: snapshot.text,
-            afterText: file.text,
-            existed: snapshot.existed
-          })
-          : null
-        prepared.push({
-          file,
-          operation,
-          originalFingerprint: {
-            existed: resource?.original?.absent !== true,
-            size: resource?.original?.size || 0,
-            digest: resource?.original?.digest || '',
-            digestAlgorithm: resource?.original?.digestAlgorithm || ''
-          },
-          proposedFingerprint: {
-            existed: true,
-            ...expected
-          },
-          diffPreview: formatAiFileChangeDiffPreview(preview)
-        })
-      }
-    } catch (error) {
-      await Promise.allSettled(prepared.map(item => (
-        this.sftpSafetyRunner.cancel(item.operation.id)
-      )))
-      throw error
-    }
-
-    const review = await requestAiFileChangeReview(createAiFileChangeSet({
+    const operationIds = files.map(() => (
+      `sftp-editor-save-${Date.now()}-${generate()}`
+    ))
+    return this.withRemoteFileOperation({
       id: changeSetId,
-      files: prepared.map(item => ({
-        path: item.file.path,
-        originalFingerprint: item.originalFingerprint,
-        proposedFingerprint: item.proposedFingerprint,
-        diffPreview: item.diffPreview
-      }))
-    }), { signal: options.signal })
-    const selectedPaths = new Set(
-      review.changeSet.files.filter(file => file.selected).map(file => file.path)
-    )
-    const selected = prepared.filter(item => selectedPaths.has(item.file.path))
-    const excluded = prepared.filter(item => !selectedPaths.has(item.file.path))
-    await Promise.allSettled(excluded.map(item => (
-      this.sftpSafetyRunner.cancel(item.operation.id)
-    )))
-    if (!review.accepted || !selected.length) {
-      await Promise.allSettled(selected.map(item => (
-        this.sftpSafetyRunner.cancel(item.operation.id)
-      )))
-      return {
-        success: false,
-        cancelled: true,
-        status: 'cancelled',
-        files: []
-      }
-    }
-
-    try {
-      for (const item of selected) {
-        await this.assertSftpSafetyOperationEndpoint(item.operation.id)
-        await this.sftpSafetyAdapter.validatePrepared(item.operation, {
-          signal: options.signal
-        })
-      }
-    } catch (cause) {
-      await Promise.allSettled(selected.map(item => (
-        this.sftpSafetyRunner.cancel(item.operation.id)
-      )))
-      const error = new Error('文件在审查后发生变化，已停止全部 AI 文件修改。')
-      error.code = 'AI_FILE_CHANGED_SINCE_REVIEW'
-      error.cause = cause
-      throw error
-    }
-
-    const results = []
-    for (let index = 0; index < selected.length; index += 1) {
-      const item = selected[index]
-      try {
-        await this.sftpSafetyRunner.execute(item.operation.id, {
-          confirmed: true,
-          sideEffectInput: { text: item.file.text },
-          signal: options.signal
-        })
-        results.push({
-          path: item.file.path,
-          status: 'completed',
-          recoveryOperationId: item.operation.id
-        })
-      } catch (error) {
-        results.push({
-          path: item.file.path,
-          status: 'failed',
-          message: error?.message || String(error)
-        })
-        await Promise.allSettled(selected.slice(index + 1).map(pending => (
-          this.sftpSafetyRunner.cancel(pending.operation.id)
+      signal: options.signal,
+      settlementOwnsCapability: true
+    }, async (backend, capability) => {
+      const prepared = []
+      const boundOperationIds = new Set()
+      const terminalOperationIds = new Set()
+      const cancelPrepared = async items => {
+        const cancellable = items.filter(item => (
+          !terminalOperationIds.has(item.operation.id)
+        ))
+        await Promise.allSettled(cancellable.map(item => (
+          this.sftpSafetyRunner.cancel(item.operation.id)
         )))
+        cancellable.forEach(item => terminalOperationIds.add(item.operation.id))
+      }
+      try {
+        for (let index = 0; index < files.length; index += 1) {
+          const file = files[index]
+          const expected = await digestSftpText(file.text)
+          const requestedMode = file.mode === undefined
+            ? undefined
+            : Number(file.mode) & 0o7777
+          const operationId = operationIds[index]
+          boundOperationIds.add(operationId)
+          this.remoteFileOperationBackends.set(operationId, backend)
+          this.remoteFileOperationBackendPins?.set(operationId, backend)
+          const operation = await this.prepareSftpSafetyOperation({
+            id: operationId,
+            action: 'editor-save',
+            paths: { target: file.path },
+            type: 'file',
+            requestedMode,
+            expected,
+            title: e('shellpilotSftpEditorSave'),
+            signal: options.signal,
+            metadata: {
+              aiFileChangeSetId: changeSetId,
+              aiFileChangeCount: files.length
+            }
+          }, {
+            backend,
+            runtimeIdentity: capability.runtimeIdentity
+          })
+          const item = { file, operation }
+          prepared.push(item)
+          const resource = operation.plan?.resources?.[0]
+          const snapshot = resource
+            ? await readSftpSnapshotText(backend, resource, {
+              signal: options.signal
+            })
+            : { available: false, existed: false, text: '' }
+          const preview = snapshot.available
+            ? buildSftpTextChangePreview({
+              path: file.path,
+              beforeText: snapshot.text,
+              afterText: file.text,
+              existed: snapshot.existed
+            })
+            : null
+          Object.assign(item, {
+            originalFingerprint: {
+              existed: resource?.original?.absent !== true,
+              size: resource?.original?.size || 0,
+              digest: resource?.original?.digest || '',
+              digestAlgorithm: resource?.original?.digestAlgorithm || ''
+            },
+            proposedFingerprint: {
+              existed: true,
+              ...expected
+            },
+            diffPreview: formatAiFileChangeDiffPreview(preview)
+          })
+        }
+
+        const review = await requestAiFileChangeReview(createAiFileChangeSet({
+          id: changeSetId,
+          files: prepared.map(item => ({
+            path: item.file.path,
+            originalFingerprint: item.originalFingerprint,
+            proposedFingerprint: item.proposedFingerprint,
+            diffPreview: item.diffPreview
+          }))
+        }), { signal: options.signal })
+        const selectedPaths = new Set(
+          review.changeSet.files
+            .filter(file => file.selected)
+            .map(file => file.path)
+        )
+        const selected = prepared.filter(item => selectedPaths.has(item.file.path))
+        const excluded = prepared.filter(item => !selectedPaths.has(item.file.path))
+        await cancelPrepared(excluded)
+        if (!review.accepted || !selected.length) {
+          await cancelPrepared(selected)
+          return {
+            success: false,
+            cancelled: true,
+            status: 'cancelled',
+            files: []
+          }
+        }
+
+        try {
+          for (const item of selected) {
+            await this.assertSftpSafetyOperationEndpoint(item.operation.id)
+            await this.sftpSafetyAdapter.validatePrepared(item.operation, {
+              signal: options.signal
+            })
+          }
+        } catch (cause) {
+          await cancelPrepared(selected)
+          const error = new Error('文件在审查后发生变化，已停止全部 AI 文件修改。')
+          error.code = 'AI_FILE_CHANGED_SINCE_REVIEW'
+          error.cause = cause
+          throw error
+        }
+
+        const results = []
+        for (let index = 0; index < selected.length; index += 1) {
+          const item = selected[index]
+          try {
+            await this.sftpSafetyRunner.execute(item.operation.id, {
+              confirmed: true,
+              sideEffectInput: { text: item.file.text },
+              signal: options.signal
+            })
+            terminalOperationIds.add(item.operation.id)
+            results.push({
+              path: item.file.path,
+              status: 'completed',
+              recoveryOperationId: item.operation.id
+            })
+          } catch (error) {
+            terminalOperationIds.add(item.operation.id)
+            results.push({
+              path: item.file.path,
+              status: 'failed',
+              message: error?.message || String(error)
+            })
+            await cancelPrepared(selected.slice(index + 1))
+            return {
+              success: false,
+              cancelled: false,
+              status: results.some(result => result.status === 'completed')
+                ? 'partially-completed'
+                : 'failed',
+              files: results
+            }
+          }
+        }
+        message.success(`已安全修改 ${results.length} 个远程文件。`)
         return {
-          success: false,
+          success: true,
           cancelled: false,
-          status: results.some(result => result.status === 'completed')
-            ? 'partially-completed'
-            : 'failed',
+          status: 'completed',
           files: results
         }
+      } catch (error) {
+        await cancelPrepared(prepared)
+        throw error
+      } finally {
+        boundOperationIds.forEach(id => {
+          this.remoteFileOperationBackends.delete(id)
+          this.remoteFileOperationBackendPins?.delete(id)
+        })
       }
-    }
-    message.success(`已安全修改 ${results.length} 个远程文件。`)
-    return {
-      success: true,
-      cancelled: false,
-      status: 'completed',
-      files: results
-    }
+    })
   }
 
   deleteRemoteFilesWithSafety = async (files, options = {}) => {
@@ -1121,96 +1243,126 @@ export default class Sftp extends Component {
       })
       await wait(0)
       if (dialog.signal.aborted) return false
-      const discardOperation = operation => {
-        this.sftpSafetyProgressHandlers.delete(operation.id)
-        this.sftpSafetyAdapter.discardPreparedProof(operation.id)
-      }
-      const cancelOperations = async operations => {
-        await Promise.allSettled(operations.map(operation => (
-          this.sftpSafetyRunner.cancel(operation.id)
-        )))
-        operations.forEach(discardOperation)
-      }
-      const prepared = await Promise.allSettled(targets.map(async (file, index) => {
-        const source = resolve(file.path, file.name)
-        return this.prepareSftpSafetyOperation({
-          action: 'delete',
-          paths: { source },
-          type: file.isDirectory ? 'directory' : 'file',
-          expected: { absent: true },
-          title: e('shellpilotSftpDelete'),
-          signal: dialog.signal,
-          onProgress: progress => dialog.progress({
-            ...progress,
-            targetIndex: index + 1,
-            targetCount: targets.length
-          })
-        })
-      }))
-      const operations = prepared
-        .filter(item => item.status === 'fulfilled')
-        .map(item => item.value)
-      const failed = prepared.find(item => item.status === 'rejected')
-
-      if (dialog.signal.aborted) {
-        await cancelOperations(operations)
-        return false
-      }
-
-      if (failed) {
-        await cancelOperations(operations)
-        dialog.fail(failed.reason)
-        if (await dialog.decision === 'retry') continue
-        return false
-      }
-
+      const operationIds = targets.map(() => (
+        `sftp-delete-${Date.now()}-${generate()}`
+      ))
+      const batchOperationId = `safe-delete-batch-${Date.now()}-${generate()}`
       try {
-        operations.forEach(operation => {
-          this.sftpSafetyAdapter.bindPreparedProof(operation)
-        })
-      } catch (error) {
-        await cancelOperations(operations)
-        dialog.fail(error)
-        if (await dialog.decision === 'retry') continue
-        return false
-      }
-
-      dialog.ready(operations.length)
-      if (await dialog.decision !== 'confirm') {
-        await cancelOperations(operations)
-        return false
-      }
-
-      for (let index = 0; index < operations.length; index += 1) {
-        const operation = operations[index]
-        try {
-          dialog.progress({
-            phase: 'deleting',
-            completedBytes: 0,
-            totalBytes: null,
-            targetIndex: index + 1,
-            targetCount: operations.length
-          })
-          await this.sftpSafetyRunner.execute(operation.id, {
-            confirmed: true,
-            signal: dialog.signal
-          })
-          discardOperation(operation)
-        } catch (error) {
-          await cancelOperations(operations.slice(index))
-          if (!options.signal?.aborted && error?.name !== 'AbortError') {
-            dialog.fail(error, { retryable: false })
-            throw error
+        const attempt = await this.withRemoteFileOperation({
+          id: batchOperationId,
+          signal: dialog.signal,
+          settlementOwnsCapability: true
+        }, async (backend, capability) => {
+          const discardOperation = operation => {
+            this.sftpSafetyProgressHandlers.delete(operation.id)
+            this.sftpSafetyAdapter.discardPreparedProof(operation.id)
           }
-          return false
-        }
-      }
-      const deletedPaths = targets.map(file => resolve(file.path, file.name))
-      dialog.complete()
-      return {
-        deletedPaths,
-        operationCount: operations.length,
-        recoverable: true
+          const cancelOperations = async operations => {
+            await Promise.allSettled(operations.map(operation => (
+              this.sftpSafetyRunner.cancel(operation.id)
+            )))
+            operations.forEach(discardOperation)
+          }
+          try {
+            const prepared = await Promise.allSettled(targets.map(
+              async (file, index) => {
+                const source = resolve(file.path, file.name)
+                return this.prepareSftpSafetyOperation({
+                  id: operationIds[index],
+                  action: 'delete',
+                  paths: { source },
+                  type: file.isDirectory ? 'directory' : 'file',
+                  expected: { absent: true },
+                  title: e('shellpilotSftpDelete'),
+                  signal: dialog.signal,
+                  onProgress: progress => dialog.progress({
+                    ...progress,
+                    targetIndex: index + 1,
+                    targetCount: targets.length
+                  })
+                }, {
+                  backend,
+                  runtimeIdentity: capability.runtimeIdentity
+                })
+              }
+            ))
+            const operations = prepared
+              .filter(item => item.status === 'fulfilled')
+              .map(item => item.value)
+            const failed = prepared.find(item => item.status === 'rejected')
+
+            if (dialog.signal.aborted) {
+              await cancelOperations(operations)
+              return false
+            }
+
+            if (failed) {
+              await cancelOperations(operations)
+              dialog.fail(failed.reason)
+              return await dialog.decision === 'retry' ? 'retry' : false
+            }
+
+            try {
+              operations.forEach(operation => {
+                this.sftpSafetyAdapter.bindPreparedProof(operation)
+              })
+            } catch (error) {
+              await cancelOperations(operations)
+              dialog.fail(error)
+              return await dialog.decision === 'retry' ? 'retry' : false
+            }
+
+            dialog.ready(operations.length)
+            if (await dialog.decision !== 'confirm') {
+              await cancelOperations(operations)
+              return false
+            }
+
+            for (let index = 0; index < operations.length; index += 1) {
+              const operation = operations[index]
+              try {
+                dialog.progress({
+                  phase: 'deleting',
+                  completedBytes: 0,
+                  totalBytes: null,
+                  targetIndex: index + 1,
+                  targetCount: operations.length
+                })
+                await this.sftpSafetyRunner.execute(operation.id, {
+                  confirmed: true,
+                  signal: dialog.signal
+                })
+                discardOperation(operation)
+              } catch (error) {
+                await cancelOperations(operations.slice(index))
+                if (!options.signal?.aborted && error?.name !== 'AbortError') {
+                  dialog.fail(error, { retryable: false })
+                  throw error
+                }
+                return false
+              }
+            }
+            const deletedPaths = targets.map(file => (
+              resolve(file.path, file.name)
+            ))
+            dialog.complete()
+            return {
+              deletedPaths,
+              operationCount: operations.length,
+              recoverable: true
+            }
+          } finally {
+            operationIds.forEach(id => {
+              this.remoteFileOperationBackends.delete(id)
+              this.remoteFileOperationBackendPins?.delete(id)
+            })
+          }
+        })
+        if (attempt === 'retry') continue
+        return attempt
+      } catch (error) {
+        if (options.signal?.aborted || error?.name === 'AbortError') return false
+        throw error
       }
     }
     return false
@@ -1290,11 +1442,17 @@ export default class Sftp extends Component {
     this.onDelete = true
     let result
     try {
-      result = await executeFastRemoteDelete({
-        sftp: this.sftp,
+      const executeDelete = backend => executeFastRemoteDelete({
+        sftp: backend,
         files: targets,
         concurrency: 4
       })
+      result = this.props.isFtp || this.type === 'ftp'
+        ? await executeDelete(this.sftp)
+        : await this.withRemoteFileOperation({
+          id: `quick-delete-${Date.now()}-${generate()}`,
+          settlementOwnsCapability: true
+        }, executeDelete)
     } catch (error) {
       window.store.onError(error)
     } finally {
@@ -1347,11 +1505,28 @@ export default class Sftp extends Component {
       return false
     }
     try {
-      const records = await backupRemoteFiles({
-        sftp: this.sftp,
-        files: targets,
-        tab: this.props.tab
-      })
+      const backup = async (backend, capability) => {
+        const records = await backupRemoteFiles({
+          sftp: backend,
+          files: targets,
+          tab: this.props.tab
+        })
+        if (!capability?.runtimeIdentity) return records
+        return records.map(record => ({
+          ...record,
+          metadata: {
+            ...record.metadata,
+            runtimeIdentity: capability.runtimeIdentity
+          }
+        }))
+      }
+      const records = this.props.isFtp || this.type === 'ftp'
+        ? await backup(this.sftp)
+        : await this.withRemoteFileOperation({
+          id: `quick-backup-${Date.now()}-${generate()}`,
+          signal: options.signal,
+          settlementOwnsCapability: true
+        }, backup)
       this.addSftpRecoveryRecords(records)
       if (!options.silent) {
         message.success(formatShellPilotTranslation(e, 'shellpilotSftpBackedUpWithRecovery', {
@@ -1381,10 +1556,33 @@ export default class Sftp extends Component {
       return false
     }
     try {
-      const restored = await restoreSftpRecoveryRecord({
-        sftp: this.sftp,
-        record
-      })
+      const restore = async (backend, capability) => {
+        const requiresRoot = record.metadata?.runtimeIdentity?.channel === 'pty-root'
+        const currentIdentity = capability?.runtimeIdentity || {}
+        if (requiresRoot && (
+          currentIdentity.channel !== 'pty-root' ||
+          String(currentIdentity.effectiveUid) !== '0'
+        )) {
+          throw createRemoteFileRootRequiredError()
+        }
+        this.remoteFileOperationBackends?.set(record.id, backend)
+        this.remoteFileOperationBackendPins?.set(record.id, backend)
+        try {
+          return await restoreSftpRecoveryRecord({
+            sftp: backend,
+            record
+          })
+        } finally {
+          this.remoteFileOperationBackends?.delete(record.id)
+          this.remoteFileOperationBackendPins?.delete(record.id)
+        }
+      }
+      const restored = this.props.isFtp || this.type === 'ftp'
+        ? await restore(this.sftp)
+        : await this.withRemoteFileOperation({
+          id: `restore:${record.id}:${generate()}`,
+          settlementOwnsCapability: true
+        }, restore)
       const records = updateSafetyOperationRecord(
         readSafetyOperationRecords(ls),
         restored.id,
@@ -1395,6 +1593,10 @@ export default class Sftp extends Component {
       message.success('恢复完成；恢复前的当前内容也已另行保留。')
       return true
     } catch (err) {
+      if (err?.code === 'REMOTE_FILE_ROOT_REQUIRED') {
+        message.warning(err.message)
+        throw err
+      }
       const records = updateSafetyOperationRecord(
         readSafetyOperationRecords(ls),
         record.id,
@@ -1824,7 +2026,10 @@ export default class Sftp extends Component {
         }
         throw staleError
       }
-      generation.capabilities.add(capability)
+      const generationCapability = options?.settlementOwnsCapability
+        ? Object.freeze({ release: () => operationSettled })
+        : capability
+      generation.capabilities.add(generationCapability)
       let result
       let workError
       try {
@@ -1835,7 +2040,7 @@ export default class Sftp extends Component {
       } catch (error) {
         workError = error
       }
-      generation.capabilities.delete(capability)
+      generation.capabilities.delete(generationCapability)
       let releaseError
       try {
         await capability.release()
