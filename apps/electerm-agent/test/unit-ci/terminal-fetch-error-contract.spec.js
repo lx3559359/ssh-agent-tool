@@ -11,6 +11,9 @@ const terminalApiPath = require.resolve('../../src/app/server/terminal-api.js')
 const sessionProcessPath = require.resolve('../../src/app/server/session-process.js')
 const sessionServerPath = require.resolve('../../src/app/server/session-server.js')
 const sessionCommonPath = require.resolve('../../src/app/server/session-common.js')
+const sftpErrorContractPath = require.resolve(
+  '../../src/app/common/sftp-error-contract.js'
+)
 const fetchFromServerPath = path.resolve(
   __dirname,
   '../../src/client/common/fetch-from-server.js'
@@ -119,7 +122,8 @@ async function sessionServerErrorPayload (action, error) {
         message: String(error?.message || 'SSH tunnel operation failed')
       })
     }],
-    ['./session-common', require(sessionCommonPath)]
+    ['./session-common', require(sessionCommonPath)],
+    ['../common/sftp-error-contract', require(sftpErrorContractPath)]
   ])
   const timerStub = () => ({ unref: () => {} })
   const source = fs.readFileSync(sessionServerPath, 'utf8')
