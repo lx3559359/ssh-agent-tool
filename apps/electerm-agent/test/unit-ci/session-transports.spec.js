@@ -247,6 +247,79 @@ describe('session-ftp stat contract', () => {
       error => error?.code === 'ENOENT'
     )
   })
+
+  test('cp fails closed before copying when the target type is unknown', async () => {
+    const typeError = Object.assign(new Error('unknown target type'), {
+      code: 'FTP_ENTRY_TYPE_UNKNOWN'
+    })
+    const ftp = Object.create(Ftp.prototype)
+    let copyCalls = 0
+    let clientCreations = 0
+    ftp.stat = async remotePath => {
+      if (remotePath === '/source.txt') return { isDirectory: false }
+      throw typeError
+    }
+    ftp.createOperationClient = async () => {
+      clientCreations += 1
+      return { close: async () => {} }
+    }
+    ftp.copyFile = async () => { copyCalls += 1 }
+
+    await assert.rejects(
+      ftp.cp('/source.txt', '/target.txt'),
+      error => error === typeError
+    )
+    assert.equal(clientCreations, 0)
+    assert.equal(copyCalls, 0)
+  })
+
+  test('cp treats only authoritative ENOENT as an absent target', async () => {
+    const missingError = Object.assign(new Error('missing target'), {
+      code: 'ENOENT'
+    })
+    const ftp = Object.create(Ftp.prototype)
+    let copyCalls = 0
+    let clientCreations = 0
+    ftp.stat = async remotePath => {
+      if (remotePath === '/source.txt') return { isDirectory: false }
+      throw missingError
+    }
+    ftp.createOperationClient = async () => {
+      clientCreations += 1
+      return { close: async () => {} }
+    }
+    ftp.copyFile = async (source, target) => {
+      copyCalls += 1
+      assert.deepEqual([source, target], ['/source.txt', '/target.txt'])
+    }
+
+    assert.equal(await ftp.cp('/source.txt', '/target.txt'), 1)
+    assert.equal(clientCreations, 2)
+    assert.equal(copyCalls, 1)
+  })
+
+  test('cp preserves FTP 451 target errors and performs no copy', async () => {
+    const listError = Object.assign(new Error('FTP LIST failed'), { code: 451 })
+    const ftp = Object.create(Ftp.prototype)
+    let copyCalls = 0
+    let clientCreations = 0
+    ftp.stat = async remotePath => {
+      if (remotePath === '/source.txt') return { isDirectory: false }
+      throw listError
+    }
+    ftp.createOperationClient = async () => {
+      clientCreations += 1
+      return { close: async () => {} }
+    }
+    ftp.copyFile = async () => { copyCalls += 1 }
+
+    await assert.rejects(
+      ftp.cp('/source.txt', '/target.txt'),
+      error => error === listError
+    )
+    assert.equal(clientCreations, 0)
+    assert.equal(copyCalls, 0)
+  })
 })
 
 describe('session-ftp transport flows', () => {

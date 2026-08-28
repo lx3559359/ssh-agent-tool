@@ -7,6 +7,15 @@ const { posix: path } = require('path')
 const globalState = require('./global-state')
 
 const trustedFtpEntryTypes = new Set([1, 2, 3])
+const authoritativeRemoteMissingCodes = new Set([
+  2,
+  'ENOENT',
+  'SFTP_NO_SUCH_FILE'
+])
+
+function isAuthoritativeRemoteMissingError (error) {
+  return authoritativeRemoteMissingCodes.has(error?.code)
+}
 
 function createFtpEntryMissingError (remotePath) {
   const error = new Error(`stat failed: ${remotePath} not found`)
@@ -129,7 +138,8 @@ class Ftp extends TerminalBase {
     try {
       return await this.stat(remotePath, client)
     } catch (error) {
-      return null
+      if (isAuthoritativeRemoteMissingError(error)) return null
+      throw error
     }
   }
 
