@@ -4091,7 +4091,15 @@ test('root batch backup persists an exact record before a later copy fails', asy
   let copyCount = 0
   const laterFailure = new Error('second copy failed')
   const backend = {
-    lstat: async () => {
+    lstat: async path => {
+      if (path === '/root/.shellpilot-backups') {
+        return {
+          type: 'directory',
+          mode: 0o040700,
+          isDirectory: true,
+          isSymbolicLink: false
+        }
+      }
       throw Object.assign(new Error('missing'), { code: 'ENOENT' })
     },
     mkdir: async () => {},

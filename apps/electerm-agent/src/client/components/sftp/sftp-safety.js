@@ -6,7 +6,6 @@ import {
   canonicalizeSftpSafetyEndpoint
 } from './sftp-safety-endpoint.js'
 import {
-  isAuthoritativeRemoteExistsError,
   isAuthoritativeRemoteMissingError
 } from './remote-file-errors.js'
 
@@ -341,12 +340,79 @@ async function describeDisplacedEntry (sftp, path) {
   })
 }
 
+function isExactRemoteDirectory (stat) {
+  if (!stat || typeof stat !== 'object') return false
+  const directoryEvidence = []
+  const symbolicLinkEvidence = []
+  let exactTypeEvidence = 0
+
+  if (typeof stat.isDirectory === 'function') {
+    directoryEvidence.push(stat.isDirectory() === true)
+  } else if (typeof stat.isDirectory === 'boolean') {
+    directoryEvidence.push(stat.isDirectory)
+  }
+  if (typeof stat.isSymbolicLink === 'function') {
+    symbolicLinkEvidence.push(stat.isSymbolicLink() === true)
+  } else if (typeof stat.isSymbolicLink === 'boolean') {
+    symbolicLinkEvidence.push(stat.isSymbolicLink)
+  }
+
+  if (typeof stat.type === 'string') {
+    const recognizedType = ['d', 'directory', 'f', 'file', 'l', 'link',
+      'symlink'].includes(stat.type)
+    if (recognizedType) exactTypeEvidence += 1
+    directoryEvidence.push(
+      stat.type === 'd' || stat.type === 'directory'
+    )
+    symbolicLinkEvidence.push(
+      stat.type === 'l' || stat.type === 'link' ||
+      stat.type === 'symlink'
+    )
+  } else if (typeof stat.type === 'number') {
+    if ([1, 2, 3].includes(stat.type)) exactTypeEvidence += 1
+    directoryEvidence.push(stat.type === 2)
+    symbolicLinkEvidence.push(stat.type === 3)
+  }
+
+  if (typeof stat.mode === 'number') {
+    const modeType = stat.mode & 0o170000
+    if (modeType !== 0) {
+      exactTypeEvidence += 1
+      directoryEvidence.push(modeType === 0o040000)
+      symbolicLinkEvidence.push(modeType === 0o120000)
+    }
+  }
+
+  return symbolicLinkEvidence.every(value => value === false) &&
+    exactTypeEvidence > 0 &&
+    directoryEvidence.length > 0 &&
+    directoryEvidence.every(value => value === true)
+}
+
 async function ensureRemoteDir (sftp, path, createdDirs) {
-  if (createdDirs?.has(path)) return
+  const directoryWasCreated = createdDirs?.has(path) === true
+  let mkdirFailed = false
+  let mkdirError
+  if (!directoryWasCreated) {
+    try {
+      await sftp.mkdir(path)
+    } catch (err) {
+      mkdirFailed = true
+      mkdirError = err
+    }
+  }
   try {
-    await sftp.mkdir(path)
-  } catch (err) {
-    if (!isAuthoritativeRemoteExistsError(err)) throw err
+    const stat = await sftp.lstat(path)
+    if (!isExactRemoteDirectory(stat)) {
+      if (mkdirFailed) throw mkdirError
+      const error = new Error(`SFTP 安全目录不是普通目录：${path}`)
+      error.code = 'REMOTE_FILE_SAFETY_DIRECTORY_INVALID'
+      error.path = path
+      throw error
+    }
+  } catch (verificationError) {
+    if (mkdirFailed && verificationError !== mkdirError) throw mkdirError
+    throw verificationError
   }
   createdDirs?.add(path)
 }

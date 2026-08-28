@@ -10,6 +10,20 @@ const moduleUrl = pathToFileURL(
 
 const fixedDisplacementToken = 'f'.repeat(24)
 
+const exactDirectoryStat = Object.freeze({
+  type: 'directory',
+  mode: 0o040755,
+  isDirectory: true,
+  isSymbolicLink: false
+})
+
+function lstatSafetyDirectoryOrMissing (path) {
+  if (/\/\.shellpilot-(?:backups|trash|before-restore)$/.test(path)) {
+    return exactDirectoryStat
+  }
+  throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+}
+
 function rootRecoveryProof (kind, sourcePath, backupPath, proof) {
   return {
     action: Object.freeze({ kind, sourcePath, backupPath }),
@@ -35,9 +49,7 @@ test('one-click SFTP backup copies files and folders without changing originals'
   const { backupRemoteFiles } = await import(moduleUrl)
   const calls = []
   const sftp = {
-    lstat: async () => {
-      throw Object.assign(new Error('missing'), { code: 'ENOENT' })
-    },
+    lstat: async path => lstatSafetyDirectoryOrMissing(path),
     mkdir: async value => calls.push(['mkdir', value]),
     cp: async (from, to) => calls.push(['cp', from, to])
   }
@@ -73,9 +85,7 @@ test('SFTP backup publishes each recovery record before starting the next copy',
   const events = []
   const secondCopyError = new Error('second copy failed')
   const sftp = {
-    lstat: async () => {
-      throw Object.assign(new Error('missing'), { code: 'ENOENT' })
-    },
+    lstat: async path => lstatSafetyDirectoryOrMissing(path),
     mkdir: async value => events.push(['mkdir', value]),
     cp: async (from, to) => {
       events.push(['cp', from, to])
@@ -116,7 +126,7 @@ test('SFTP backup chooses a collision-free path when the timestamped name alread
     stat: async () => { throw new Error('backup missing checks must not follow symlinks') },
     lstat: async value => {
       if (value === existing) return { isDirectory: true }
-      throw Object.assign(new Error('No such file'), { code: 'ENOENT' })
+      return lstatSafetyDirectoryOrMissing(value)
     },
     mkdir: async value => calls.push(['mkdir', value]),
     cp: async (from, to) => calls.push(['cp', from, to])
@@ -148,6 +158,7 @@ test('SFTP backup accepts only authoritative missing and existing-directory code
         stat: async () => { throw new Error('stat must not be called') },
         lstat: async path => {
           calls.push(['lstat', path])
+          if (path === '/etc/.shellpilot-backups') return exactDirectoryStat
           throw Object.assign(new Error('missing'), { code })
         },
         mkdir: async path => calls.push(['mkdir', path]),
@@ -186,7 +197,15 @@ test('SFTP backup accepts only authoritative missing and existing-directory code
     const copied = []
     await backupRemoteFiles({
       sftp: {
-        lstat: async () => {
+        lstat: async path => {
+          if (path === '/etc/.shellpilot-backups') {
+            return {
+              type: 'directory',
+              mode: 0o040755,
+              isDirectory: true,
+              isSymbolicLink: false
+            }
+          }
           throw Object.assign(new Error('missing'), { code: 'ENOENT' })
         },
         mkdir: async () => {
@@ -220,13 +239,192 @@ test('SFTP backup accepts only authoritative missing and existing-directory code
   })
 })
 
+test('SFTP safety directory is accepted only after an exact lstat directory check', async t => {
+  const { backupRemoteFiles } = await import(moduleUrl)
+  const file = { path: '/etc', name: 'app.conf', isDirectory: false }
+  const now = new Date('2026-07-12T08:09:10Z')
+  const backupDir = '/etc/.shellpilot-backups'
+  const directory = Object.freeze({
+    type: 'directory',
+    mode: 0o040755,
+    isDirectory: true,
+    isSymbolicLink: false
+  })
+
+  for (const mkdirResult of ['success', 4, 11]) {
+    await t.test(`continues after mkdir ${mkdirResult}`, async () => {
+      const calls = []
+      await backupRemoteFiles({
+        sftp: {
+          lstat: async path => {
+            calls.push(['lstat', path])
+            if (path === backupDir) return directory
+            throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+          },
+          mkdir: async path => {
+            calls.push(['mkdir', path])
+            if (mkdirResult !== 'success') {
+              throw Object.assign(new Error('SFTP v3 generic failure'), {
+                code: mkdirResult
+              })
+            }
+          },
+          cp: async (source, target) => calls.push(['cp', source, target])
+        },
+        files: [file],
+        now
+      })
+      assert.deepEqual(calls.map(call => call[0]), [
+        'lstat', 'mkdir', 'lstat', 'cp'
+      ])
+    })
+  }
+
+  await t.test('rejects a pre-existing symlink after EEXIST', async () => {
+    const mkdirError = Object.assign(new Error('exists'), { code: 'EEXIST' })
+    let copies = 0
+    await assert.rejects(backupRemoteFiles({
+      sftp: {
+        lstat: async path => {
+          if (path === backupDir) {
+            return {
+              type: 'l',
+              mode: 0o120777,
+              isDirectory: false,
+              isSymbolicLink: true
+            }
+          }
+          throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+        },
+        mkdir: async () => { throw mkdirError },
+        cp: async () => { copies += 1 }
+      },
+      files: [file],
+      now
+    }), error => error === mkdirError)
+    assert.equal(copies, 0)
+  })
+
+  const rejectedEntries = [
+    {
+      label: 'symlink',
+      value: {
+        type: 'l',
+        mode: 0o120777,
+        isDirectory: false,
+        isSymbolicLink: true
+      }
+    },
+    {
+      label: 'file',
+      value: {
+        type: 'file',
+        mode: 0o100644,
+        isDirectory: false,
+        isSymbolicLink: false
+      }
+    },
+    {
+      label: 'missing',
+      error: Object.assign(new Error('missing'), { code: 'ENOENT' })
+    },
+    {
+      label: 'permission',
+      error: Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    }
+  ]
+  for (const entry of rejectedEntries) {
+    await t.test(`code 4 rejects ${entry.label}`, async () => {
+      const mkdirError = Object.assign(new Error('SFTP v3 generic failure'), {
+        code: 4
+      })
+      let copies = 0
+      let directoryChecks = 0
+      await assert.rejects(backupRemoteFiles({
+        sftp: {
+          lstat: async path => {
+            if (path !== backupDir) {
+              throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+            }
+            directoryChecks += 1
+            if (entry.error) throw entry.error
+            return entry.value
+          },
+          mkdir: async () => { throw mkdirError },
+          cp: async () => { copies += 1 }
+        },
+        files: [file],
+        now
+      }), error => error === mkdirError)
+      assert.equal(directoryChecks, 1)
+      assert.equal(copies, 0)
+    })
+  }
+
+  for (const entry of [
+    { label: 'boolean-only', value: { isDirectory: true } },
+    {
+      label: 'permission-mode-only',
+      value: { isDirectory: true, mode: 0o755 }
+    }
+  ]) {
+    await t.test(`mkdir success rejects ${entry.label} evidence`, async () => {
+      let copies = 0
+      await assert.rejects(backupRemoteFiles({
+        sftp: {
+          lstat: async path => {
+            if (path === backupDir) return entry.value
+            throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+          },
+          mkdir: async () => {},
+          cp: async () => { copies += 1 }
+        },
+        files: [file],
+        now
+      }), error => error?.code === 'REMOTE_FILE_SAFETY_DIRECTORY_INVALID')
+      assert.equal(copies, 0)
+    })
+  }
+
+  await t.test('revalidates a cached directory before each copy', async () => {
+    let directoryChecks = 0
+    let mkdirCalls = 0
+    let copies = 0
+    await assert.rejects(backupRemoteFiles({
+      sftp: {
+        lstat: async path => {
+          if (path !== backupDir) {
+            throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+          }
+          directoryChecks += 1
+          if (directoryChecks === 1) return directory
+          return {
+            type: 'l',
+            mode: 0o120777,
+            isDirectory: false,
+            isSymbolicLink: true
+          }
+        },
+        mkdir: async () => { mkdirCalls += 1 },
+        cp: async () => { copies += 1 }
+      },
+      files: [
+        file,
+        { path: '/etc', name: 'second.conf', isDirectory: false }
+      ],
+      now
+    }), error => error?.code === 'REMOTE_FILE_SAFETY_DIRECTORY_INVALID')
+    assert.equal(mkdirCalls, 1)
+    assert.equal(directoryChecks, 2)
+    assert.equal(copies, 1)
+  })
+})
+
 test('SFTP safe delete moves entries to trash instead of removing them', async () => {
   const { softDeleteRemoteFiles } = await import(moduleUrl)
   const calls = []
   const sftp = {
-    lstat: async () => {
-      throw Object.assign(new Error('missing'), { code: 'ENOENT' })
-    },
+    lstat: async path => lstatSafetyDirectoryOrMissing(path),
     mkdir: async value => calls.push(['mkdir', value]),
     rename: async (from, to) => calls.push(['rename', from, to]),
     rm: async value => calls.push(['rm', value]),
@@ -251,7 +449,9 @@ test('SFTP restore preserves current content before restoring a backup', async (
   const { restoreSftpRecoveryRecord } = await import(moduleUrl)
   const calls = []
   const sftp = {
-    lstat: async () => ({ isDirectory: false }),
+    lstat: async path => path.endsWith('/.shellpilot-before-restore')
+      ? exactDirectoryStat
+      : { isDirectory: false },
     mkdir: async value => calls.push(['mkdir', value]),
     rename: async (from, to) => calls.push(['rename', from, to]),
     cp: async (from, to) => calls.push(['cp', from, to])
@@ -291,6 +491,9 @@ test('non-root SFTP restore treats a dangling symlink as existing via lstat', as
       },
       lstat: async path => {
         lstatCalls += 1
+        if (path.endsWith('/.shellpilot-before-restore')) {
+          return exactDirectoryStat
+        }
         assert.equal(path, '/etc/nginx/nginx.conf')
         return { type: 'l', mode: 0o120777, size: 12, uid: 1000, gid: 1000 }
       },
@@ -309,7 +512,7 @@ test('non-root SFTP restore treats a dangling symlink as existing via lstat', as
   })
 
   assert.equal(statCalls, 0)
-  assert.equal(lstatCalls, 2)
+  assert.equal(lstatCalls, 3)
   assert.deepEqual(calls, [
     ['mkdir', '/etc/nginx/.shellpilot-before-restore'],
     ['rename', '/etc/nginx/nginx.conf', '/etc/nginx/.shellpilot-before-restore/nginx.conf-20260712-091011'],
@@ -852,6 +1055,7 @@ test('root recovery displaces an existing target with proof-bound copy and exact
   const persisted = []
   const result = await restoreSftpRecoveryRecord({
     sftp: {
+      lstat: async path => lstatSafetyDirectoryOrMissing(path),
       mkdir: async path => calls.push(['mkdir', path]),
       rename: async () => { throw new Error('path-only rename forbidden') },
       cp: async () => { throw new Error('path-only cp forbidden') },
@@ -967,6 +1171,7 @@ test('root recovery skips an occupied displacement candidate and persists an abs
 
   await assert.rejects(restoreSftpRecoveryRecord({
     sftp: {
+      lstat: async path => lstatSafetyDirectoryOrMissing(path),
       mkdir: async () => {},
       copyEntry: async (source, target, options) => {
         events.push(['copy', target, options.expectedTarget])
@@ -1065,6 +1270,7 @@ test('root recovery replans when an absent displacement candidate races to occup
 
   await assert.rejects(restoreSftpRecoveryRecord({
     sftp: {
+      lstat: async path => lstatSafetyDirectoryOrMissing(path),
       mkdir: async () => {},
       copyEntry: async (_source, target, options) => {
         events.push(['copy', target, options.expectedTarget])
@@ -1149,6 +1355,7 @@ test('root recovery fails closed after sixteen occupied displacement candidates'
 
   const error = await restoreSftpRecoveryRecord({
     sftp: {
+      lstat: async path => lstatSafetyDirectoryOrMissing(path),
       mkdir: async () => {},
       copyEntry: async () => { copyCalls += 1 },
       removeEntry: async () => { removeCalls += 1 }
@@ -1227,6 +1434,7 @@ test('root recovery persists a displaced target replacement before source remova
 
   const error = await restoreSftpRecoveryRecord({
     sftp: {
+      lstat: async path => lstatSafetyDirectoryOrMissing(path),
       mkdir: async () => {},
       copyEntry: async () => { throw proofFailure },
       removeEntry: async () => { removeCalls += 1 }
@@ -1304,6 +1512,7 @@ test('root recovery does not remove the source after the displaced copy is repla
 
   const error = await restoreSftpRecoveryRecord({
     sftp: {
+      lstat: async path => lstatSafetyDirectoryOrMissing(path),
       mkdir: async () => {},
       copyEntry: async () => copied,
       removeEntry: async () => { removeCalls += 1 }
@@ -1391,6 +1600,7 @@ test('root recovery stops before install if the displaced copy changes during ex
 
   const error = await restoreSftpRecoveryRecord({
     sftp: {
+      lstat: async path => lstatSafetyDirectoryOrMissing(path),
       mkdir: async () => {},
       copyEntry: async source => {
         if (source === backupPath) installCalls += 1
@@ -1481,6 +1691,7 @@ test('root recovery persists duplicated uncertainty when exact source removal fa
 
   const error = await restoreSftpRecoveryRecord({
     sftp: {
+      lstat: async path => lstatSafetyDirectoryOrMissing(path),
       mkdir: async () => {},
       copyEntry: async () => { copied = true },
       removeEntry: async () => { throw removeFailure }
@@ -1561,6 +1772,7 @@ test('root recovery records an unavailable observation instead of stale expected
 
   const error = await restoreSftpRecoveryRecord({
     sftp: {
+      lstat: async path => lstatSafetyDirectoryOrMissing(path),
       mkdir: async () => {},
       copyEntry: async () => {
         copied = true
@@ -1645,6 +1857,7 @@ test('root recovery persists copy-completed uncertainty when post-copy observati
   let removes = 0
   const error = await restoreSftpRecoveryRecord({
     sftp: {
+      lstat: async path => lstatSafetyDirectoryOrMissing(path),
       mkdir: async () => {},
       copyEntry: async () => {
         copyCompleted = true
@@ -1739,6 +1952,7 @@ test('root recovery persists exact-remove facts when peer observation fails', as
   const persisted = []
   const error = await restoreSftpRecoveryRecord({
     sftp: {
+      lstat: async path => lstatSafetyDirectoryOrMissing(path),
       mkdir: async () => {},
       copyEntry: async () => {
         copied = true
@@ -1879,6 +2093,7 @@ test('root recovery retry preserves both sides of a duplicated displacement and 
 
   const result = await restoreSftpRecoveryRecord({
     sftp: {
+      lstat: async path => lstatSafetyDirectoryOrMissing(path),
       mkdir: async () => {},
       copyEntry: async (source, target, options) => {
         calls.push(['copyEntry', source, target, options])
@@ -2140,6 +2355,7 @@ test('root recovery keeps a raced creator and records proof-bound compensation f
 
   const error = await restoreSftpRecoveryRecord({
     sftp: {
+      lstat: async path => lstatSafetyDirectoryOrMissing(path),
       mkdir: async () => {},
       rename: async () => { throw new Error('path-only rename forbidden') },
       cp: async () => { throw new Error('path-only cp forbidden') },
@@ -2246,6 +2462,7 @@ test('root recovery records both sides when compensation copy exact-remove fails
 
   const error = await restoreSftpRecoveryRecord({
     sftp: {
+      lstat: async path => lstatSafetyDirectoryOrMissing(path),
       mkdir: async () => {},
       copyEntry: async (source, target) => {
         if (source === sourcePath) displacedCreated = true
@@ -2351,6 +2568,7 @@ test('root recovery does not claim compensation if its target changes during exa
 
   const error = await restoreSftpRecoveryRecord({
     sftp: {
+      lstat: async path => lstatSafetyDirectoryOrMissing(path),
       mkdir: async () => {},
       copyEntry: async source => {
         if (source === sourcePath) {
@@ -2425,7 +2643,9 @@ test('SFTP restore persists displacement before moving current content and expos
   const primaryCause = new Error('primary restore failed')
   const rollbackCause = new Error('compensation failed')
   const sftp = {
-    lstat: async () => ({ isDirectory: false }),
+    lstat: async path => path.endsWith('/.shellpilot-before-restore')
+      ? exactDirectoryStat
+      : { isDirectory: false },
     mkdir: async () => {},
     rename: async (from, to) => {
       if (from === displacedPath && to === '/etc/nginx/nginx.conf') {
@@ -2518,7 +2738,9 @@ test('successful restore compensation clears active displacement before a later 
   }
   const error = await restoreSftpRecoveryRecord({
     sftp: {
-      lstat: async () => ({ mode: 0o600, uid: 0, gid: 0, size: 4 }),
+      lstat: async path => path.endsWith('/.shellpilot-before-restore')
+        ? exactDirectoryStat
+        : { mode: 0o100600, uid: 0, gid: 0, size: 4 },
       mkdir: async () => {},
       rename: async () => {},
       cp: async () => { throw primaryCause }
