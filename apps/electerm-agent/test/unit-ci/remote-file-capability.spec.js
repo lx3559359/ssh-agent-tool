@@ -25,9 +25,7 @@ const productionRemoteFileMethods = Object.freeze([
   'removeEntry',
   'cp',
   'mv',
-  'describeResumeEntry',
-  'upload',
-  'download'
+  'describeResumeEntry'
 ])
 
 function sha256 (value) {
@@ -668,12 +666,45 @@ test('facade never promotes an allowed method name from the raw prototype', asyn
   await harness.capability.release()
 })
 
+test('Task4 native capability never exposes raw transfer handles', async () => {
+  let uploadCalls = 0
+  let downloadCalls = 0
+  const rawHandle = Object.freeze({
+    pause () {},
+    resume () {},
+    cancel () {},
+    destroy () {}
+  })
+  const harness = await acquireWithHarness({
+    terminalOptions: { identity: { uid: '1000', username: 'hik' } },
+    sftpOptions: {
+      async upload () {
+        uploadCalls += 1
+        return rawHandle
+      },
+      async download () {
+        downloadCalls += 1
+        return rawHandle
+      }
+    }
+  })
+
+  assert.equal(harness.capability.backend.upload, undefined)
+  assert.equal(harness.capability.backend.download, undefined)
+  assert.equal(Reflect.ownKeys(harness.capability.backend).includes('upload'), false)
+  assert.equal(Reflect.ownKeys(harness.capability.backend).includes('download'), false)
+  assert.equal(await harness.capability.backend.upload?.({}), undefined)
+  assert.equal(await harness.capability.backend.download?.({}), undefined)
+  assert.equal(uploadCalls, 0)
+  assert.equal(downloadCalls, 0)
+  await harness.capability.release()
+  assert.equal(uploadCalls, 0)
+  assert.equal(downloadCalls, 0)
+})
+
 test('root capability hides staging and exposes only the current backend contract', async () => {
   const harness = await acquireWithHarness()
-  const rootMethods = productionRemoteFileMethods.filter(method => ![
-    'upload',
-    'download'
-  ].includes(method))
+  const rootMethods = [...productionRemoteFileMethods]
 
   assert.equal(Object.getPrototypeOf(harness.capability), null)
   assert.equal(harness.capability.staging, undefined)

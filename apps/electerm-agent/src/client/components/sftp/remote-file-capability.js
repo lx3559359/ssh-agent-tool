@@ -26,9 +26,7 @@ const remoteFileMethodNames = Object.freeze([
   'removeEntry',
   'cp',
   'mv',
-  'describeResumeEntry',
-  'upload',
-  'download'
+  'describeResumeEntry'
 ])
 
 function requiredIdentity (value, label) {
