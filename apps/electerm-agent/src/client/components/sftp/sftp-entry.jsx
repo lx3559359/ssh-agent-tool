@@ -189,6 +189,29 @@ function isRemoteDirectory (stat) {
     (stat.mode & 0o170000) === 0o040000
 }
 
+function formatEffectiveFileIdentity (identity, translate = e) {
+  const username = String(identity?.effectiveUsername || '').trim()
+  const channel = identity?.channel
+  if (!username || !['sftp', 'pty-root'].includes(channel)) {
+    return translate('shellpilotSftpEffectiveFileIdentityUnknown')
+  }
+  return formatShellPilotTranslation(
+    translate,
+    'shellpilotSftpEffectiveFileIdentity',
+    {
+      username,
+      channel: translate(channel === 'pty-root'
+        ? 'shellpilotSftpCurrentTerminal'
+        : 'shellpilotSftpNativeChannel')
+    }
+  )
+}
+
+function resolveRemoteFileStatus ({ rootLeaseCount = 0, unavailable = false } = {}) {
+  if (rootLeaseCount > 0) return 'busy'
+  return unavailable ? 'unavailable' : 'idle'
+}
+
 export default class Sftp extends Component {
   constructor (props) {
     super(props)
@@ -208,6 +231,7 @@ export default class Sftp extends Component {
         effectiveUsername: '',
         channel: 'unknown'
       },
+      remoteFileStatus: 'idle',
       sftpRecoveryRecords: readSafetyOperationRecords(ls)
     }
     this.retryCount = 0
@@ -221,6 +245,7 @@ export default class Sftp extends Component {
     this.remoteFileOperationSettlements = new Set()
     this.remoteFileOperationTail = Promise.resolve()
     this.remoteFileUnmounted = false
+    this.activeRootFileCapabilities = new Set()
     initializeRemoteFileGeneration(this)
     this.sftpSafetyProgressHandlers = new Map()
     this.sftpSafetyAdapter = createSftpTransactionAdapter({
@@ -2521,6 +2546,55 @@ export default class Sftp extends Component {
     })
   }
 
+  publishRemoteFileCapabilityIdentity = (capability, remoteFileIdentity) => {
+    const rootCapability = remoteFileIdentity?.channel === 'pty-root'
+    if (rootCapability) this.activeRootFileCapabilities.add(capability)
+    this.setState({
+      remoteFileIdentity,
+      remoteFileStatus: resolveRemoteFileStatus({
+        rootLeaseCount: this.activeRootFileCapabilities.size
+      })
+    })
+  }
+
+  clearRemoteFileCapabilityIdentity = capability => {
+    this.activeRootFileCapabilities.delete(capability)
+    if (this.remoteFileUnmounted || this.activeRootFileCapabilities.size) return
+    this.setState(state => state.remoteFileStatus === 'busy'
+      ? { remoteFileStatus: resolveRemoteFileStatus() }
+      : null)
+  }
+
+  releaseRemoteFileCapability = async capability => {
+    let releaseError
+    try {
+      return await capability.release()
+    } catch (error) {
+      releaseError = error
+      throw error
+    } finally {
+      if (releaseError) {
+        this.activeRootFileCapabilities.delete(capability)
+        this.publishRemoteFileIdentityUnavailable()
+      } else {
+        this.clearRemoteFileCapabilityIdentity(capability)
+      }
+    }
+  }
+
+  publishRemoteFileIdentityUnavailable = () => {
+    if (this.remoteFileUnmounted || this.activeRootFileCapabilities.size) return
+    this.setState({
+      remoteFileIdentity: {
+        loginUsername: this.props.tab?.username || '',
+        effectiveUid: '',
+        effectiveUsername: '',
+        channel: 'unknown'
+      },
+      remoteFileStatus: resolveRemoteFileStatus({ unavailable: true })
+    })
+  }
+
   acquireRemoteFileOperation = async ({
     id,
     signal,
@@ -2533,14 +2607,22 @@ export default class Sftp extends Component {
     const sshSessionGeneration = String(this.sshSessionGeneration || '')
     const sshTerminalPid = String(this.sshTerminalPid || '')
     let remoteFileIdentity
-    const capability = await acquireRemoteFileCapability({
-      operationId,
-      tab: this.props.tab,
-      sftp,
-      getTerminal: tabId => refs.get('term-' + tabId),
-      signal,
-      onIdentity: identity => { remoteFileIdentity = identity }
-    })
+    let capability
+    try {
+      capability = await acquireRemoteFileCapability({
+        operationId,
+        tab: this.props.tab,
+        sftp,
+        getTerminal: tabId => refs.get('term-' + tabId),
+        signal,
+        onIdentity: identity => { remoteFileIdentity = identity }
+      })
+    } catch (error) {
+      if (error?.code === 'REMOTE_FILE_IDENTITY_UNAVAILABLE') {
+        this.publishRemoteFileIdentityUnavailable?.()
+      }
+      throw error
+    }
     const lifecycleCurrent =
       !this.remoteFileUnmounted &&
       this.sftp === sftp &&
@@ -2559,7 +2641,11 @@ export default class Sftp extends Component {
       throw staleError
     }
     if (remoteFileIdentity) {
-      this.setState({ remoteFileIdentity })
+      if (typeof this.publishRemoteFileCapabilityIdentity === 'function') {
+        this.publishRemoteFileCapabilityIdentity(capability, remoteFileIdentity)
+      } else {
+        this.setState({ remoteFileIdentity })
+      }
     }
     return capability
   }
@@ -2650,7 +2736,9 @@ export default class Sftp extends Component {
           ? remoteFileOperationUnmounted()
           : remoteFileOperationStale()
         try {
-          await capability.release()
+          await (typeof this.releaseRemoteFileCapability === 'function'
+            ? this.releaseRemoteFileCapability(capability)
+            : capability.release())
         } catch (releaseError) {
           staleError.releaseError = releaseError
         }
@@ -2667,9 +2755,19 @@ export default class Sftp extends Component {
         release: () => {
           if (releasePromise) return releasePromise
           releasePromise = (async () => {
+            let releaseError
             try {
               return await transfer.release()
+            } catch (error) {
+              releaseError = error
+              throw error
             } finally {
+              if (releaseError) {
+                this.activeRootFileCapabilities?.delete(capability)
+                this.publishRemoteFileIdentityUnavailable?.()
+              } else {
+                this.clearRemoteFileCapabilityIdentity?.(capability)
+              }
               generation.capabilities.delete(session)
               generation.settlements.delete(operationSettled)
               settleOperation()
@@ -2687,7 +2785,9 @@ export default class Sftp extends Component {
     } catch (error) {
       if (capability) {
         try {
-          await capability.release()
+          await (typeof this.releaseRemoteFileCapability === 'function'
+            ? this.releaseRemoteFileCapability(capability)
+            : capability.release())
         } catch (releaseError) {
           error.releaseError ||= releaseError
         }
@@ -2732,7 +2832,9 @@ export default class Sftp extends Component {
           ? remoteFileOperationUnmounted()
           : remoteFileOperationStale()
         try {
-          await capability.release()
+          await (typeof this.releaseRemoteFileCapability === 'function'
+            ? this.releaseRemoteFileCapability(capability)
+            : capability.release())
         } catch (releaseError) {
           staleError.releaseError = releaseError
         }
@@ -2764,7 +2866,9 @@ export default class Sftp extends Component {
       generation.capabilities.delete(generationCapability)
       let releaseError
       try {
-        await capability.release()
+        await (typeof this.releaseRemoteFileCapability === 'function'
+          ? this.releaseRemoteFileCapability(capability)
+          : capability.release())
       } catch (error) {
         releaseError = error
       }
@@ -3685,9 +3789,57 @@ export default class Sftp extends Component {
   renderSftpPanelTitle (type, username, host) {
     if (type === typeMap.remote) {
       const selectedCount = this.getRemoteSafetyTargets().length
+      const { remoteFileIdentity, remoteFileStatus } = this.state
+      const effectiveChannel = remoteFileIdentity?.channel || 'unknown'
       return (
         <div className='sftp-panel-title sftp-panel-title-remote pd1t pd1b pd1x'>
-          <span className='sftp-panel-location'>{e('remote')}: {username}@{host}</span>
+          <span className='sftp-panel-heading'>
+            <span className='sftp-panel-location'>{e('remote')}: {username}@{host}</span>
+            <span className='sftp-panel-identities'>
+              <span className='sftp-login-identity'>
+                {formatShellPilotTranslation(
+                  e,
+                  'shellpilotSftpLoginIdentity',
+                  { username }
+                )}
+              </span>
+              <span className={`sftp-file-identity is-${effectiveChannel}`}>
+                {effectiveChannel === 'pty-root'
+                  ? (
+                    <span
+                      aria-hidden='true'
+                      className='sftp-file-identity-marker'
+                    >
+                      {e('shellpilotSftpRootBadge')}
+                    </span>
+                    )
+                  : null}
+                {formatEffectiveFileIdentity(remoteFileIdentity, e)}
+              </span>
+              {remoteFileStatus === 'busy'
+                ? (
+                  <span
+                    className='sftp-file-operation-status is-busy'
+                    role='status'
+                    aria-live='polite'
+                  >
+                    {e('shellpilotSftpRootLeaseBusy')}
+                  </span>
+                  )
+                : null}
+              {remoteFileStatus === 'unavailable'
+                ? (
+                  <span
+                    className='sftp-file-operation-status is-unavailable'
+                    role='status'
+                    aria-live='polite'
+                  >
+                    {e('shellpilotSftpIdentityUnavailable')}
+                  </span>
+                  )
+                : null}
+            </span>
+          </span>
           <span className='sftp-safety-actions'>
             <Button
               size='small'

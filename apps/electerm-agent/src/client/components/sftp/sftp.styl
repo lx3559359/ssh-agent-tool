@@ -252,16 +252,54 @@
   border-bottom 1px solid var(--sp-border)
 .sftp-panel-title-remote
   display flex
-  align-items center
+  align-items flex-start
   gap 8px
   min-width 0
   border-bottom 0
-.sftp-panel-location
+.sftp-panel-heading
+  display flex
   flex 1
+  flex-direction column
+  gap 2px
   min-width 80px
+.sftp-panel-location
+  display block
+  min-width 0
   overflow hidden
   text-overflow ellipsis
   white-space nowrap
+.sftp-panel-identities
+  display flex
+  flex-wrap wrap
+  align-items center
+  gap 3px 8px
+  min-width 0
+  color var(--sp-text-muted)
+  font-size 12px
+  line-height 1.35
+.sftp-login-identity,
+.sftp-file-identity
+  display inline-flex
+  align-items center
+  gap 4px
+.sftp-file-identity.is-pty-root
+  color var(--sp-text)
+  font-weight 600
+  background var(--sp-primary-soft)
+  border 1px solid var(--sp-primary)
+  border-radius var(--sp-radius-control)
+  padding 1px 5px
+.sftp-file-identity-marker
+  font-size 9px
+  font-weight 700
+  letter-spacing .04em
+.sftp-file-operation-status
+  flex-basis 100%
+  color var(--sp-text-muted)
+.sftp-file-operation-status.is-busy
+  color var(--warning)
+.sftp-file-operation-status.is-unavailable
+  color var(--error)
 .sftp-safety-actions
   display flex
   align-items center
