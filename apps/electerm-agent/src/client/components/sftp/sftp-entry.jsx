@@ -68,13 +68,15 @@ import {
   reconcileSelectedFileIds
 } from './file-selection.js'
 import {
-  destroySftpClient,
+  activateRemoteFileGeneration,
   beginSftpEntryRemoteTask,
   commitSftpEntryRemoteClient,
-  detachSftpEntryClient,
-  disposeSftpEntryClient,
+  destroySftpEntryClientOnce,
+  drainRemoteFileGeneration,
   disposeSftpEntryScheduling,
   bindSftpEntryRemoteSession,
+  initializeRemoteFileGeneration,
+  isCurrentRemoteFileGeneration,
   removeDeletedRemoteEntries,
   reconnectSftpEntryRemote,
   isCurrentSftpEntryRemoteTask,
@@ -101,6 +103,11 @@ import {
   writeSafetyOperationRecords
 } from '../../common/safety-operation-records'
 import { acquireRemoteFileCapability } from './remote-file-capability.js'
+import {
+  AI_FILE_PREVIEW_MAX_BYTES,
+  readSftpFileContext
+} from '../ai/ai-chat-context-actions.js'
+import { createRemoteFileContextReader } from './remote-file-context-reader.js'
 import './sftp.styl'
 
 const e = window.translate
@@ -126,6 +133,12 @@ function remoteFileOperationStale () {
   error.name = 'AbortError'
   error.code = 'ABORT_ERR'
   return error
+}
+
+function isAuthoritativeRemoteMissingError (error) {
+  return error?.code === 'ENOENT' ||
+    error?.code === 'SFTP_NO_SUCH_FILE' ||
+    error?.code === 2
 }
 
 function isRemoteDirectory (stat) {
@@ -166,8 +179,8 @@ export default class Sftp extends Component {
     this.remoteFileOperations = new Set()
     this.remoteFileOperationSettlements = new Set()
     this.remoteFileOperationTail = Promise.resolve()
-    this.remoteFileDetachedClient = null
     this.remoteFileUnmounted = false
+    initializeRemoteFileGeneration(this)
     this.sftpSafetyProgressHandlers = new Map()
     this.sftpSafetyAdapter = createSftpTransactionAdapter({
       getSftp: () => this.sftp,
@@ -247,26 +260,8 @@ export default class Sftp extends Component {
   componentWillUnmount () {
     if (this.remoteFileUnmounted) return this.remoteFileDisposalPromise
     this.remoteFileUnmounted = true
-    const sftpClient = detachSftpEntryClient(this)
-    this.remoteFileDetachedClient = sftpClient
-    const remoteFileOperations = [...this.remoteFileOperations]
-    const remoteFileOperationSettlements = [
-      ...(this.remoteFileOperationSettlements || [])
-    ]
-    this.remoteFileOperations.clear()
-    this.remoteFileOperationSettlements?.clear()
-    this.remoteFileOperationBackends.clear()
-    const releases = remoteFileOperations.map(capability => {
-      try {
-        return capability.release()
-      } catch (error) {
-        return Promise.reject(error)
-      }
-    })
-    this.remoteFileDisposalPromise = Promise.allSettled([
-      ...releases,
-      ...remoteFileOperationSettlements
-    ]).then(() => destroySftpClient(sftpClient))
+    const drain = drainRemoteFileGeneration(this)
+    this.remoteFileDisposalPromise = drain.promise
     refs.remove(this.id)
     this.sftpSafetyProgressHandlers.clear()
     this.sftpSafetyAdapter.discardAllPreparedProofs()
@@ -1777,33 +1772,46 @@ export default class Sftp extends Component {
   }
 
   withRemoteFileOperation = async (options, work) => {
+    const generation = this.remoteFileGeneration ||
+      initializeRemoteFileGeneration(this)
+    if (!generation.accepting) throw remoteFileOperationStale()
     let settleOperation
     const operationSettled = new Promise(resolve => {
       settleOperation = resolve
     })
-    const operationSettlements = this.remoteFileOperationSettlements ||
-      (this.remoteFileOperationSettlements = new Set())
+    const operationSettlements = generation.settlements
     operationSettlements.add(operationSettled)
-    const previous = this.remoteFileOperationTail || Promise.resolve()
+    const previous = generation.tail || Promise.resolve()
     let unlock
-    this.remoteFileOperationTail = new Promise(resolve => {
+    generation.tail = new Promise(resolve => {
       unlock = resolve
     })
+    if (this.remoteFileGeneration === generation) {
+      this.remoteFileOperationTail = generation.tail
+    }
     try {
       await previous
       abortRemoteFileOperation(options?.signal)
       if (this.remoteFileUnmounted) throw remoteFileOperationUnmounted()
+      if (!generation.accepting ||
+        this.remoteFileGeneration !== generation) {
+        throw remoteFileOperationStale()
+      }
       const capability = await this.acquireRemoteFileOperation(options)
-      if (this.remoteFileUnmounted) {
-        const unmountedError = remoteFileOperationUnmounted()
+      if (this.remoteFileUnmounted ||
+        !generation.accepting ||
+        this.remoteFileGeneration !== generation) {
+        const staleError = this.remoteFileUnmounted
+          ? remoteFileOperationUnmounted()
+          : remoteFileOperationStale()
         try {
           await capability.release()
         } catch (releaseError) {
-          unmountedError.releaseError = releaseError
+          staleError.releaseError = releaseError
         }
-        throw unmountedError
+        throw staleError
       }
-      this.remoteFileOperations.add(capability)
+      generation.capabilities.add(capability)
       let result
       let workError
       try {
@@ -1814,7 +1822,7 @@ export default class Sftp extends Component {
       } catch (error) {
         workError = error
       }
-      this.remoteFileOperations.delete(capability)
+      generation.capabilities.delete(capability)
       let releaseError
       try {
         await capability.release()
@@ -1843,6 +1851,31 @@ export default class Sftp extends Component {
     return this.withRemoteFileOperation(
       { id: `editor-read:${path}` },
       backend => backend.readFile(path)
+    )
+  }
+
+  readRemoteFileContext = (
+    file,
+    { signal, maxBytes = AI_FILE_PREVIEW_MAX_BYTES } = {}
+  ) => {
+    if (this.type === 'ftp') {
+      return readSftpFileContext({
+        file,
+        sftp: this.sftp,
+        maxBytes
+      })
+    }
+    const operationPath = resolve(file?.path || '', file?.name || '')
+    return this.withRemoteFileOperation(
+      { id: `ai-preview:${operationPath}`, signal },
+      backend => readSftpFileContext({
+        file,
+        sftp: createRemoteFileContextReader(backend, {
+          signal,
+          maxPreviewBytes: maxBytes
+        }),
+        maxBytes
+      })
     )
   }
 
@@ -1923,7 +1956,7 @@ export default class Sftp extends Component {
           sshTerminalPid
         )
         if (!isCurrentSftpEntryRemoteTask(this, task)) {
-          await destroySftpClient(sftp)
+          await destroySftpEntryClientOnce(this, sftp)
           return
         }
         if (!sftp) {
@@ -1965,7 +1998,7 @@ export default class Sftp extends Component {
             }
           })
         if (!isCurrentSftpEntryRemoteTask(this, task)) {
-          await destroySftpClient(sftp)
+          await destroySftpEntryClientOnce(this, sftp)
           return
         }
         this.setState(() => {
@@ -1974,7 +2007,7 @@ export default class Sftp extends Component {
           }
         })
         if (!r) {
-          await destroySftpClient(sftp)
+          await destroySftpEntryClientOnce(this, sftp)
           if (!isCurrentSftpEntryRemoteTask(this, task)) return
           return this.props.editTab(tab.id, {
             sftpCreated: false
@@ -1996,9 +2029,8 @@ export default class Sftp extends Component {
       }
 
       if (!isCurrentSftpEntryRemoteTask(this, task)) {
-        if (sftp && sftp !== this.sftp &&
-          sftp !== this.remoteFileDetachedClient) {
-          await destroySftpClient(sftp)
+        if (sftp && sftp !== this.sftp) {
+          await destroySftpEntryClientOnce(this, sftp)
         }
         return
       }
@@ -2100,15 +2132,13 @@ export default class Sftp extends Component {
       }
     } catch (error) {
       if (!isCurrentSftpEntryRemoteTask(this, task)) {
-        if (sftp && sftp !== this.sftp &&
-          sftp !== this.remoteFileDetachedClient) {
-          await destroySftpClient(sftp)
+        if (sftp && sftp !== this.sftp) {
+          await destroySftpEntryClientOnce(this, sftp)
         }
         return
       }
-      if (sftp && sftp !== this.sftp &&
-        sftp !== this.remoteFileDetachedClient) {
-        await destroySftpClient(sftp)
+      if (sftp && sftp !== this.sftp) {
+        await destroySftpEntryClientOnce(this, sftp)
         if (!isCurrentSftpEntryRemoteTask(this, task)) return
         this.props.editTab(tab.id, {
           sftpCreated: false
@@ -2141,29 +2171,44 @@ export default class Sftp extends Component {
       return file
     }
     const linkPath = resolve(remotePath, name)
-    let realpath = await backend.readlink(linkPath)
-      .catch(e => {
-        console.debug(e)
-        return null
-      })
+    let realpath
+    try {
+      realpath = await backend.readlink(
+        linkPath,
+        signal ? { signal } : undefined
+      )
+    } catch (error) {
+      if (isAuthoritativeRemoteMissingError(error)) return null
+      throw error
+    }
     abortRemoteFileOperation(signal)
     if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
     if (!realpath) return null
     if (!isAbsPath(realpath)) {
       realpath = resolve(remotePath, realpath)
       abortRemoteFileOperation(signal)
-      realpath = await backend.realpath(realpath)
+      try {
+        realpath = await backend.realpath(
+          realpath,
+          signal ? { signal } : undefined
+        )
+      } catch (error) {
+        if (isAuthoritativeRemoteMissingError(error)) return null
+        throw error
+      }
       abortRemoteFileOperation(signal)
       if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
     }
-    const realFileInfo = await backend.stat(
-      realpath,
-      signal ? { signal } : undefined
-    ).catch(e => {
-      console.debug('seems a bad symbolic link')
-      console.debug(e)
-      return null
-    })
+    let realFileInfo
+    try {
+      realFileInfo = await backend.stat(
+        realpath,
+        signal ? { signal } : undefined
+      )
+    } catch (error) {
+      if (isAuthoritativeRemoteMissingError(error)) return null
+      throw error
+    }
     abortRemoteFileOperation(signal)
     if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
     if (!realFileInfo) return null
@@ -2300,13 +2345,17 @@ export default class Sftp extends Component {
   handleReloadRemoteSftp = async () => {
     this.sftpSafetyProgressHandlers.clear()
     this.sftpSafetyAdapter.discardAllPreparedProofs()
-    await disposeSftpEntryClient(this)
+    const drain = drainRemoteFileGeneration(this)
+    await drain.promise
+    if (!activateRemoteFileGeneration(this, drain.generation)) return
     this.setState({
       remoteLoading: true,
       remote: [],
       remoteFileTree: new Map()
     }, () => {
-      this.initRemoteAll()
+      if (isCurrentRemoteFileGeneration(this, drain.generation)) {
+        this.initRemoteAll()
+      }
     })
   }
 
@@ -2410,6 +2459,7 @@ export default class Sftp extends Component {
         'localList',
         'remoteList',
         'readRemoteFile',
+        'readRemoteFileContext',
         'createRemoteFile',
         'localDel',
         'remoteDel',

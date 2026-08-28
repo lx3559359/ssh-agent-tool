@@ -817,11 +817,13 @@ export default class FileSection extends React.Component {
       return
     }
     try {
-      const result = await readSftpFileContext({
-        file: selectedFiles[0],
-        sftp: this.props.sftp,
-        fsApi: window.fs
-      })
+      const selectedFile = selectedFiles[0]
+      const result = selectedFile.type === typeMap.remote
+        ? await this.props.readRemoteFileContext(selectedFile)
+        : await readSftpFileContext({
+          file: selectedFile,
+          fsApi: window.fs
+        })
       if (!result.ok) {
         message.warning(result.message)
         return

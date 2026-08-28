@@ -245,9 +245,22 @@ export async function readSelectedSftpFileContext ({
       message: '当前选择了多个文件，只允许一次分析单个文件。'
     }
   }
+  const file = files[0]
+  if (file.isDirectory) {
+    return readSftpFileContext({ file, fsApi })
+  }
+  if (file.type === REMOTE_TYPE &&
+    typeof sftpRef?.readRemoteFileContext === 'function') {
+    return sftpRef.readRemoteFileContext(file)
+  }
+  if (file.type === REMOTE_TYPE) {
+    return {
+      ok: false,
+      message: '当前连接不支持有界安全预览，请重新连接或升级客户端。'
+    }
+  }
   return readSftpFileContext({
-    file: files[0],
-    sftp: sftpRef?.sftp,
+    file,
     fsApi
   })
 }

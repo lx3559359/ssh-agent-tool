@@ -93,7 +93,7 @@ test('hidden SFTP preload failures are cleaned up without interrupting SSH', () 
   assert.notEqual(start, -1)
   assert.notEqual(end, -1)
   assert.match(body, /sftp && sftp !== this\.sftp/)
-  assert.match(body, /await destroySftpClient\(sftp\)/)
+  assert.match(body, /await destroySftpEntryClientOnce\(this, sftp\)/)
   assert.match(body, /sftpCreated: false/)
   assert.match(body, /if \(this\.isSftpVisible\(\)\) \{/)
   assert.match(body, /this\.onError\(this\.normalizeSftpError\(error\)\)/)
@@ -103,7 +103,7 @@ test('SFTP transport supplies a localized fallback for empty backend errors', ()
   const source = readClientCommonSource('sftp.js')
 
   assert.match(source, /window\.translate\('shellpilotSftpUnavailable'\)/)
-  assert.match(source, /new Error\(message\)/)
+  assert.match(source, /reconstructSftpError\(arg\.error, fallback\)/)
 })
 
 test('safe delete updates the list immediately and calibrates once in background', () => {

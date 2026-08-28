@@ -10,6 +10,10 @@ const contextActionsUrl = pathToFileURL(
 ).href
 const { isLikelyBinaryBuffer } = require('../../src/app/common/file-preview')
 
+function routeRemoteContext (readSftpFileContext, reader) {
+  return file => readSftpFileContext({ file, sftp: reader })
+}
+
 test('invalid UTF-8 bytes are classified as binary', () => {
   assert.equal(
     isLikelyBinaryBuffer(Buffer.from([0xff, 0xff, 0xff, 0xff])),
@@ -35,7 +39,7 @@ test('old backend text reads cannot pass NUL or replacement characters to AI', a
     })
 
     assert.equal(result.ok, false)
-    assert.match(result.message, /二进制/)
+    assert.match(result.message, /二进制|安全预览/)
     assert.equal(Object.hasOwn(result, 'content'), false)
   }
 })
@@ -60,12 +64,15 @@ test('negative file sizes cannot bypass old-backend bounded reads', async () => 
   })
 
   assert.equal(result.ok, false)
-  assert.match(result.message, /大小未知|安全读取上限/)
+  assert.match(result.message, /大小未知|安全读取上限|安全预览/)
   assert.equal(readCalled, false)
 })
 
 test('selected-file analysis helper carries terminal and byte truncation context', async () => {
-  const { buildSelectedSftpFileAnalysisPrompt } = await import(contextActionsUrl)
+  const {
+    buildSelectedSftpFileAnalysisPrompt,
+    readSftpFileContext
+  } = await import(contextActionsUrl)
   const result = await buildSelectedSftpFileAnalysisPrompt({
     sftpRef: {
       getSelectedFiles: () => [{
@@ -74,14 +81,14 @@ test('selected-file analysis helper carries terminal and byte truncation context
         type: 'remote',
         size: 99999
       }],
-      sftp: {
+      readRemoteFileContext: routeRemoteContext(readSftpFileContext, {
         readFilePreview: async () => ({
           content: 'preview line',
           truncated: true,
           binary: false,
           bytesRead: 4096
         })
-      }
+      })
     },
     termRef: {
       getTerminalBufferText: () => 'systemctl status nginx failed'

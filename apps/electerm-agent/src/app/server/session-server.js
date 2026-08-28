@@ -39,6 +39,7 @@ const { xmodemManager } = require('./xmodem')
 const { parseTerminalControlMessage } = require('./terminal-control-message')
 const { serializeRunCmdError } = require('./session-common')
 const { serializeTunnelError } = require('./ssh-tunnel-runtime')
+const { projectSftpError } = require('../common/sftp-error-contract')
 
 const {
   tokenElecterm,
@@ -388,10 +389,7 @@ if (type === 'rdp') {
             .catch(err => {
               ws.s({
                 id: uid,
-                error: {
-                  message: err.message,
-                  stack: err.stack
-                }
+                error: projectSftpError(err)
               })
             })
         }

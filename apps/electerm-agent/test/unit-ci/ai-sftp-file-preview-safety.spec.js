@@ -12,9 +12,14 @@ const sshContextUrl = pathToFileURL(
   path.join(root, 'src/client/components/ai/ai-ssh-context.js')
 ).href
 
+function routeRemoteContext (readSftpFileContext, reader) {
+  return file => readSftpFileContext({ file, sftp: reader })
+}
+
 test('selected remote file uses bounded preview without a full read', async () => {
   const {
     AI_FILE_PREVIEW_MAX_BYTES,
+    readSftpFileContext,
     readSelectedSftpFileContext
   } = await import(contextActionsUrl)
   let fullReadCalled = false
@@ -26,7 +31,7 @@ test('selected remote file uses bounded preview without a full read', async () =
         type: 'remote',
         size: 100000
       }],
-      sftp: {
+      readRemoteFileContext: routeRemoteContext(readSftpFileContext, {
         readFilePreview: async (filePath, maxBytes) => {
           assert.equal(filePath, '/var/log/large.log')
           assert.equal(maxBytes, AI_FILE_PREVIEW_MAX_BYTES)
@@ -40,7 +45,7 @@ test('selected remote file uses bounded preview without a full read', async () =
         readFile: async () => {
           fullReadCalled = true
         }
-      }
+      })
     }
   })
 
@@ -83,7 +88,10 @@ test('selected local file uses bounded preview without a full read', async () =>
 })
 
 test('binary preview is blocked without exposing its content', async () => {
-  const { readSelectedSftpFileContext } = await import(contextActionsUrl)
+  const {
+    readSftpFileContext,
+    readSelectedSftpFileContext
+  } = await import(contextActionsUrl)
   const result = await readSelectedSftpFileContext({
     sftpRef: {
       getSelectedFiles: () => [{
@@ -92,14 +100,14 @@ test('binary preview is blocked without exposing its content', async () => {
         type: 'remote',
         size: 50
       }],
-      sftp: {
+      readRemoteFileContext: routeRemoteContext(readSftpFileContext, {
         readFilePreview: async () => ({
           content: 'must-not-leak',
           truncated: false,
           binary: true,
           bytesRead: 50
         })
-      }
+      })
     }
   })
 
@@ -131,7 +139,10 @@ test('multiple selected files are rejected before any read', async () => {
 })
 
 test('preview read failures return a Chinese result instead of throwing', async () => {
-  const { readSelectedSftpFileContext } = await import(contextActionsUrl)
+  const {
+    readSftpFileContext,
+    readSelectedSftpFileContext
+  } = await import(contextActionsUrl)
   const result = await readSelectedSftpFileContext({
     sftpRef: {
       getSelectedFiles: () => [{
@@ -140,11 +151,11 @@ test('preview read failures return a Chinese result instead of throwing', async 
         type: 'remote',
         size: 10
       }],
-      sftp: {
+      readRemoteFileContext: routeRemoteContext(readSftpFileContext, {
         readFilePreview: async () => {
           throw new Error('connection lost')
         }
-      }
+      })
     }
   })
 

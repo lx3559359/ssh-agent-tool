@@ -18,6 +18,10 @@ const fileItemSource = fs.readFileSync(
   path.join(sftpRoot, 'file-item.jsx'),
   'utf8'
 )
+const contextActionsSource = fs.readFileSync(
+  path.resolve(sftpRoot, '../ai/ai-chat-context-actions.js'),
+  'utf8'
+)
 const entryAst = parser.parse(entrySource, {
   sourceType: 'module',
   plugins: ['jsx', 'classProperties', 'optionalChaining']
@@ -96,6 +100,30 @@ function remoteFileOperationStale () {
   error.name = 'AbortError'
   error.code = 'ABORT_ERR'
   return error
+}
+
+function isAuthoritativeRemoteMissingError (error) {
+  return error?.code === 'ENOENT' ||
+    error?.code === 'SFTP_NO_SUCH_FILE' ||
+    error?.code === 2
+}
+
+function initializeRemoteFileGeneration (entry) {
+  if (entry.remoteFileGeneration) return entry.remoteFileGeneration
+  const generation = {
+    id: 1,
+    accepting: entry.remoteFileUnmounted !== true,
+    capabilities: entry.remoteFileOperations || new Set(),
+    settlements: entry.remoteFileOperationSettlements || new Set(),
+    backends: entry.remoteFileOperationBackends || new Map(),
+    tail: entry.remoteFileOperationTail || Promise.resolve()
+  }
+  entry.remoteFileGeneration = generation
+  entry.remoteFileOperations = generation.capabilities
+  entry.remoteFileOperationSettlements = generation.settlements
+  entry.remoteFileOperationBackends = generation.backends
+  entry.remoteFileOperationTail = generation.tail
+  return generation
 }
 
 function createBackend (calls, name = 'backend', options = {}) {
@@ -197,6 +225,7 @@ function createEntryHarness ({ acquire, replaceTimer } = {}) {
   })
   installClassField(entry, 'withRemoteFileOperation', {
     abortRemoteFileOperation,
+    initializeRemoteFileGeneration,
     remoteFileOperationUnmounted
   })
   installClassField(entry, 'sftpList', {
@@ -220,7 +249,7 @@ function createEntryHarness ({ acquire, replaceTimer } = {}) {
         beginSftpEntryRemoteTask: lifecycle.beginSftpEntryRemoteTask,
         isCurrentSftpEntryRemoteTask: lifecycle.isCurrentSftpEntryRemoteTask,
         commitSftpEntryRemoteClient: lifecycle.commitSftpEntryRemoteClient,
-        destroySftpClient: lifecycle.destroySftpClient,
+        destroySftpEntryClientOnce: lifecycle.destroySftpEntryClientOnce,
         deepCopy: value => structuredClone(value),
         normalizeRemotePath: value => value,
         typeMap,
@@ -285,6 +314,151 @@ test('root file mode routes list metadata read and create through one capability
   })
 })
 
+test('root AI preview stays inside one bounded capability and releases last', async () => {
+  const calls = []
+  let released = false
+  const contents = Buffer.from('privileged preview')
+  const acquire = async ({ onIdentity }) => {
+    await onIdentity({
+      loginUsername: 'hik',
+      effectiveUid: '0',
+      effectiveUsername: 'root',
+      channel: 'pty-root'
+    })
+    return {
+      backend: {
+        async lstat (filePath) {
+          assert.equal(released, false)
+          calls.push(['lstat', filePath])
+          return { type: 'f', size: contents.length }
+        },
+        async readFileChunk (filePath, options) {
+          assert.equal(released, false)
+          calls.push(['readFileChunk', filePath, options.maxBytes])
+          return {
+            base64: contents.toString('base64'),
+            bytesRead: contents.length,
+            nextOffset: contents.length,
+            totalBytes: contents.length,
+            hasMore: false
+          }
+        }
+      },
+      release: async () => {
+        calls.push(['release'])
+        released = true
+      }
+    }
+  }
+  const { entry } = await createEntryHarness({ acquire })
+  const contextActions = await importModule(
+    'src/client/components/ai/ai-chat-context-actions.js'
+  )
+  const contextReader = await importModule(
+    'src/client/components/sftp/remote-file-context-reader.js'
+  )
+  installClassField(entry, 'readRemoteFileContext', {
+    AI_FILE_PREVIEW_MAX_BYTES: contextActions.AI_FILE_PREVIEW_MAX_BYTES,
+    createRemoteFileContextReader: contextReader.createRemoteFileContextReader,
+    readSftpFileContext: contextActions.readSftpFileContext,
+    resolve: (base, name) => `${base}/${name}`
+  })
+
+  const result = await entry.readRemoteFileContext({
+    name: 'app.log',
+    path: '/root',
+    type: 'remote',
+    size: contents.length
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.content, 'privileged preview')
+  assert.deepEqual(calls.map(call => call[0]), [
+    'lstat', 'readFileChunk', 'release'
+  ])
+})
+
+test('unmount waits for an active root AI preview before transport destroy', async () => {
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  const contextActions = await importModule(
+    'src/client/components/ai/ai-chat-context-actions.js'
+  )
+  const contextReader = await importModule(
+    'src/client/components/sftp/remote-file-context-reader.js'
+  )
+  const readGate = deferred()
+  const readStarted = deferred()
+  const readSettled = deferred()
+  const calls = []
+  let releasePromise
+  const acquire = async ({ onIdentity }) => {
+    await onIdentity({
+      loginUsername: 'hik',
+      effectiveUid: '0',
+      effectiveUsername: 'root',
+      channel: 'pty-root'
+    })
+    return {
+      backend: {
+        lstat: async () => ({ type: 'f', size: 4 }),
+        async readFileChunk () {
+          calls.push('read')
+          readStarted.resolve()
+          await readGate.promise
+          readSettled.resolve()
+          return {
+            base64: Buffer.from('text').toString('base64'),
+            bytesRead: 4,
+            nextOffset: 4,
+            totalBytes: 4,
+            hasMore: false
+          }
+        }
+      },
+      release: () => {
+        releasePromise ||= (async () => {
+          calls.push('release')
+          await readSettled.promise
+          calls.push('released')
+        })()
+        return releasePromise
+      }
+    }
+  }
+  const { entry } = await createEntryHarness({ acquire })
+  entry.sftp.destroy = async () => calls.push('destroy')
+  entry.sftpSafetyProgressHandlers = { clear: () => {} }
+  entry.sftpSafetyAdapter = { discardAllPreparedProofs: () => {} }
+  entry._sortCache = { clear: () => {} }
+  installClassField(entry, 'readRemoteFileContext', {
+    AI_FILE_PREVIEW_MAX_BYTES: contextActions.AI_FILE_PREVIEW_MAX_BYTES,
+    createRemoteFileContextReader: contextReader.createRemoteFileContextReader,
+    readSftpFileContext: contextActions.readSftpFileContext,
+    resolve: (base, name) => `${base}/${name}`
+  })
+  installClassMethod(entry, 'componentWillUnmount', {
+    refs: { remove: () => {} },
+    drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
+    disposeSftpEntryScheduling: () => {}
+  })
+
+  const reading = entry.readRemoteFileContext({
+    name: 'app.log',
+    path: '/root',
+    type: 'remote',
+    size: 4
+  })
+  await readStarted.promise
+  const disposal = entry.componentWillUnmount()
+  assert.deepEqual(calls, ['read', 'release'])
+  readGate.resolve()
+  await assert.rejects(reading, error => error.code === 'ABORT_ERR')
+  await disposal
+  assert.deepEqual(calls, ['read', 'release', 'released', 'destroy'])
+})
+
 test('one-second compensation refresh acquires a new backend and never captures a released backend', async () => {
   const calls = []
   const timers = []
@@ -331,22 +505,27 @@ test('one-second compensation refresh acquires a new backend and never captures 
 
 test('operation acquired after unmount releases once without running work or setting state', async () => {
   const pending = deferred()
+  const acquireStarted = deferred()
   let releaseCount = 0
   let workCount = 0
   const entry = {
     remoteFileOperations: new Set(),
     remoteFileUnmounted: false,
-    acquireRemoteFileOperation: () => pending.promise
+    acquireRemoteFileOperation: () => {
+      acquireStarted.resolve()
+      return pending.promise
+    }
   }
   installClassField(entry, 'withRemoteFileOperation', {
     abortRemoteFileOperation,
+    initializeRemoteFileGeneration,
     remoteFileOperationUnmounted
   })
 
   const operation = entry.withRemoteFileOperation({}, async () => {
     workCount += 1
   })
-  await Promise.resolve()
+  await acquireStarted.promise
   entry.remoteFileUnmounted = true
   pending.resolve({
     backend: {},
@@ -375,6 +554,7 @@ test('operation finishing after unmount rejects instead of triggering a refresh 
   }
   installClassField(entry, 'withRemoteFileOperation', {
     abortRemoteFileOperation,
+    initializeRemoteFileGeneration,
     remoteFileOperationUnmounted
   })
 
@@ -423,6 +603,7 @@ test('operation failure remains primary when release also fails', async () => {
   }
   installClassField(entry, 'withRemoteFileOperation', {
     abortRemoteFileOperation,
+    initializeRemoteFileGeneration,
     remoteFileOperationUnmounted
   })
 
@@ -527,6 +708,7 @@ test('an aborted queued operation never acquires a terminal capability', async (
   }
   installClassField(entry, 'withRemoteFileOperation', {
     abortRemoteFileOperation,
+    initializeRemoteFileGeneration,
     remoteFileOperationUnmounted
   })
 
@@ -585,6 +767,7 @@ test('remote link metadata forwards AbortSignal to stat', async () => {
   installClassField(entry, 'resolveRemoteLink', {
     abortRemoteFileOperation,
     isAbsPath: value => value.startsWith('/'),
+    isAuthoritativeRemoteMissingError,
     isCurrentSftpEntryRemoteTask: () => true,
     isRemoteDirectory: stat => stat.isDirectory,
     resolve: (base, name) => `${base}/${name}`
@@ -619,6 +802,7 @@ test('remote link abort after readlink never starts stat', async () => {
   installClassField(entry, 'resolveRemoteLink', {
     abortRemoteFileOperation,
     isAbsPath: value => value.startsWith('/'),
+    isAuthoritativeRemoteMissingError,
     isCurrentSftpEntryRemoteTask: () => true,
     isRemoteDirectory: stat => stat.isDirectory,
     resolve: (base, name) => `${base}/${name}`
@@ -636,6 +820,139 @@ test('remote link abort after readlink never starts stat', async () => {
 
   await assert.rejects(operation, error => error === abortCause)
   assert.equal(statCount, 0)
+})
+
+test('remote links swallow only authoritative missing errors', async () => {
+  const entry = {}
+  installClassField(entry, 'resolveRemoteLink', {
+    abortRemoteFileOperation,
+    isAbsPath: value => value.startsWith('/'),
+    isAuthoritativeRemoteMissingError,
+    isCurrentSftpEntryRemoteTask: () => true,
+    isRemoteDirectory: stat => stat.isDirectory,
+    resolve: (base, name) => `${base}/${name}`
+  })
+  for (const code of ['ENOENT', 'SFTP_NO_SUCH_FILE', 2]) {
+    const error = Object.assign(new Error('missing'), { code })
+    assert.equal(await entry.resolveRemoteLink({
+      name: 'link',
+      isSymbol: true
+    }, '/root', {
+      readlink: async () => { throw error }
+    }), null)
+  }
+  const statMissing = Object.assign(new Error('missing target'), {
+    code: 'ENOENT'
+  })
+  assert.equal(await entry.resolveRemoteLink({
+    name: 'link',
+    isSymbol: true
+  }, '/root', {
+    readlink: async () => '/root/missing',
+    stat: async () => { throw statMissing }
+  }), null)
+  assert.equal(await entry.resolveRemoteLink({
+    name: 'relative-link',
+    isSymbol: true
+  }, '/root', {
+    readlink: async () => 'missing',
+    realpath: async () => { throw statMissing }
+  }), null)
+})
+
+test('remote links rethrow abort capability transport protocol and permission errors', async () => {
+  const entry = {}
+  installClassField(entry, 'resolveRemoteLink', {
+    abortRemoteFileOperation,
+    isAbsPath: value => value.startsWith('/'),
+    isAuthoritativeRemoteMissingError,
+    isCurrentSftpEntryRemoteTask: () => true,
+    isRemoteDirectory: stat => stat.isDirectory,
+    resolve: (base, name) => `${base}/${name}`
+  })
+  const errors = [
+    Object.assign(new Error('aborted'), { name: 'AbortError', code: 'ABORT_ERR' }),
+    Object.assign(new Error('identity unavailable'), {
+      code: 'REMOTE_FILE_IDENTITY_UNAVAILABLE'
+    }),
+    Object.assign(new Error('capability released'), {
+      code: 'REMOTE_FILE_CAPABILITY_RELEASED'
+    }),
+    Object.assign(new Error('permission denied'), { code: 'EACCES' }),
+    Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }),
+    Object.assign(new Error('disconnected'), { code: 'ECONNRESET' }),
+    Object.assign(new Error('protocol failure'), { code: 'EPROTO' })
+  ]
+  for (const error of errors) {
+    await assert.rejects(entry.resolveRemoteLink({
+      name: 'link',
+      isSymbol: true
+    }, '/root', {
+      readlink: async () => { throw error }
+    }), candidate => candidate === error)
+    await assert.rejects(entry.resolveRemoteLink({
+      name: 'link',
+      isSymbol: true
+    }, '/root', {
+      readlink: async () => '/root/target',
+      stat: async () => { throw error }
+    }), candidate => candidate === error)
+    await assert.rejects(entry.resolveRemoteLink({
+      name: 'relative-link',
+      isSymbol: true
+    }, '/root', {
+      readlink: async () => 'target',
+      realpath: async () => { throw error }
+    }), candidate => candidate === error)
+  }
+})
+
+test('symlink metadata failure commits no partial remote list', async () => {
+  const permissionError = Object.assign(new Error('permission denied'), {
+    code: 'EACCES'
+  })
+  const calls = []
+  const acquire = async ({ onIdentity }) => {
+    await onIdentity({
+      loginUsername: 'hik',
+      effectiveUid: '0',
+      effectiveUsername: 'root',
+      channel: 'pty-root'
+    })
+    return {
+      backend: {
+        list: async () => [
+          { name: 'plain', type: 'f', size: 1 },
+          { name: 'link', type: 'l', size: 1 }
+        ],
+        readlink: async () => '/root/target',
+        stat: async () => { throw permissionError }
+      },
+      release: async () => calls.push('release')
+    }
+  }
+  const { entry } = await createEntryHarness({ acquire })
+  const original = [{ id: 'original', name: 'original' }]
+  entry.state.remote = original
+  installClassField(entry, 'resolveRemoteLink', {
+    abortRemoteFileOperation,
+    isAbsPath: value => value.startsWith('/'),
+    isAuthoritativeRemoteMissingError,
+    isCurrentSftpEntryRemoteTask: () => true,
+    isRemoteDirectory: stat => stat.isDirectory,
+    resolve: (base, name) => `${base}/${name}`
+  })
+  installClassField(entry, 'updateRemoteList', {
+    abortRemoteFileOperation,
+    isCurrentSftpEntryRemoteTask: () => true
+  })
+
+  await assert.rejects(
+    entry.remoteList(false, '/root', undefined, { rethrow: true }),
+    error => error === permissionError
+  )
+  assert.deepEqual(entry.state.remote, original)
+  assert.deepEqual(calls, ['release'])
 })
 
 test('unmount waits for an in-flight acquire to release before transport destroy', async () => {
@@ -665,12 +982,12 @@ test('unmount waits for an in-flight acquire to release before transport destroy
   }
   installClassField(entry, 'withRemoteFileOperation', {
     abortRemoteFileOperation,
+    initializeRemoteFileGeneration,
     remoteFileOperationUnmounted
   })
   installClassMethod(entry, 'componentWillUnmount', {
     refs: { remove: () => {} },
-    detachSftpEntryClient: lifecycle.detachSftpEntryClient,
-    destroySftpClient: lifecycle.destroySftpClient,
+    drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
     disposeSftpEntryScheduling: () => {}
   })
 
@@ -730,8 +1047,7 @@ test('unmount owns the captured remoteList transport and destroys it once', asyn
   entry.updateRemoteList = async remote => remote
   installClassMethod(entry, 'componentWillUnmount', {
     refs: { remove: () => {} },
-    detachSftpEntryClient: lifecycle.detachSftpEntryClient,
-    destroySftpClient: lifecycle.destroySftpClient,
+    drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
     disposeSftpEntryScheduling: () => {}
   })
 
@@ -791,8 +1107,7 @@ test('unmount waits for capability cleanup before destroying the detached transp
   }
   installClassMethod(entry, 'componentWillUnmount', {
     refs: { remove: () => immediateCalls.push('remove-ref') },
-    detachSftpEntryClient: lifecycle.detachSftpEntryClient,
-    destroySftpClient: lifecycle.destroySftpClient,
+    drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
     disposeSftpEntryScheduling: () => {
       immediateCalls.push('dispose-scheduling')
     }
@@ -848,8 +1163,7 @@ test('unmount destroys the detached transport after rejected and synchronous rel
   }
   installClassMethod(entry, 'componentWillUnmount', {
     refs: { remove: () => {} },
-    detachSftpEntryClient: lifecycle.detachSftpEntryClient,
-    destroySftpClient: lifecycle.destroySftpClient,
+    drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
     disposeSftpEntryScheduling: () => {}
   })
 
@@ -862,8 +1176,56 @@ test('unmount destroys the detached transport after rejected and synchronous rel
   assert.equal(destroyCount, 1)
 })
 
+test('overlapping reloads drain the old generation and only latest initializes', async () => {
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  const releaseGate = deferred()
+  const calls = []
+  const entry = {
+    sftp: { destroy: async () => calls.push('destroy') },
+    remoteFileUnmounted: false,
+    remoteFileOperations: new Set([{
+      async release () {
+        calls.push('release')
+        await releaseGate.promise
+        calls.push('released')
+      }
+    }]),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationBackends: new Map(),
+    sftpSafetyProgressHandlers: { clear: () => calls.push('clear') },
+    sftpSafetyAdapter: {
+      discardAllPreparedProofs: () => calls.push('discard')
+    },
+    setState (update, callback) {
+      calls.push(['state', update.remoteLoading])
+      callback?.()
+    },
+    initRemoteAll: () => calls.push('init')
+  }
+  installClassField(entry, 'handleReloadRemoteSftp', {
+    activateRemoteFileGeneration: lifecycle.activateRemoteFileGeneration,
+    drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
+    isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration
+  })
+
+  const firstReload = entry.handleReloadRemoteSftp()
+  const latestReload = entry.handleReloadRemoteSftp()
+  await Promise.resolve()
+  assert.deepEqual(calls, ['clear', 'discard', 'release', 'clear', 'discard'])
+  releaseGate.resolve()
+  await Promise.all([firstReload, latestReload])
+
+  assert.deepEqual(calls, [
+    'clear', 'discard', 'release', 'clear', 'discard', 'released', 'destroy',
+    ['state', true], 'init'
+  ])
+})
+
 test('overlapping lists release both capabilities and only the latest request commits state', async () => {
   const firstList = deferred()
+  const firstListStarted = deferred()
   const calls = []
   let acquireCount = 0
   let leaseActive = false
@@ -872,9 +1234,13 @@ test('overlapping lists release both capabilities and only the latest request co
     leaseActive = true
     const index = ++acquireCount
     const capability = createBackend(calls, `cap-${index}`, {
-      list: () => index === 1
-        ? firstList.promise
-        : [{ name: 'new', type: 'f', size: 3 }]
+      list: () => {
+        if (index === 1) {
+          firstListStarted.resolve()
+          return firstList.promise
+        }
+        return [{ name: 'new', type: 'f', size: 3 }]
+      }
     })
     await onIdentity({
       loginUsername: 'hik',
@@ -895,7 +1261,7 @@ test('overlapping lists release both capabilities and only the latest request co
   entry.updateRemoteList = async remote => remote
 
   const oldRequest = entry.remoteList(false, '/root/old')
-  await Promise.resolve()
+  await firstListStarted.promise
   const newRequest = entry.remoteList(false, '/root/new')
   await Promise.resolve()
   assert.equal(acquireCount, 1)
@@ -915,6 +1281,12 @@ test('routing source exposes only fixed backend operations to file items', () =>
   const filePropsStart = entrySource.indexOf('getFileProps = (file, type) =>')
   const filePropsEnd = entrySource.indexOf('\n  renderEmptyFile', filePropsStart)
   const fileProps = entrySource.slice(filePropsStart, filePropsEnd)
+  const askAiStart = fileItemSource.indexOf('askAiAboutFile = async')
+  const askAiEnd = fileItemSource.indexOf(
+    '\n  transferOrEnterDirectory = async',
+    askAiStart
+  )
+  const askAi = fileItemSource.slice(askAiStart, askAiEnd)
 
   assert.match(entrySource, /sftpList = async \(backend, remotePath/)
   assert.match(entrySource, /await backend\.list\(\s*remotePath/)
@@ -926,6 +1298,10 @@ test('routing source exposes only fixed backend operations to file items', () =>
   assert.match(entrySource, /remoteDel = async \(file, backend\)/)
   assert.match(fileProps, /'readRemoteFile'/)
   assert.match(fileProps, /'createRemoteFile'/)
+  assert.match(fileProps, /'readRemoteFileContext'/)
+  assert.match(askAi, /this\.props\.readRemoteFileContext/)
+  assert.doesNotMatch(askAi, /this\.props\.sftp/)
+  assert.doesNotMatch(contextActionsSource, /sftpRef\?\.sftp/)
 
   assert.doesNotMatch(fileItemSource, /props\.sftp\.(?:readFile|mkdir|touch)/)
   assert.match(fileItemSource, /this\.props\.readRemoteFile\(path\)/)

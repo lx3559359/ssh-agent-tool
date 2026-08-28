@@ -8,6 +8,10 @@ const moduleUrl = pathToFileURL(
   path.resolve(__dirname, '../../src/client/components/ai/ai-chat-context-actions.js')
 ).href
 
+function routeRemoteContext (readSftpFileContext, reader) {
+  return file => readSftpFileContext({ file, sftp: reader })
+}
+
 test('AI composer keeps useful context actions while hiding unfinished MCP and CLI entries', () => {
   const source = fs.readFileSync(
     path.resolve(__dirname, '../../src/client/components/ai/ai-chat.jsx'),
@@ -62,6 +66,7 @@ test('AI chat context actions read current terminal selection and output', async
 test('AI chat context actions read the current selected remote SFTP file', async () => {
   const {
     getActiveSftpRef,
+    readSftpFileContext,
     readSelectedSftpFileContext
   } = await import(moduleUrl)
 
@@ -73,14 +78,14 @@ test('AI chat context actions read the current selected remote SFTP file', async
       size: 100,
       isDirectory: false
     }],
-    sftp: {
+    readRemoteFileContext: routeRemoteContext(readSftpFileContext, {
       readFilePreview: async (filePath) => ({
         content: `remote:${filePath}`,
         truncated: false,
         binary: false,
         bytesRead: Buffer.byteLength(`remote:${filePath}`)
       })
-    }
+    })
   }
   const refs = {
     get: (key) => key === 'sftp-tab-1' ? sftpRef : null
@@ -114,6 +119,7 @@ test('AI chat context actions read the current selected remote SFTP file', async
 
 test('AI chat context actions read selected compressed SFTP text members', async () => {
   const {
+    readSftpFileContext,
     readSelectedSftpFileContext
   } = await import(moduleUrl)
 
@@ -127,7 +133,7 @@ test('AI chat context actions read selected compressed SFTP text members', async
         size: 2048,
         isDirectory: false
       }],
-      sftp: {
+      readRemoteFileContext: routeRemoteContext(readSftpFileContext, {
         listArchive: async (filePath) => {
           assert.equal(filePath, '/var/log/logs.zip')
           return {
@@ -154,7 +160,7 @@ test('AI chat context actions read selected compressed SFTP text members', async
         readFilePreview: async () => {
           previewCalled = true
         }
-      }
+      })
     }
   })
 

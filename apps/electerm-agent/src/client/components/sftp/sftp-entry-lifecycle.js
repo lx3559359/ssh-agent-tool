@@ -58,8 +58,106 @@ export async function destroySftpClient (client) {
   }
 }
 
+export function destroySftpEntryClientOnce (entry, client) {
+  if (!client || (typeof client !== 'object' && typeof client !== 'function')) {
+    return Promise.resolve(false)
+  }
+  const disposals = entry.sftpClientDisposals ||
+    (entry.sftpClientDisposals = new WeakMap())
+  if (disposals.has(client)) return disposals.get(client)
+  const disposal = destroySftpClient(client)
+  disposals.set(client, disposal)
+  return disposal
+}
+
 function nextEpoch (value) {
   return Number.isSafeInteger(value) && value >= 0 ? value + 1 : 1
+}
+
+function createRemoteFileGeneration (entry, accepting) {
+  const generation = {
+    id: nextEpoch(entry.remoteFileGenerationSequence),
+    accepting,
+    capabilities: new Set(),
+    settlements: new Set(),
+    backends: new Map(),
+    tail: Promise.resolve()
+  }
+  entry.remoteFileGenerationSequence = generation.id
+  entry.remoteFileGeneration = generation
+  entry.remoteFileOperations = generation.capabilities
+  entry.remoteFileOperationSettlements = generation.settlements
+  entry.remoteFileOperationBackends = generation.backends
+  entry.remoteFileOperationTail = generation.tail
+  return generation
+}
+
+function ensureRemoteFileGeneration (entry) {
+  if (entry.remoteFileGeneration) return entry.remoteFileGeneration
+  const generation = {
+    id: nextEpoch(entry.remoteFileGenerationSequence),
+    accepting: entry.remoteFileUnmounted !== true,
+    capabilities: entry.remoteFileOperations || new Set(),
+    settlements: entry.remoteFileOperationSettlements || new Set(),
+    backends: entry.remoteFileOperationBackends || new Map(),
+    tail: entry.remoteFileOperationTail || Promise.resolve()
+  }
+  entry.remoteFileGenerationSequence = generation.id
+  entry.remoteFileGeneration = generation
+  entry.remoteFileOperations = generation.capabilities
+  entry.remoteFileOperationSettlements = generation.settlements
+  entry.remoteFileOperationBackends = generation.backends
+  entry.remoteFileOperationTail = generation.tail
+  return generation
+}
+
+export function initializeRemoteFileGeneration (entry) {
+  return ensureRemoteFileGeneration(entry)
+}
+
+export function isCurrentRemoteFileGeneration (entry, generation) {
+  return Boolean(generation) &&
+    entry.remoteFileGeneration === generation
+}
+
+export function activateRemoteFileGeneration (entry, generation) {
+  if (entry.remoteFileUnmounted ||
+    !isCurrentRemoteFileGeneration(entry, generation)) {
+    return false
+  }
+  generation.accepting = true
+  return true
+}
+
+export function drainRemoteFileGeneration (entry) {
+  const generation = ensureRemoteFileGeneration(entry)
+  generation.accepting = false
+  const client = detachSftpEntryClient(entry)
+  const nextGeneration = createRemoteFileGeneration(entry, false)
+  const capabilities = [...generation.capabilities]
+  const settlements = [...generation.settlements]
+  generation.capabilities.clear()
+  generation.settlements.clear()
+  generation.backends.clear()
+  const releases = capabilities.map(capability => {
+    try {
+      return capability.release()
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  })
+  const settled = Promise.allSettled([...releases, ...settlements])
+  const previousDrain = entry.remoteFileGenerationDrainTail ||
+    Promise.resolve()
+  const promise = Promise.resolve(previousDrain)
+    .then(() => settled)
+    .then(() => destroySftpEntryClientOnce(entry, client))
+  entry.remoteFileGenerationDrainTail = promise.then(() => undefined)
+  return Object.freeze({
+    client,
+    generation: nextGeneration,
+    promise
+  })
 }
 
 function captureLifecycle (entry) {
@@ -96,7 +194,9 @@ export function isCurrentSftpEntryRemoteTask (entry, token) {
 
 export async function commitSftpEntryRemoteClient (entry, token, client) {
   if (!isCurrentSftpEntryRemoteTask(entry, token)) {
-    if (client && client !== entry.sftp) await destroySftpClient(client)
+    if (client && client !== entry.sftp) {
+      await destroySftpEntryClientOnce(entry, client)
+    }
     return false
   }
   entry.sftp = client
@@ -111,28 +211,36 @@ export function detachSftpEntryClient (entry) {
 }
 
 export function disposeSftpEntryClient (entry) {
-  return destroySftpClient(detachSftpEntryClient(entry))
+  return drainRemoteFileGeneration(entry).promise
 }
 
-export function reconnectSftpEntryRemote (entry) {
-  const disposed = disposeSftpEntryClient(entry)
+export async function reconnectSftpEntryRemote (entry) {
+  const drain = drainRemoteFileGeneration(entry)
+  await drain.promise
+  if (!activateRemoteFileGeneration(entry, drain.generation)) return undefined
   const token = captureLifecycle(entry)
-  return Promise.resolve(disposed).then(() => (
-    isCurrentLifecycle(entry, token) ? entry.initRemoteAll() : undefined
-  ))
+  const remote = await entry.initRemoteAll()
+  return isCurrentLifecycle(entry, token) &&
+    isCurrentRemoteFileGeneration(entry, drain.generation)
+    ? remote
+    : undefined
 }
 
 export async function bindSftpEntryRemoteSession (entry, binding = {}) {
   const nextGeneration = String(binding.sshSessionGeneration || '').trim()
   const nextTerminalPid = String(binding.sshTerminalPid || '').trim()
-  const disposed = disposeSftpEntryClient(entry)
+  const drain = drainRemoteFileGeneration(entry)
+  await drain.promise
+  if (!isCurrentRemoteFileGeneration(entry, drain.generation) ||
+    entry.remoteFileUnmounted) {
+    return undefined
+  }
   entry.terminalId = binding.terminalId
   entry.port = binding.port
   entry.sshSessionGeneration = nextGeneration
   entry.sshTerminalPid = nextTerminalPid
+  if (!activateRemoteFileGeneration(entry, drain.generation)) return undefined
   const token = captureLifecycle(entry)
-  await disposed
-  if (!isCurrentLifecycle(entry, token)) return undefined
   const remote = entry.shouldRenderRemote()
     ? await entry.initRemoteAll()
     : undefined

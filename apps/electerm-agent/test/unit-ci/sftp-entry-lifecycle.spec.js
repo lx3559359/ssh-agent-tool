@@ -22,9 +22,74 @@ async function loadModule () {
 
 function deferred () {
   let settle
-  const promise = new Promise(resolve => { settle = resolve })
-  return { promise, resolve: settle }
+  let rejectDeferred
+  const promise = new Promise((resolve, reject) => {
+    settle = resolve
+    rejectDeferred = reject
+  })
+  return { promise, resolve: settle, reject: rejectDeferred }
 }
+
+test('generation drain releases active capabilities before transport destroy', async () => {
+  const {
+    activateRemoteFileGeneration,
+    drainRemoteFileGeneration
+  } = await loadModule()
+  const releaseGate = deferred()
+  const calls = []
+  const entry = {
+    sftp: { destroy: async () => calls.push('destroy') },
+    sftpLifecycleEpoch: 7,
+    remoteFileOperations: new Set([{
+      async release () {
+        calls.push('release')
+        await releaseGate.promise
+        calls.push('released')
+      }
+    }]),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationBackends: new Map(),
+    remoteFileOperationTail: Promise.resolve()
+  }
+
+  const drain = drainRemoteFileGeneration(entry)
+  assert.equal(entry.sftp, null)
+  assert.equal(entry.sftpLifecycleEpoch, 8)
+  assert.equal(drain.generation.accepting, false)
+  assert.deepEqual(calls, ['release'])
+  releaseGate.resolve()
+  await drain.promise
+  assert.deepEqual(calls, ['release', 'released', 'destroy'])
+  assert.equal(activateRemoteFileGeneration(entry, drain.generation), true)
+  assert.equal(drain.generation.accepting, true)
+})
+
+test('generation drain rejection still destroys once and latest drain wins', async () => {
+  const {
+    activateRemoteFileGeneration,
+    drainRemoteFileGeneration
+  } = await loadModule()
+  const releaseGate = deferred()
+  let destroyCount = 0
+  const entry = {
+    sftp: { destroy: async () => { destroyCount += 1 } },
+    remoteFileOperations: new Set([{
+      release: () => releaseGate.promise
+    }]),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationBackends: new Map(),
+    remoteFileOperationTail: Promise.resolve()
+  }
+
+  const oldDrain = drainRemoteFileGeneration(entry)
+  const latestDrain = drainRemoteFileGeneration(entry)
+  releaseGate.reject(new Error('root cleanup failed'))
+  await Promise.all([oldDrain.promise, latestDrain.promise])
+
+  assert.equal(destroyCount, 1)
+  assert.equal(activateRemoteFileGeneration(entry, oldDrain.generation), false)
+  assert.equal(activateRemoteFileGeneration(entry, latestDrain.generation), true)
+})
 
 test('unexpected SFTP packets retry once per connection attempt', async () => {
   const { shouldRetryUnexpectedSftpPacket } = await loadModule()
@@ -117,6 +182,35 @@ test('remote reconnect destroys the stale SFTP transport before recreating it', 
   ])
 })
 
+test('remote reconnect drains active root cleanup before destroy and init', async () => {
+  const { reconnectSftpEntryRemote } = await loadModule()
+  const releaseGate = deferred()
+  const calls = []
+  const entry = {
+    sftp: { destroy: async () => calls.push('destroy') },
+    remoteFileOperations: new Set([{
+      async release () {
+        calls.push('release')
+        await releaseGate.promise
+        calls.push('released')
+      }
+    }]),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationBackends: new Map(),
+    initRemoteAll: () => {
+      calls.push('init')
+      return 'ready'
+    }
+  }
+
+  const reconnecting = reconnectSftpEntryRemote(entry)
+  await Promise.resolve()
+  assert.deepEqual(calls, ['release'])
+  releaseGate.resolve()
+  assert.equal(await reconnecting, 'ready')
+  assert.deepEqual(calls, ['release', 'released', 'destroy', 'init'])
+})
+
 test('binding a new SSH generation destroys the old SFTP transport first', async () => {
   const { bindSftpEntryRemoteSession } = await loadModule()
   const calls = []
@@ -143,6 +237,47 @@ test('binding a new SSH generation destroys the old SFTP transport first', async
   assert.deepEqual(calls, [
     'destroy',
     ['init', null, 'generation-new'],
+    'local'
+  ])
+})
+
+test('session rebind survives rejected root cleanup and initializes after destroy', async () => {
+  const { bindSftpEntryRemoteSession } = await loadModule()
+  const releaseGate = deferred()
+  const calls = []
+  const entry = {
+    sftp: { destroy: async () => calls.push('destroy') },
+    remoteFileOperations: new Set([{
+      async release () {
+        calls.push('release')
+        await releaseGate.promise
+        throw new Error('staging cleanup failed')
+      }
+    }]),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationBackends: new Map(),
+    shouldRenderRemote: () => true,
+    initRemoteAll: () => {
+      calls.push(['init', entry.sshSessionGeneration])
+      return 'ready'
+    },
+    initLocalAll: () => calls.push('local')
+  }
+
+  const binding = bindSftpEntryRemoteSession(entry, {
+    terminalId: 'tab-new',
+    port: 41003,
+    sshSessionGeneration: 'generation-new',
+    sshTerminalPid: '1003'
+  })
+  await Promise.resolve()
+  assert.deepEqual(calls, ['release'])
+  releaseGate.resolve()
+  assert.equal(await binding, 'ready')
+  assert.deepEqual(calls, [
+    'release',
+    'destroy',
+    ['init', 'generation-new'],
     'local'
   ])
 })
@@ -225,8 +360,10 @@ test('new session binding wins while the old transport destroy is pending', asyn
     sshTerminalPid: '1003'
   })
 
-  assert.equal(await newBinding, 'generation-new')
+  await Promise.resolve()
+  assert.equal(calls.some(call => Array.isArray(call) && call[0] === 'init'), false)
   oldDestroyed.resolve()
+  assert.equal(await newBinding, 'generation-new')
   assert.equal(await oldBinding, undefined)
   assert.equal(entry.terminalId, 'tab-new')
   assert.equal(entry.port, 41003)
@@ -251,7 +388,7 @@ test('SFTP entry validates the latest lifecycle before transport and list writes
   assert.match(method, /beginSftpEntryRemoteTask\(this\)/)
   assert.match(
     method,
-    /sftp = await Client\([\s\S]{0,300}!isCurrentSftpEntryRemoteTask\(this, task\)[\s\S]{0,120}destroySftpClient\(sftp\)/
+    /sftp = await Client\([\s\S]{0,300}!isCurrentSftpEntryRemoteTask\(this, task\)[\s\S]{0,160}destroySftpEntryClientOnce\(this, sftp\)/
   )
   assert.match(
     method,

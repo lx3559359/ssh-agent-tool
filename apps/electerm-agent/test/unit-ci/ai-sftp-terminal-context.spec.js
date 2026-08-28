@@ -11,6 +11,10 @@ const contextActionsModuleUrl = pathToFileURL(
   path.join(root, 'src/client/components/ai/ai-chat-context-actions.js')
 ).href
 
+function routeRemoteContext (readSftpFileContext, reader) {
+  return file => readSftpFileContext({ file, sftp: reader })
+}
+
 test('builds SFTP file analysis prompt with terminal context', async () => {
   const {
     buildSftpFileTerminalAnalysisPrompt
@@ -50,18 +54,19 @@ test('truncates large SFTP file content before sending to AI', async () => {
 
 test('builds selected SFTP file analysis prompt from file and terminal refs', async () => {
   const {
-    buildSelectedSftpFileAnalysisPrompt
+    buildSelectedSftpFileAnalysisPrompt,
+    readSftpFileContext
   } = await import(contextActionsModuleUrl)
 
   const sftpRef = {
-    sftp: {
+    readRemoteFileContext: routeRemoteContext(readSftpFileContext, {
       readFilePreview: async filePath => ({
         content: `content from ${filePath}`,
         truncated: false,
         binary: false,
         bytesRead: Buffer.byteLength(`content from ${filePath}`)
       })
-    },
+    }),
     getSelectedFiles: () => [
       {
         type: 'remote',

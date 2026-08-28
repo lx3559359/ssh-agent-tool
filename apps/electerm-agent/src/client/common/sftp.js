@@ -12,6 +12,7 @@ import {
   prepareSftpCancelableCall
 } from './sftp-operation-cancellation'
 import { bindSftpTransportSession } from './sftp-session-generation.js'
+import { reconstructSftpError } from './sftp-error.js'
 
 const transferKeys = Object.keys(transferTypeMap)
 
@@ -97,8 +98,7 @@ class Sftp {
               const fallback = typeof window !== 'undefined' && window.translate
                 ? window.translate('shellpilotSftpUnavailable')
                 : 'SFTP is unavailable'
-              const message = String(arg.error.message || '').trim() || fallback
-              return reject(new Error(message))
+              return reject(reconstructSftpError(arg.error, fallback))
             }
             if (func === 'connect' && this.type !== 'ftp' &&
               (arg.data?.sshSessionGeneration !== generation ||
