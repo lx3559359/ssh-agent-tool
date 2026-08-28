@@ -7,6 +7,7 @@ const parser = require('@babel/parser')
 const traverse = require('@babel/traverse').default
 const generate = require('@babel/generator').default
 const { pathToFileURL } = require('node:url')
+const { importModule } = require('./helpers/import-esm')
 
 const agentRoot = path.resolve(__dirname, '../..')
 
@@ -31,7 +32,7 @@ function topLevelFunction (name, dependencies = {}) {
   return vm.runInNewContext(`(${generate(declaration).code})`, dependencies)
 }
 
-function installClassField (entry, name) {
+function installClassField (entry, name, dependencies = {}) {
   let initializer
   traverse(entryAst, {
     ClassProperty (nodePath) {
@@ -44,7 +45,7 @@ function installClassField (entry, name) {
     (function installClassField () {
       return (${generate(initializer).code})
     }).call(__entry)
-  `, { __entry: entry, resolveRemoteFileStatus })
+  `, { __entry: entry, resolveRemoteFileStatus, ...dependencies })
   return entry[name]
 }
 
@@ -60,7 +61,7 @@ function createEntryStateHarness () {
       },
       remoteFileStatus: 'idle'
     },
-    activeRootFileCapabilities: new Set(),
+    activeRemoteFileLeases: new Set(),
     setState (update) {
       const patch = typeof update === 'function'
         ? update(this.state)
@@ -75,6 +76,33 @@ function formatTemplate (translate, key, variables) {
     (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)),
     translate(key)
   )
+}
+
+function deferred () {
+  let resolveDeferred
+  let rejectDeferred
+  const promise = new Promise((resolve, reject) => {
+    resolveDeferred = resolve
+    rejectDeferred = reject
+  })
+  return {
+    promise,
+    resolve: resolveDeferred,
+    reject: rejectDeferred
+  }
+}
+
+function createAsyncEntryHarness () {
+  const entry = createEntryStateHarness()
+  entry.props.tab = { id: 'tab-1', username: 'hik' }
+  entry.sftp = { id: 'sftp-1' }
+  entry.sftpLifecycleEpoch = 1
+  entry.sshSessionGeneration = 'generation-1'
+  entry.sshTerminalPid = '4242'
+  entry.remoteFileOperationSequence = 0
+  entry.remoteFileUnmounted = false
+  entry.activeRemoteFileLeases = new Set()
+  return entry
 }
 
 test('remote panel shows login and effective file identities without rewriting the tab', () => {
@@ -124,59 +152,272 @@ test('remote file status is derived from live leases and acquisition availabilit
   }), 'busy')
 })
 
-test('root lease busy state follows capability acquisition and release', async () => {
-  const entry = createEntryStateHarness()
-  installClassField(entry, 'publishRemoteFileCapabilityIdentity')
-  installClassField(entry, 'clearRemoteFileCapabilityIdentity')
-  installClassField(entry, 'releaseRemoteFileCapability')
-  let releases = 0
+test('entry becomes busy from the real async lease callback before identity resolves', async () => {
+  const entry = createAsyncEntryHarness()
+  const probeGate = deferred()
+  const leaseObserved = deferred()
+  let leaseCallback
+  const acquireRemoteFileCapability = async options => {
+    leaseCallback = options.onLeaseState
+    options.onLeaseState({ state: 'acquired', operationId: options.operationId })
+    leaseObserved.resolve()
+    await probeGate.promise
+    options.onIdentity({
+      loginUsername: 'hik',
+      effectiveUid: '0',
+      effectiveUsername: 'root',
+      channel: 'pty-root'
+    })
+    return {
+      channel: 'pty-root',
+      backend: {},
+      async release () {
+        options.onLeaseState({
+          state: 'released',
+          operationId: options.operationId
+        })
+        return true
+      }
+    }
+  }
+  installClassField(entry, 'publishRemoteFileLeaseState')
+  installClassField(entry, 'publishRemoteFileIdentity')
+  installClassField(entry, 'publishRemoteFileIdentityUnavailable')
+  installClassField(entry, 'acquireRemoteFileOperation', {
+    acquireRemoteFileCapability,
+    refs: { get: () => ({}) },
+    isCurrentSftpEntryRemoteTask: () => true,
+    remoteFileOperationStale: () => Object.assign(
+      new Error('stale'),
+      { name: 'AbortError', code: 'ABORT_ERR' }
+    )
+  })
+
+  let resolved = false
+  const acquiring = entry.acquireRemoteFileOperation({ id: 'delayed-ui' })
+    .then(capability => {
+      resolved = true
+      return capability
+    })
+  await leaseObserved.promise
+  assert.equal(resolved, false)
+  assert.equal(entry.state.remoteFileStatus, 'busy')
+  assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
+
+  probeGate.resolve()
+  const capability = await acquiring
+  assert.equal(entry.state.remoteFileIdentity.channel, 'pty-root')
+  assert.equal(entry.state.remoteFileStatus, 'busy')
+  await capability.release()
+  assert.equal(entry.state.remoteFileStatus, 'idle')
+  assert.equal(typeof leaseCallback, 'function')
+})
+
+test('entry receives the production lease callback before a delayed native probe resolves', async () => {
+  const entry = createAsyncEntryHarness()
+  entry.props.tab = {
+    id: 'tab-1',
+    host: 'prod.example.com',
+    port: 22,
+    username: 'hik',
+    type: 'ssh',
+    hostKeyFingerprint: 'SHA256:one'
+  }
+  entry.sftp = {
+    id: 'sftp-1',
+    terminalId: 'tab-1',
+    port: 41001,
+    type: 'sftp',
+    sshSessionGeneration: 'generation-1',
+    sshTerminalPid: 4242
+  }
+  const probeGate = deferred()
+  const probeStarted = deferred()
+  let releaseCount = 0
+  const endpoint = {
+    tabId: 'tab-1',
+    host: 'prod.example.com',
+    port: 22,
+    username: 'hik',
+    connectionUsername: 'hik',
+    pid: 'tab-1',
+    terminalPid: 'tab-1',
+    sshTerminalPid: 4242,
+    sshSessionGeneration: 'generation-1',
+    sessionType: 'ssh',
+    hostKeyFingerprint: 'SHA256:one'
+  }
+  const terminal = {
+    getTerminalSafetyEndpoint: () => endpoint,
+    async acquireRemoteFilePtyTask () {
+      return Object.freeze({
+        async execute (request) {
+          assert.equal(request.operation, 'probe')
+          probeStarted.resolve()
+          await probeGate.promise
+          return {
+            exitCode: 0,
+            kind: 'probe',
+            identity: { uid: '1000', username: 'hik' },
+            capabilities: {
+              sh: true,
+              stat: true,
+              base64: true,
+              sha256: true
+            }
+          }
+        },
+        async release () {
+          releaseCount += 1
+          return true
+        }
+      })
+    }
+  }
+  const { acquireRemoteFileCapability } = await importModule(
+    'src/client/components/sftp/remote-file-capability.js'
+  )
+  installClassField(entry, 'publishRemoteFileLeaseState')
+  installClassField(entry, 'publishRemoteFileIdentity')
+  installClassField(entry, 'publishRemoteFileIdentityUnavailable')
+  installClassField(entry, 'acquireRemoteFileOperation', {
+    acquireRemoteFileCapability,
+    refs: { get: () => terminal },
+    isCurrentSftpEntryRemoteTask: () => true,
+    remoteFileOperationStale: () => new Error('stale')
+  })
+
+  let resolved = false
+  const acquiring = entry.acquireRemoteFileOperation({ id: 'native-delayed-ui' })
+    .then(capability => {
+      resolved = true
+      return capability
+    })
+  await probeStarted.promise
+  assert.equal(resolved, false)
+  assert.equal(entry.state.remoteFileStatus, 'busy')
+  assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
+
+  probeGate.resolve()
+  const capability = await acquiring
+  assert.equal(releaseCount, 1)
+  assert.equal(entry.state.remoteFileStatus, 'idle')
+  assert.equal(entry.state.remoteFileIdentity.channel, 'sftp')
+  assert.equal(await capability.release(), true)
+  assert.equal(releaseCount, 1)
+})
+
+test('transfer session keeps lease busy until its real async release settles', async () => {
+  const entry = createAsyncEntryHarness()
+  const releaseGate = deferred()
   const capability = {
+    channel: 'pty-root',
+    runtimeIdentity: {
+      channel: 'pty-root',
+      effectiveUid: '0',
+      effectiveUsername: 'root'
+    },
+    backend: {},
     async release () {
-      releases += 1
+      await releaseGate.promise
+      entry.publishRemoteFileLeaseState({
+        state: 'released',
+        operationId: 'transfer:transfer-1'
+      })
       return true
     }
   }
+  installClassField(entry, 'publishRemoteFileLeaseState')
+  entry.publishRemoteFileLeaseState({
+    state: 'acquired',
+    operationId: 'transfer:transfer-1'
+  })
+  entry.acquireRemoteFileOperation = async () => capability
+  entry.remoteFileGeneration = {
+    accepting: true,
+    capabilities: new Set(),
+    settlements: new Set()
+  }
+  installClassField(entry, 'acquireTransferFileCapability', {
+    initializeRemoteFileGeneration: current => current.remoteFileGeneration,
+    remoteFileOperationStale: () => new Error('stale'),
+    abortRemoteFileOperation: () => {},
+    isCurrentRemoteFileGeneration: () => true,
+    createRemoteFileTransferCapability: value => value,
+    remoteFileOperationUnmounted: () => new Error('unmounted')
+  })
 
-  entry.publishRemoteFileCapabilityIdentity(capability, {
-    loginUsername: 'hik',
-    effectiveUid: '0',
-    effectiveUsername: 'root',
-    channel: 'pty-root'
+  const session = await entry.acquireTransferFileCapability({
+    transferId: 'transfer-1'
   })
   assert.equal(entry.state.remoteFileStatus, 'busy')
-  assert.equal(entry.activeRootFileCapabilities.size, 1)
-
-  assert.equal(await entry.releaseRemoteFileCapability(capability), true)
-  assert.equal(releases, 1)
-  assert.equal(entry.activeRootFileCapabilities.size, 0)
+  const releasing = session.release()
+  await Promise.resolve()
+  assert.equal(entry.state.remoteFileStatus, 'busy')
+  releaseGate.resolve()
+  assert.equal(await releasing, true)
   assert.equal(entry.state.remoteFileStatus, 'idle')
 })
 
-test('failed root capability release becomes unavailable instead of claiming idle', async () => {
-  const entry = createEntryStateHarness()
-  installClassField(entry, 'publishRemoteFileCapabilityIdentity')
-  installClassField(entry, 'clearRemoteFileCapabilityIdentity')
-  installClassField(entry, 'publishRemoteFileIdentityUnavailable')
-  installClassField(entry, 'releaseRemoteFileCapability')
-  const capability = {
-    async release () {
-      throw new Error('terminal release failed')
+test('stale acquisition release failure keeps stale primary and publishes unavailable', async () => {
+  const entry = createAsyncEntryHarness()
+  const releaseFailure = new Error('release failed')
+  const staleFailure = Object.assign(new Error('stale lifecycle'), {
+    name: 'AbortError',
+    code: 'ABORT_ERR'
+  })
+  const acquireRemoteFileCapability = async options => {
+    options.onLeaseState({ state: 'acquired', operationId: options.operationId })
+    options.onIdentity({
+      loginUsername: 'hik',
+      effectiveUid: '0',
+      effectiveUsername: 'root',
+      channel: 'pty-root'
+    })
+    return {
+      async release () {
+        options.onLeaseState({
+          state: 'released',
+          operationId: options.operationId,
+          error: releaseFailure
+        })
+        throw releaseFailure
+      }
     }
   }
-
-  entry.publishRemoteFileCapabilityIdentity(capability, {
-    loginUsername: 'hik',
-    effectiveUid: '0',
-    effectiveUsername: 'root',
-    channel: 'pty-root'
+  installClassField(entry, 'publishRemoteFileLeaseState')
+  installClassField(entry, 'publishRemoteFileIdentity')
+  installClassField(entry, 'publishRemoteFileIdentityUnavailable')
+  installClassField(entry, 'acquireRemoteFileOperation', {
+    acquireRemoteFileCapability,
+    refs: { get: () => ({}) },
+    isCurrentSftpEntryRemoteTask: () => false,
+    remoteFileOperationStale: () => staleFailure
   })
-  await assert.rejects(
-    entry.releaseRemoteFileCapability(capability),
-    /terminal release failed/
-  )
-  assert.equal(entry.activeRootFileCapabilities.size, 0)
-  assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
+
+  await assert.rejects(entry.acquireRemoteFileOperation({
+    id: 'stale-release-failure',
+    lifecycleTask: {}
+  }), error => {
+    assert.equal(error, staleFailure)
+    assert.equal(error.releaseError, releaseFailure)
+    return true
+  })
   assert.equal(entry.state.remoteFileStatus, 'unavailable')
+  assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
+})
+
+test('FTP panel is excluded from SSH effective identity rendering', () => {
+  const shouldRenderSshFileIdentity = topLevelFunction(
+    'shouldRenderSshFileIdentity'
+  )
+
+  assert.equal(shouldRenderSshFileIdentity({ isFtp: true }, 'ftp'), false)
+  assert.equal(shouldRenderSshFileIdentity({ isFtp: false }, 'sftp'), true)
+  assert.match(
+    entrySource,
+    /shouldRenderSshFileIdentity\(\s*this\.props,\s*this\.type\s*\)/
+  )
 })
 
 test('failed acquisition publishes an unknown unavailable state without sending work', () => {

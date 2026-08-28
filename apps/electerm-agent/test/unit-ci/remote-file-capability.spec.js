@@ -33,6 +33,20 @@ function sha256 (value) {
   return createHash('sha256').update(value).digest('hex')
 }
 
+function deferred () {
+  let resolveDeferred
+  let rejectDeferred
+  const promise = new Promise((resolve, reject) => {
+    resolveDeferred = resolve
+    rejectDeferred = reject
+  })
+  return {
+    promise,
+    resolve: resolveDeferred,
+    reject: rejectDeferred
+  }
+}
+
 function tab (overrides = {}) {
   return {
     id: 'tab-1',
@@ -158,7 +172,9 @@ function createTerminalStub ({
   executeError,
   executeRequest,
   releaseResult = true,
-  failProbeAfter = Infinity
+  failProbeAfter = Infinity,
+  probeGate,
+  onProbeStart
 } = {}) {
   let owner = ''
   let releaseCount = 0
@@ -179,6 +195,8 @@ function createTerminalStub ({
           requests.push({ request, options })
           if (request.operation === 'probe') {
             probeCount += 1
+            onProbeStart?.()
+            if (probeGate) await probeGate.promise
             if (executeError || probeCount > failProbeAfter) {
               throw executeError || new Error('stale identity probe failed')
             }
@@ -285,6 +303,112 @@ async function assertUnavailable (promise, causePattern) {
     return true
   })
 }
+
+test('lease state is acquired before delayed probe resolves and released with root capability', async () => {
+  const { acquireRemoteFileCapability } = await importModule(capabilityModule)
+  const fake = createFakeSftp()
+  currentSftpNodes = fake.nodes
+  const probeGate = deferred()
+  const probeStarted = deferred()
+  const events = []
+  const terminal = createTerminalStub({
+    probeGate,
+    onProbeStart: () => probeStarted.resolve()
+  })
+  let capabilityResolved = false
+  const acquiring = acquireRemoteFileCapability({
+    operationId: 'delayed-root-probe',
+    tab: tab(),
+    sftp: fake.sftp,
+    getTerminal: () => terminal,
+    onLeaseState: event => events.push(event)
+  }).then(capability => {
+    capabilityResolved = true
+    return capability
+  })
+
+  await probeStarted.promise
+  assert.equal(capabilityResolved, false)
+  assert.deepEqual(events.map(event => event.state), ['acquired'])
+
+  probeGate.resolve()
+  const capability = await acquiring
+  assert.equal(capability.channel, 'pty-root')
+  assert.deepEqual(events.map(event => event.state), ['acquired'])
+  await capability.release()
+  assert.deepEqual(events.map(event => event.state), ['acquired', 'released'])
+  assert.equal(events[1].error, undefined)
+  await capability.release()
+  assert.deepEqual(events.map(event => event.state), ['acquired', 'released'])
+  assert.equal(terminal.releaseCount, 1)
+})
+
+test('native and failed acquisitions settle the observed lease exactly once', async t => {
+  const { acquireRemoteFileCapability } = await importModule(capabilityModule)
+
+  await t.test('native SFTP', async () => {
+    const fake = createFakeSftp()
+    currentSftpNodes = fake.nodes
+    const terminal = createTerminalStub({
+      identity: { uid: '1000', username: 'hik' }
+    })
+    const events = []
+    const capability = await acquireRemoteFileCapability({
+      operationId: 'native-observed-lease',
+      tab: tab(),
+      sftp: fake.sftp,
+      getTerminal: () => terminal,
+      onLeaseState: event => events.push(event)
+    })
+
+    assert.equal(capability.channel, 'sftp')
+    assert.deepEqual(events.map(event => event.state), ['acquired', 'released'])
+    await capability.release()
+    assert.deepEqual(events.map(event => event.state), ['acquired', 'released'])
+  })
+
+  await t.test('probe failure and throwing UI hook', async () => {
+    const fake = createFakeSftp()
+    currentSftpNodes = fake.nodes
+    const terminal = createTerminalStub({
+      executeError: new Error('probe failed')
+    })
+    const events = []
+    await assertUnavailable(acquireRemoteFileCapability({
+      operationId: 'failed-observed-lease',
+      tab: tab(),
+      sftp: fake.sftp,
+      getTerminal: () => terminal,
+      onLeaseState: event => {
+        events.push(event)
+        throw new Error('UI hook failed')
+      }
+    }), /probe failed/)
+
+    assert.deepEqual(events.map(event => event.state), ['acquired', 'released'])
+    assert.equal(terminal.releaseCount, 1)
+  })
+
+  await t.test('root release failure', async () => {
+    const fake = createFakeSftp()
+    currentSftpNodes = fake.nodes
+    const terminal = createTerminalStub({ releaseResult: false })
+    const events = []
+    const capability = await acquireRemoteFileCapability({
+      operationId: 'failed-root-release-observed-lease',
+      tab: tab(),
+      sftp: fake.sftp,
+      getTerminal: () => terminal,
+      onLeaseState: event => events.push(event)
+    })
+
+    await assert.rejects(capability.release(), /释放|租约/i)
+    await assert.rejects(capability.release(), /释放|租约/i)
+    assert.deepEqual(events.map(event => event.state), ['acquired', 'released'])
+    assert.match(events[1].error?.message || '', /释放|租约/i)
+    assert.equal(terminal.releaseCount, 1)
+  })
+})
 
 test('capability resolver pins root backend only to the exact SSH terminal', async () => {
   const { capability, terminal, identities } = await acquireWithHarness()

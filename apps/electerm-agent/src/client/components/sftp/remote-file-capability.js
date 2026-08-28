@@ -163,6 +163,45 @@ async function releasePty (pty) {
   return true
 }
 
+function publishRemoteFileLeaseState (onLeaseState, event) {
+  if (typeof onLeaseState !== 'function') return
+  try {
+    Promise.resolve(onLeaseState(Object.freeze(event))).catch(() => {})
+  } catch {
+    // UI observation must never interfere with lease safety or cleanup.
+  }
+}
+
+function observeRemoteFilePtyLease (pty, { operationId, onLeaseState }) {
+  let releasePromise
+  publishRemoteFileLeaseState(onLeaseState, {
+    state: 'acquired',
+    operationId
+  })
+  return Object.freeze({
+    execute: (request, options) => pty.execute(request, options),
+    release: () => {
+      if (releasePromise) return releasePromise
+      let releaseError
+      releasePromise = (async () => {
+        try {
+          return await releasePty(pty)
+        } catch (error) {
+          releaseError = error
+          throw error
+        } finally {
+          publishRemoteFileLeaseState(onLeaseState, {
+            state: 'released',
+            operationId,
+            ...(releaseError ? { error: releaseError } : {})
+          })
+        }
+      })()
+      return releasePromise
+    }
+  })
+}
+
 function createGuardedRemoteFileCapability (capability, assertCurrent) {
   let state = 'open'
   let releasePromise
@@ -547,7 +586,8 @@ export async function acquireRemoteFileCapability ({
   sftp,
   getTerminal,
   signal,
-  onIdentity
+  onIdentity,
+  onLeaseState
 } = {}) {
   let pty
   let capability
@@ -588,6 +628,10 @@ export async function acquireRemoteFileCapability ({
       typeof pty.release !== 'function') {
       throw new Error('远程文件 PTY 租约合同无效')
     }
+    pty = observeRemoteFilePtyLease(pty, {
+      operationId: ownerId,
+      onLeaseState
+    })
     await assertCurrent()
     const probe = await pty.execute(createPrivilegedFileRequest({
       operation: 'probe'
