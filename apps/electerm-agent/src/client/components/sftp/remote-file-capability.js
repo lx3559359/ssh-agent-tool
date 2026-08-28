@@ -6,6 +6,31 @@ import {
 import { assertExactSshTerminalEndpoint } from './sftp-safety-endpoint.js'
 import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
 
+const remoteFileMethodNames = Object.freeze([
+  'list',
+  'lstat',
+  'stat',
+  'readlink',
+  'realpath',
+  'readFile',
+  'readFileChunk',
+  'writeFile',
+  'mkdir',
+  'touch',
+  'rename',
+  'rm',
+  'rmdir',
+  'chmod',
+  'chown',
+  'copyEntry',
+  'removeEntry',
+  'cp',
+  'mv',
+  'describeResumeEntry',
+  'upload',
+  'download'
+])
+
 function requiredIdentity (value, label) {
   const identity = String(value ?? '').trim()
   if (!identity) throw new Error(`远程文件端点缺少${label}`)
@@ -57,6 +82,41 @@ function remoteFileCapabilityReleased () {
   error.name = 'RemoteFileCapabilityReleasedError'
   error.code = 'REMOTE_FILE_CAPABILITY_RELEASED'
   return error
+}
+
+function projectCapabilityRuntimeIdentity (channel, identity) {
+  if (channel === 'sftp') return null
+  if (!identity || typeof identity !== 'object' || Array.isArray(identity)) {
+    throw new Error('远程文件 capability 运行身份无效')
+  }
+  const projected = {
+    channel: requiredIdentity(identity.channel, '运行身份通道'),
+    effectiveUid: requiredIdentity(identity.effectiveUid, '运行身份 UID'),
+    effectiveUsername: requiredIdentity(
+      identity.effectiveUsername,
+      '运行身份用户名'
+    )
+  }
+  if (projected.channel !== channel) {
+    throw new Error('远程文件 capability 运行身份通道不一致')
+  }
+  return Object.freeze(projected)
+}
+
+function projectCapabilityCapabilities (capabilities) {
+  if (capabilities === null || capabilities === undefined) return null
+  if (!capabilities || typeof capabilities !== 'object' ||
+    Array.isArray(capabilities)) {
+    throw new Error('远程文件 capability capabilities 无效')
+  }
+  const entries = Object.entries(capabilities)
+  if (entries.some(([name, enabled]) => (
+    !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(name) ||
+    typeof enabled !== 'boolean'
+  ))) {
+    throw new Error('远程文件 capability capabilities 无效')
+  }
+  return Object.freeze(Object.fromEntries(entries))
 }
 
 function requireProbeResult (probe) {
@@ -153,51 +213,46 @@ function createGuardedRemoteFileCapability (capability, assertCurrent) {
   function guardBackend (backend) {
     if (!backend || typeof backend !== 'object') return backend
     if (proxies.has(backend)) return proxies.get(backend)
-    const methodWrappers = new Map()
-    const guarded = new Proxy(Object.create(null), {
-      get (_target, property) {
-        const value = Reflect.get(backend, property, backend)
-        if (value === backend) return guarded
-        if (typeof value !== 'function') return value
-        const cached = methodWrappers.get(property)
-        if (cached?.value === value) return cached.wrapper
-        const wrapper = (...args) => runBackendOperation(async () => {
-          const result = await Reflect.apply(value, backend, args)
+    const guarded = Object.create(null)
+    proxies.set(backend, guarded)
+    for (const name of remoteFileMethodNames) {
+      const operation = Object.getOwnPropertyDescriptor(backend, name)?.value
+      if (typeof operation !== 'function') continue
+      Object.defineProperty(guarded, name, {
+        enumerable: true,
+        value: (...args) => runBackendOperation(async () => {
+          const result = await Reflect.apply(operation, backend, args)
           return result === backend ? guarded : result
         })
-        methodWrappers.set(property, { value, wrapper })
-        return wrapper
-      },
-      has (_target, property) {
-        return Reflect.has(backend, property)
-      },
-      ownKeys () {
-        return Reflect.ownKeys(backend)
-      },
-      getOwnPropertyDescriptor (_target, property) {
-        const descriptor = Reflect.getOwnPropertyDescriptor(backend, property)
-        if (!descriptor) return undefined
-        return {
-          configurable: true,
-          enumerable: descriptor.enumerable,
-          get: () => guarded[property]
-        }
-      }
-    })
-    proxies.set(backend, guarded)
-    return guarded
+      })
+    }
+    return Object.freeze(guarded)
   }
 
   const guardedSftp = guardBackend(capability.sftp)
   const guardedBackend = capability.backend === capability.sftp
     ? guardedSftp
     : guardBackend(capability.backend)
-  return Object.freeze({
-    ...capability,
+  const channel = requiredIdentity(capability.channel, 'capability 通道')
+  if (!['sftp', 'pty-root'].includes(channel)) {
+    throw new Error('远程文件 capability 通道无效')
+  }
+  const guardedCapability = Object.assign(Object.create(null), {
+    channel,
+    runtimeIdentity: projectCapabilityRuntimeIdentity(
+      channel,
+      capability.runtimeIdentity
+    ),
     sftp: guardedSftp,
     backend: guardedBackend,
     release: () => beginRelease()
   })
+  if (Object.hasOwn(capability, 'capabilities')) {
+    guardedCapability.capabilities = projectCapabilityCapabilities(
+      capability.capabilities
+    )
+  }
+  return Object.freeze(guardedCapability)
 }
 
 export async function acquireRemoteFileCapability ({

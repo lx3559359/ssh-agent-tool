@@ -5,6 +5,30 @@ const { importModule } = require('./helpers/import-esm')
 
 const capabilityModule =
   'src/client/components/sftp/remote-file-capability.js'
+const productionRemoteFileMethods = Object.freeze([
+  'list',
+  'lstat',
+  'stat',
+  'readlink',
+  'realpath',
+  'readFile',
+  'readFileChunk',
+  'writeFile',
+  'mkdir',
+  'touch',
+  'rename',
+  'rm',
+  'rmdir',
+  'chmod',
+  'chown',
+  'copyEntry',
+  'removeEntry',
+  'cp',
+  'mv',
+  'describeResumeEntry',
+  'upload',
+  'download'
+])
 
 function sha256 (value) {
   return createHash('sha256').update(value).digest('hex')
@@ -228,9 +252,15 @@ function createTerminalStub ({
 
 let currentSftpNodes
 
-async function acquireWithHarness ({ terminalOptions, tabOptions, sftpOptions } = {}) {
+async function acquireWithHarness ({
+  terminalOptions,
+  tabOptions,
+  sftpOptions,
+  mutateSftp
+} = {}) {
   const { acquireRemoteFileCapability } = await importModule(capabilityModule)
   const fake = createFakeSftp(sftpOptions)
+  mutateSftp?.(fake.sftp)
   currentSftpNodes = fake.nodes
   const terminal = createTerminalStub(terminalOptions)
   const identities = []
@@ -474,10 +504,16 @@ test('generation change during identity probe releases the lease and fails close
 
 test('stale capability rejects file operations after SSH reconnect', async () => {
   let generation = 'ssh-generation-1'
+  const privateSymbol = Symbol('stale private transport')
   const harness = await acquireWithHarness({
     terminalOptions: {
       identity: { uid: '1000', username: 'hik' },
       endpoint: () => terminalEndpoint({ sshSessionGeneration: generation })
+    },
+    sftpOptions: {
+      ws: { send () { throw new Error('stale raw ws used') } },
+      staging: { release () { throw new Error('stale staging used') } },
+      [privateSymbol]: () => { throw new Error('stale symbol used') }
     }
   })
   generation = 'ssh-generation-2'
@@ -489,6 +525,8 @@ test('stale capability rejects file operations after SSH reconnect', async () =>
   await assertCapabilityReleased(
     harness.capability.sftp.mkdir('/home/hik/after-stale')
   )
+  assertOpaqueFileFacade(harness.capability.sftp, privateSymbol)
+  assert.equal(harness.capability.staging, undefined)
   assert.equal(await harness.capability.release(), true)
 })
 
@@ -509,9 +547,7 @@ test('native and root capabilities reject every new operation after release', as
     await t.test(label, async () => {
       const harness = await acquireWithHarness({
         terminalOptions,
-        sftpOptions: {
-          async openReadStream () { return { owner: this.id } }
-        }
+        sftpOptions: { ws: { send () { throw new Error('raw ws used') } } }
       })
       const capturedList = harness.capability.sftp.list
       await harness.capability.release()
@@ -527,46 +563,139 @@ test('native and root capabilities reject every new operation after release', as
         await assertCapabilityReleased(
           harness.capability.sftp.readFileChunk('/home/hik/file')
         )
-        await assertCapabilityReleased(
-          harness.capability.sftp.createExclusiveFile(
-            '/home/hik/file',
-            '',
-            0o600
-          )
-        )
-        await assertCapabilityReleased(
-          harness.capability.sftp.removeEmptyDirectory('/home/hik/empty')
-        )
-        await assertCapabilityReleased(
-          harness.capability.sftp.openReadStream('/home/hik/file')
-        )
+        assert.equal(harness.capability.sftp.ws, undefined)
+        assert.equal(harness.capability.sftp.createExclusiveFile, undefined)
+        assert.equal(harness.capability.sftp.removeEmptyDirectory, undefined)
       }
     })
   }
 })
 
-test('capability proxy preserves non-function properties and method receivers', async () => {
+test('capability facade exposes only production methods and maps self returns', async () => {
   const harness = await acquireWithHarness({
     terminalOptions: { identity: { uid: '1000', username: 'hik' } },
     sftpOptions: {
-      openReadStream () {
-        return { owner: this.id }
+      list () {
+        return this
       }
     }
   })
 
   assert.equal(harness.capability.backend, harness.capability.sftp)
   assert.notEqual(harness.capability.backend, harness.sftp)
-  assert.equal(harness.capability.backend.id, 'sftp-1')
+  assert.equal(harness.capability.backend.id, undefined)
   assert.equal(
-    await harness.capability.backend.valueOf(),
+    await harness.capability.backend.list('/home/hik'),
     harness.capability.backend
   )
-  assert.deepEqual(
-    await harness.capability.backend.openReadStream('/home/hik/file'),
-    { owner: 'sftp-1' }
-  )
   await harness.capability.release()
+})
+
+function assertOpaqueFileFacade (facade, privateSymbol) {
+  assert.equal(Object.getPrototypeOf(facade), null)
+  assert.deepEqual(Object.getOwnPropertySymbols(facade), [])
+  for (const property of [
+    'ws',
+    'staging',
+    'lease',
+    'controller',
+    'constructor',
+    '__proto__',
+    'valueOf',
+    'toJSON',
+    'openReadStream',
+    'createExclusiveFile',
+    'removeEmptyDirectory'
+  ]) {
+    assert.equal(facade[property], undefined, property)
+  }
+  assert.equal(facade[privateSymbol], undefined)
+  assert.equal(facade[Symbol.iterator], undefined)
+}
+
+test('native facade allowlists production methods and hides transport internals', async () => {
+  const privateSymbol = Symbol('private sftp transport')
+  const methodOverrides = Object.fromEntries(
+    productionRemoteFileMethods.map(name => [name, async () => name])
+  )
+  const harness = await acquireWithHarness({
+    terminalOptions: { identity: { uid: '1000', username: 'hik' } },
+    sftpOptions: {
+      ...methodOverrides,
+      ws: { send () { throw new Error('raw ws used') } },
+      staging: { release () { throw new Error('raw staging used') } },
+      lease: { release () { throw new Error('raw lease used') } },
+      controller: { execute () { throw new Error('raw controller used') } },
+      openReadStream () { return this },
+      toJSON () { return this },
+      valueOf () { return this },
+      constructor: function PrivateSftpConstructor () {},
+      ['__proto__']: { raw: true },
+      [privateSymbol]: () => { throw new Error('raw symbol used') },
+      [Symbol.iterator]: function * rawIterator () { yield this }
+    }
+  })
+
+  assert.deepEqual(
+    Object.keys(harness.capability.backend).sort(),
+    [...productionRemoteFileMethods].sort()
+  )
+  assert.deepEqual(Object.keys(harness.capability).sort(), [
+    'backend',
+    'channel',
+    'release',
+    'runtimeIdentity',
+    'sftp'
+  ])
+  for (const method of productionRemoteFileMethods) {
+    assert.equal(typeof harness.capability.backend[method], 'function', method)
+  }
+  assertOpaqueFileFacade(harness.capability.backend, privateSymbol)
+  await harness.capability.release()
+  assertOpaqueFileFacade(harness.capability.backend, privateSymbol)
+})
+
+test('facade never promotes an allowed method name from the raw prototype', async () => {
+  const harness = await acquireWithHarness({
+    terminalOptions: { identity: { uid: '1000', username: 'hik' } },
+    mutateSftp: sftp => Object.setPrototypeOf(sftp, {
+      upload () { return this }
+    })
+  })
+
+  assert.equal(harness.capability.backend.upload, undefined)
+  assert.equal(Object.getPrototypeOf(harness.capability.backend), null)
+  await harness.capability.release()
+})
+
+test('root capability hides staging and exposes only the current backend contract', async () => {
+  const harness = await acquireWithHarness()
+  const rootMethods = productionRemoteFileMethods.filter(method => ![
+    'upload',
+    'download'
+  ].includes(method))
+
+  assert.equal(Object.getPrototypeOf(harness.capability), null)
+  assert.equal(harness.capability.staging, undefined)
+  assert.equal(harness.capability.constructor, undefined)
+  assert.equal(Reflect.get(harness.capability, '__proto__'), undefined)
+  assert.equal(harness.capability.valueOf, undefined)
+  assert.deepEqual(Object.getOwnPropertySymbols(harness.capability), [])
+  assert.deepEqual(
+    Object.keys(harness.capability.backend).sort(),
+    rootMethods.sort()
+  )
+  assert.deepEqual(Object.keys(harness.capability).sort(), [
+    'backend',
+    'capabilities',
+    'channel',
+    'release',
+    'runtimeIdentity',
+    'sftp'
+  ])
+  assertOpaqueFileFacade(harness.capability.backend, Symbol('absent'))
+  await harness.capability.release()
+  assert.equal(harness.terminal.releaseCount, 1)
 })
 
 test('concurrent capability release shares one promise and releases root lease once', async () => {
