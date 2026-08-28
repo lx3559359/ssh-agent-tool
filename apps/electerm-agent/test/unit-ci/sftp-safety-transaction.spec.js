@@ -879,6 +879,8 @@ test('SFTP endpoint identity survives transport refresh but rejects another secu
   assert.equal(endpoint.connectionUsername, 'deploy')
   assert.equal(endpoint.hostKeyFingerprint, 'SHA256:one')
   const operation = await createSideEffectOperation({ endpoint })
+  assert.equal(operation.endpoint.sshTerminalPid, 'ssh-terminal-pid-1')
+  assert.equal(operation.endpoint.hostKeyFingerprint, 'SHA256:one')
   const refreshedEndpoint = buildSftpSafetyEndpoint({
     tab: { ...tab },
     terminalId: 'terminal-session-stable',
@@ -919,7 +921,9 @@ test('SFTP endpoint identity survives transport refresh but rejects another secu
     { ...refreshedEndpoint, port: 22 },
     { ...refreshedEndpoint, username: 'root' },
     { ...refreshedEndpoint, tabId: 'tab-other' },
-    { ...refreshedEndpoint, terminalPid: 'terminal-session-other' }
+    { ...refreshedEndpoint, terminalPid: 'terminal-session-other' },
+    { ...refreshedEndpoint, sshTerminalPid: 'ssh-terminal-pid-2' },
+    { ...refreshedEndpoint, hostKeyFingerprint: 'SHA256:two' }
   ]) {
     assert.equal(findMatchingSafetySftp(
       operation,
@@ -930,6 +934,17 @@ test('SFTP endpoint identity survives transport refresh but rejects another secu
       })
     ), undefined)
   }
+
+  const legacyOperation = {
+    ...operation,
+    endpoint: { ...operation.endpoint }
+  }
+  delete legacyOperation.endpoint.sshTerminalPid
+  assert.equal(findMatchingSafetySftp(
+    legacyOperation,
+    [tab.id],
+    () => refreshedCapability
+  ), undefined)
 })
 
 test('SFTP endpoint rejects a terminal from another SSH connection identity', async t => {

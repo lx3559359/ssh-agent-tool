@@ -421,3 +421,62 @@ test('a failed current probe never falls back to a previously observed root iden
     }), /stale identity probe failed/)
   assert.equal(first.terminal.owner(), '')
 })
+
+test('safety transaction identity persists and strictly compares the SSH terminal PID', async () => {
+  const {
+    assertSameSessionEndpoint,
+    projectEndpoint
+  } = await importModule(
+    'src/client/common/safety-transactions/endpoint-guard.js'
+  )
+  const { normalizeOperation } = await importModule(
+    'src/client/common/safety-transactions/models.js'
+  )
+  const sshEndpoint = terminalEndpoint()
+  assert.deepEqual(projectEndpoint(sshEndpoint), {
+    host: 'prod.example.com',
+    port: 2222,
+    username: 'hik',
+    tabId: 'tab-1',
+    pid: 'ssh-pid-1',
+    terminalPid: 'ssh-pid-1',
+    sshTerminalPid: 'ssh-pid-1',
+    sessionType: 'ssh',
+    hostKeyFingerprint: 'SHA256:one'
+  })
+  assert.throws(
+    () => projectEndpoint({ ...sshEndpoint, sshTerminalPid: '' }),
+    error => error.code === 'INCOMPLETE_SSH_SESSION_IDENTITY'
+  )
+
+  const sftpEndpoint = {
+    ...sshEndpoint,
+    pid: 'sftp:tab-1:sftp-session-1',
+    terminalPid: 'sftp-session-1',
+    sshTerminalPid: 'ssh-pid-1',
+    sessionType: 'sftp'
+  }
+  const operation = normalizeOperation({
+    id: 'sftp-endpoint-persistence',
+    source: 'sftp',
+    endpoint: sftpEndpoint
+  })
+  assert.equal(operation.endpoint.sshTerminalPid, 'ssh-pid-1')
+  assert.equal(operation.endpoint.hostKeyFingerprint, 'SHA256:one')
+  assert.doesNotThrow(() => assertSameSessionEndpoint(
+    operation.endpoint,
+    { ...sftpEndpoint }
+  ))
+  assert.throws(() => assertSameSessionEndpoint(
+    operation.endpoint,
+    { ...sftpEndpoint, sshTerminalPid: 'ssh-pid-2' }
+  ), /会话端点不一致/)
+  assert.throws(() => assertSameSessionEndpoint(
+    { ...operation.endpoint, sshTerminalPid: undefined },
+    sftpEndpoint
+  ), /会话端点不一致/)
+  assert.throws(() => assertSameSessionEndpoint(
+    operation.endpoint,
+    { ...sftpEndpoint, hostKeyFingerprint: 'SHA256:two' }
+  ), /会话端点不一致/)
+})
