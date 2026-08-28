@@ -64,6 +64,31 @@ test('generation drain releases active capabilities before transport destroy', a
   assert.equal(drain.generation.accepting, true)
 })
 
+test('generation drain invalidates displayed identity before cleanup can settle', async () => {
+  const { drainRemoteFileGeneration } = await loadModule()
+  const releaseGate = deferred()
+  const calls = []
+  const entry = {
+    sftp: { destroy: async () => calls.push('destroy') },
+    invalidateRemoteFileIdentity: () => calls.push('invalidate-identity'),
+    remoteFileOperations: new Set([{
+      async release () {
+        calls.push('release')
+        await releaseGate.promise
+      }
+    }]),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationBackends: new Map(),
+    remoteFileOperationTail: Promise.resolve()
+  }
+
+  const drain = drainRemoteFileGeneration(entry)
+  assert.deepEqual(calls, ['invalidate-identity', 'release'])
+  releaseGate.resolve()
+  await drain.promise
+  assert.deepEqual(calls, ['invalidate-identity', 'release', 'destroy'])
+})
+
 test('generation drain rejection still destroys once and latest drain wins', async () => {
   const {
     activateRemoteFileGeneration,
@@ -299,6 +324,7 @@ test('remote reconnect drains active root cleanup before destroy and init', asyn
   const calls = []
   const entry = {
     sftp: { destroy: async () => calls.push('destroy') },
+    invalidateRemoteFileIdentity: () => calls.push('invalidate-identity'),
     remoteFileOperations: new Set([{
       async release () {
         calls.push('release')
@@ -316,10 +342,16 @@ test('remote reconnect drains active root cleanup before destroy and init', asyn
 
   const reconnecting = reconnectSftpEntryRemote(entry)
   await Promise.resolve()
-  assert.deepEqual(calls, ['release'])
+  assert.deepEqual(calls, ['invalidate-identity', 'release'])
   releaseGate.resolve()
   assert.equal(await reconnecting, 'ready')
-  assert.deepEqual(calls, ['release', 'released', 'destroy', 'init'])
+  assert.deepEqual(calls, [
+    'invalidate-identity',
+    'release',
+    'released',
+    'destroy',
+    'init'
+  ])
 })
 
 test('binding a new SSH generation destroys the old SFTP transport first', async () => {
@@ -358,6 +390,7 @@ test('session rebind survives rejected root cleanup and initializes after destro
   const calls = []
   const entry = {
     sftp: { destroy: async () => calls.push('destroy') },
+    invalidateRemoteFileIdentity: () => calls.push('invalidate-identity'),
     remoteFileOperations: new Set([{
       async release () {
         calls.push('release')
@@ -382,10 +415,11 @@ test('session rebind survives rejected root cleanup and initializes after destro
     sshTerminalPid: '1003'
   })
   await Promise.resolve()
-  assert.deepEqual(calls, ['release'])
+  assert.deepEqual(calls, ['invalidate-identity', 'release'])
   releaseGate.resolve()
   assert.equal(await binding, 'ready')
   assert.deepEqual(calls, [
+    'invalidate-identity',
     'release',
     'destroy',
     ['init', 'generation-new'],

@@ -182,19 +182,21 @@ function observeRemoteFilePtyLease (pty, { operationId, onLeaseState }) {
     execute: (request, options) => pty.execute(request, options),
     release: () => {
       if (releasePromise) return releasePromise
-      let releaseError
       releasePromise = (async () => {
         try {
-          return await releasePty(pty)
-        } catch (error) {
-          releaseError = error
-          throw error
-        } finally {
+          const released = await releasePty(pty)
           publishRemoteFileLeaseState(onLeaseState, {
             state: 'released',
-            operationId,
-            ...(releaseError ? { error: releaseError } : {})
+            operationId
           })
+          return released
+        } catch (error) {
+          publishRemoteFileLeaseState(onLeaseState, {
+            state: 'release-failed',
+            operationId,
+            error
+          })
+          throw error
         }
       })()
       return releasePromise
@@ -639,15 +641,23 @@ export async function acquireRemoteFileCapability ({
     const identity = requireProbeResult(probe)
     await assertCurrent()
     const channel = identity.uid === '0' ? 'pty-root' : 'sftp'
-    const identityUpdate = Object.freeze({
-      loginUsername: requiredIdentity(
-        tab.username || tab.user,
-        'SSH 登录用户名'
-      ),
-      effectiveUid: identity.uid,
-      effectiveUsername: identity.username,
-      channel
-    })
+    const loginUsername = requiredIdentity(
+      tab.username || tab.user,
+      'SSH 登录用户名'
+    )
+    const identityUpdate = Object.freeze(channel === 'sftp'
+      ? {
+          loginUsername,
+          effectiveUid: 'unknown',
+          effectiveUsername: loginUsername,
+          channel
+        }
+      : {
+          loginUsername,
+          effectiveUid: identity.uid,
+          effectiveUsername: identity.username,
+          channel
+        })
 
     if (channel === 'sftp') {
       const nativePty = pty

@@ -246,7 +246,14 @@ export function quiesceSftpEntryTransfers (entry, options = {}) {
   })()
 }
 
-export function drainRemoteFileGeneration (entry) {
+export function drainRemoteFileGeneration (entry, options = {}) {
+  if (options.invalidateIdentity !== false) {
+    try {
+      entry.invalidateRemoteFileIdentity?.()
+    } catch {
+      // UI invalidation must not prevent capability cleanup or transport drain.
+    }
+  }
   const generation = ensureRemoteFileGeneration(entry)
   generation.accepting = false
   const client = detachSftpEntryClient(entry)

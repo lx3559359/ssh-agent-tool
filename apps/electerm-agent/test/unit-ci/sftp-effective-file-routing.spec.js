@@ -126,6 +126,47 @@ function initializeRemoteFileGeneration (entry) {
   return generation
 }
 
+function resolveRemoteFileStatus ({
+  rootLeaseCount = 0,
+  unavailable = false,
+  releaseUncertain = false
+} = {}) {
+  if (releaseUncertain) return 'uncertain'
+  if (rootLeaseCount > 0) return 'busy'
+  return unavailable ? 'unavailable' : 'idle'
+}
+
+async function installRemoteFileIdentityFields (entry) {
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  entry.props ||= { tab: { id: 'tab-1', username: 'hik' } }
+  entry.state ||= {
+    remoteFileIdentity: {
+      loginUsername: entry.props.tab?.username || '',
+      effectiveUid: '',
+      effectiveUsername: '',
+      channel: 'unknown'
+    },
+    remoteFileStatus: 'idle'
+  }
+  entry.remoteFileIdentityEpoch ||= 0
+  entry.activeRemoteFileLeases ||= new Set()
+  entry.uncertainRemoteFileLeases ||= new Set()
+  lifecycle.initializeRemoteFileGeneration(entry)
+  installClassField(entry, 'captureRemoteFileIdentityToken')
+  installClassField(entry, 'isCurrentRemoteFileIdentityToken', {
+    isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration
+  })
+  installClassField(entry, 'publishRemoteFileIdentity', {
+    resolveRemoteFileStatus
+  })
+  installClassField(entry, 'publishRemoteFileIdentityUnavailable', {
+    resolveRemoteFileStatus
+  })
+  return lifecycle
+}
+
 function createBackend (calls, name = 'backend', options = {}) {
   let released = false
   const assertOpen = operation => {
@@ -198,7 +239,14 @@ function createEntryHarness ({
       remote: [],
       remotePathHistory: [],
       selectedType: '',
-      selectedFiles: new Set()
+      selectedFiles: new Set(),
+      remoteFileIdentity: {
+        loginUsername: 'hik',
+        effectiveUid: '',
+        effectiveUsername: '',
+        channel: 'unknown'
+      },
+      remoteFileStatus: 'idle'
     },
     type: 'sftp',
     sftp: {
@@ -209,6 +257,9 @@ function createEntryHarness ({
     remoteFileOperationSequence: 0,
     remoteFileOperations: new Set(),
     remoteFileUnmounted: false,
+    remoteFileIdentityEpoch: 0,
+    activeRemoteFileLeases: new Set(),
+    uncertainRemoteFileLeases: new Set(),
     buildTree: remote => new Map(remote.map(file => [file.id, file])),
     updateRemoteList: async remote => remote,
     normalizeSftpError: error => error,
@@ -251,6 +302,20 @@ function createEntryHarness ({
   installClassField(entry, 'createRemoteFile')
   return importModule('src/client/components/sftp/sftp-entry-lifecycle.js')
     .then(lifecycle => {
+      installClassField(entry, 'captureRemoteFileIdentityToken')
+      installClassField(entry, 'isCurrentRemoteFileIdentityToken', {
+        isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration
+      })
+      installClassField(entry, 'invalidateRemoteFileIdentity')
+      installClassField(entry, 'publishRemoteFileLeaseState', {
+        resolveRemoteFileStatus
+      })
+      installClassField(entry, 'publishRemoteFileIdentity', {
+        resolveRemoteFileStatus
+      })
+      installClassField(entry, 'publishRemoteFileIdentityUnavailable', {
+        resolveRemoteFileStatus
+      })
       entry.runSftpBackgroundTask = task => lifecycle.runSftpBackgroundTask(
         task,
         { reportError: reportBackgroundError }
@@ -846,6 +911,7 @@ test('identity is not published when capability final validation fails', async (
     remoteFileUnmounted: false,
     setState: update => writes.push(update)
   }
+  await installRemoteFileIdentityFields(entry)
   installClassField(entry, 'acquireRemoteFileOperation', {
     refs: { get: () => ({}) },
     isCurrentSftpEntryRemoteTask: () => true,
@@ -881,6 +947,7 @@ test('acquired capability is released when the remote request lifecycle is stale
     remoteFileUnmounted: false,
     setState: update => writes.push(update)
   }
+  await installRemoteFileIdentityFields(entry)
   installClassField(entry, 'acquireRemoteFileOperation', {
     refs: { get: () => ({}) },
     remoteFileOperationStale,
@@ -1454,6 +1521,7 @@ test('overlapping reloads drain the old generation and only latest initializes',
   const entry = {
     sftp: { destroy: async () => calls.push('destroy') },
     remoteFileUnmounted: false,
+    invalidateRemoteFileIdentity: () => calls.push('invalidate-identity'),
     remoteFileOperations: new Set([{
       async release () {
         calls.push('release')
@@ -1485,12 +1553,16 @@ test('overlapping reloads drain the old generation and only latest initializes',
   const firstReload = entry.handleReloadRemoteSftp()
   const latestReload = entry.handleReloadRemoteSftp()
   await Promise.resolve()
-  assert.deepEqual(calls, ['clear', 'discard', 'release', 'clear', 'discard'])
+  assert.deepEqual(calls, [
+    'invalidate-identity', 'clear', 'discard', 'release',
+    'invalidate-identity', 'clear', 'discard'
+  ])
   releaseGate.resolve()
   await Promise.all([firstReload, latestReload])
 
   assert.deepEqual(calls, [
-    'clear', 'discard', 'release', 'clear', 'discard', 'released', 'destroy',
+    'invalidate-identity', 'clear', 'discard', 'release',
+    'invalidate-identity', 'clear', 'discard', 'released', 'destroy',
     ['state', true], 'init'
   ])
 })
@@ -1504,6 +1576,7 @@ test('reload callback observes rejected initialization without an unhandled prom
   const entry = {
     sftp: null,
     remoteFileUnmounted: false,
+    invalidateRemoteFileIdentity: () => {},
     remoteFileOperations: new Set(),
     remoteFileOperationSettlements: new Set(),
     remoteFileOperationBackends: new Map(),

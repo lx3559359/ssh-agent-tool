@@ -207,7 +207,12 @@ function formatEffectiveFileIdentity (identity, translate = e) {
   )
 }
 
-function resolveRemoteFileStatus ({ rootLeaseCount = 0, unavailable = false } = {}) {
+function resolveRemoteFileStatus ({
+  rootLeaseCount = 0,
+  unavailable = false,
+  releaseUncertain = false
+} = {}) {
+  if (releaseUncertain) return 'uncertain'
   if (rootLeaseCount > 0) return 'busy'
   return unavailable ? 'unavailable' : 'idle'
 }
@@ -249,7 +254,9 @@ export default class Sftp extends Component {
     this.remoteFileOperationSettlements = new Set()
     this.remoteFileOperationTail = Promise.resolve()
     this.remoteFileUnmounted = false
+    this.remoteFileIdentityEpoch = 0
     this.activeRemoteFileLeases = new Set()
+    this.uncertainRemoteFileLeases = new Set()
     initializeRemoteFileGeneration(this)
     this.sftpSafetyProgressHandlers = new Map()
     this.sftpSafetyAdapter = createSftpTransactionAdapter({
@@ -2550,25 +2557,70 @@ export default class Sftp extends Component {
     })
   }
 
-  publishRemoteFileIdentity = remoteFileIdentity => {
+  captureRemoteFileIdentityToken = () => Object.freeze({
+    identityEpoch: this.remoteFileIdentityEpoch || 0,
+    remoteFileGeneration: this.remoteFileGeneration,
+    lifecycleEpoch: this.sftpLifecycleEpoch || 0,
+    sshSessionGeneration: String(this.sshSessionGeneration || ''),
+    sshTerminalPid: String(this.sshTerminalPid || '')
+  })
+
+  isCurrentRemoteFileIdentityToken = token => Boolean(token) &&
+    token.identityEpoch === (this.remoteFileIdentityEpoch || 0) &&
+    token.remoteFileGeneration?.accepting === true &&
+    isCurrentRemoteFileGeneration(this, token.remoteFileGeneration) &&
+    token.lifecycleEpoch === (this.sftpLifecycleEpoch || 0) &&
+    token.sshSessionGeneration === String(this.sshSessionGeneration || '') &&
+    token.sshTerminalPid === String(this.sshTerminalPid || '')
+
+  invalidateRemoteFileIdentity = () => {
+    this.remoteFileIdentityEpoch = (this.remoteFileIdentityEpoch || 0) + 1
+    this.activeRemoteFileLeases.clear()
+    this.uncertainRemoteFileLeases.clear()
+    if (this.remoteFileUnmounted) return false
+    this.setState({
+      remoteFileIdentity: {
+        loginUsername: this.props.tab?.username || '',
+        effectiveUid: '',
+        effectiveUsername: '',
+        channel: 'unknown'
+      },
+      remoteFileStatus: 'idle'
+    })
+    return true
+  }
+
+  publishRemoteFileIdentity = (remoteFileIdentity, identityToken) => {
+    if (!this.isCurrentRemoteFileIdentityToken(identityToken)) return false
     this.setState({
       remoteFileIdentity,
       remoteFileStatus: resolveRemoteFileStatus({
-        rootLeaseCount: this.activeRemoteFileLeases.size
+        rootLeaseCount: this.activeRemoteFileLeases.size,
+        releaseUncertain: this.uncertainRemoteFileLeases.size > 0
       })
     })
+    return true
   }
 
-  publishRemoteFileLeaseState = event => {
+  publishRemoteFileLeaseState = (event, identityToken) => {
+    if (!this.isCurrentRemoteFileIdentityToken(identityToken)) return false
     const operationId = String(event?.operationId || '').trim()
-    if (!operationId || !['acquired', 'released'].includes(event?.state)) return
+    if (!operationId || ![
+      'acquired',
+      'released',
+      'release-failed'
+    ].includes(event?.state)) return false
     if (event.state === 'acquired') {
       this.activeRemoteFileLeases.add(operationId)
-    } else {
+      this.uncertainRemoteFileLeases.delete(operationId)
+    } else if (event.state === 'released') {
       this.activeRemoteFileLeases.delete(operationId)
+      this.uncertainRemoteFileLeases.delete(operationId)
+    } else {
+      this.uncertainRemoteFileLeases.add(operationId)
     }
-    if (this.remoteFileUnmounted) return
-    if (event.error) {
+    if (this.remoteFileUnmounted) return false
+    if (event.state === 'release-failed') {
       this.setState({
         remoteFileIdentity: {
           loginUsername: this.props.tab?.username || '',
@@ -2578,19 +2630,22 @@ export default class Sftp extends Component {
         },
         remoteFileStatus: resolveRemoteFileStatus({
           rootLeaseCount: this.activeRemoteFileLeases.size,
-          unavailable: true
+          releaseUncertain: true
         })
       })
-      return
+      return true
     }
     this.setState({
       remoteFileStatus: resolveRemoteFileStatus({
-        rootLeaseCount: this.activeRemoteFileLeases.size
+        rootLeaseCount: this.activeRemoteFileLeases.size,
+        releaseUncertain: this.uncertainRemoteFileLeases.size > 0
       })
     })
+    return true
   }
 
-  publishRemoteFileIdentityUnavailable = () => {
+  publishRemoteFileIdentityUnavailable = identityToken => {
+    if (!this.isCurrentRemoteFileIdentityToken(identityToken)) return false
     if (this.remoteFileUnmounted || this.activeRemoteFileLeases.size) return
     this.setState({
       remoteFileIdentity: {
@@ -2601,6 +2656,7 @@ export default class Sftp extends Component {
       },
       remoteFileStatus: resolveRemoteFileStatus({ unavailable: true })
     })
+    return true
   }
 
   acquireRemoteFileOperation = async ({
@@ -2614,6 +2670,7 @@ export default class Sftp extends Component {
     const lifecycleEpoch = this.sftpLifecycleEpoch || 0
     const sshSessionGeneration = String(this.sshSessionGeneration || '')
     const sshTerminalPid = String(this.sshTerminalPid || '')
+    const identityToken = this.captureRemoteFileIdentityToken()
     let remoteFileIdentity
     let capability
     try {
@@ -2624,11 +2681,14 @@ export default class Sftp extends Component {
         getTerminal: tabId => refs.get('term-' + tabId),
         signal,
         onIdentity: identity => { remoteFileIdentity = identity },
-        onLeaseState: event => this.publishRemoteFileLeaseState?.(event)
+        onLeaseState: event => this.publishRemoteFileLeaseState?.(
+          event,
+          identityToken
+        )
       })
     } catch (error) {
       if (error?.code === 'REMOTE_FILE_IDENTITY_UNAVAILABLE') {
-        this.publishRemoteFileIdentityUnavailable?.()
+        this.publishRemoteFileIdentityUnavailable?.(identityToken)
       }
       throw error
     }
@@ -2638,6 +2698,7 @@ export default class Sftp extends Component {
       (this.sftpLifecycleEpoch || 0) === lifecycleEpoch &&
       String(this.sshSessionGeneration || '') === sshSessionGeneration &&
       String(this.sshTerminalPid || '') === sshTerminalPid &&
+      this.isCurrentRemoteFileIdentityToken(identityToken) &&
       (!lifecycleTask ||
         isCurrentSftpEntryRemoteTask(this, lifecycleTask))
     if (!lifecycleCurrent) {
@@ -2646,13 +2707,13 @@ export default class Sftp extends Component {
         await capability.release()
       } catch (releaseError) {
         staleError.releaseError = releaseError
-        this.publishRemoteFileIdentityUnavailable?.()
+        this.publishRemoteFileIdentityUnavailable?.(identityToken)
       }
       throw staleError
     }
     if (remoteFileIdentity) {
       if (typeof this.publishRemoteFileIdentity === 'function') {
-        this.publishRemoteFileIdentity(remoteFileIdentity)
+        this.publishRemoteFileIdentity(remoteFileIdentity, identityToken)
       } else {
         this.setState({ remoteFileIdentity })
       }
@@ -3501,6 +3562,7 @@ export default class Sftp extends Component {
   }
 
   handleReloadRemoteSftp = async () => {
+    this.invalidateRemoteFileIdentity()
     this.sftpSafetyProgressHandlers.clear()
     this.sftpSafetyAdapter.discardAllPreparedProofs()
     let settlementError
@@ -3512,7 +3574,9 @@ export default class Sftp extends Component {
         settlementError = error
       }
     }
-    const drain = drainRemoteFileGeneration(this)
+    const drain = drainRemoteFileGeneration(this, {
+      invalidateIdentity: false
+    })
     await drain.promise
     this.clearTransferSafetySessionPins?.()
     if (settlementError) throw settlementError
@@ -3833,6 +3897,17 @@ export default class Sftp extends Component {
                         aria-live='polite'
                       >
                         {e('shellpilotSftpIdentityUnavailable')}
+                      </span>
+                      )
+                    : null}
+                  {remoteFileStatus === 'uncertain'
+                    ? (
+                      <span
+                        className='sftp-file-operation-status is-uncertain'
+                        role='status'
+                        aria-live='polite'
+                      >
+                        {e('shellpilotSftpReleaseUncertain')}
                       </span>
                       )
                     : null}

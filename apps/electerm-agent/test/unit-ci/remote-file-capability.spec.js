@@ -404,7 +404,10 @@ test('native and failed acquisitions settle the observed lease exactly once', as
 
     await assert.rejects(capability.release(), /释放|租约/i)
     await assert.rejects(capability.release(), /释放|租约/i)
-    assert.deepEqual(events.map(event => event.state), ['acquired', 'released'])
+    assert.deepEqual(events.map(event => event.state), [
+      'acquired',
+      'release-failed'
+    ])
     assert.match(events[1].error?.message || '', /释放|租约/i)
     assert.equal(terminal.releaseCount, 1)
   })
@@ -443,8 +446,30 @@ test('capability resolver releases PTY and uses native SFTP after exit root', as
   assert.equal(terminal.releaseCount, 1)
   assert.deepEqual(identities, [{
     loginUsername: 'hik',
-    effectiveUid: '1000',
+    effectiveUid: 'unknown',
     effectiveUsername: 'hik',
+    channel: 'sftp'
+  }])
+})
+
+test('native SFTP display identity comes from login binding, not the non-root shell', async () => {
+  const { capability, identities } = await acquireWithHarness({
+    tabOptions: { username: 'root' },
+    terminalOptions: {
+      endpoint: terminalEndpoint({
+        username: 'root',
+        connectionUsername: 'root'
+      }),
+      identity: { uid: '1001', username: 'appuser' }
+    }
+  })
+
+  assert.equal(capability.channel, 'sftp')
+  assert.equal(capability.runtimeIdentity, null)
+  assert.deepEqual(identities, [{
+    loginUsername: 'root',
+    effectiveUid: 'unknown',
+    effectiveUsername: 'root',
     channel: 'sftp'
   }])
 })
