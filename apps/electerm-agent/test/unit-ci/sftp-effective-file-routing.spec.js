@@ -1680,7 +1680,11 @@ test('routing source exposes only fixed backend operations to file items', () =>
   assert.doesNotMatch(contextActionsSource, /sftpRef\?\.sftp/)
 
   assert.doesNotMatch(fileItemSource, /props\.sftp\.(?:readFile|mkdir|touch)/)
-  assert.match(fileItemSource, /this\.props\.readRemoteFile\(path\)/)
+  assert.match(fileItemSource, /const readRemoteFile = this\.props\.readRemoteFile/)
+  assert.match(
+    fileItemSource,
+    /readText: path => type === typeMap\.remote[\s\S]{0,100}readRemoteFile\(path\)/
+  )
   assert.match(fileItemSource, /this\.props\.createRemoteFile\(\{/)
   assert.doesNotMatch(fileItemSource, /remoteCreateNew[\s\S]{0,500}wait\(500\)/)
 })

@@ -84,7 +84,7 @@ export default class FileSection extends React.Component {
     this.timer = null
     this.domRef = null
     this.dropTarget = null
-    this.removeFileEditEvent()
+    this.clearRef()
   }
 
   clearRef = () => {
@@ -680,73 +680,6 @@ export default class FileSection extends React.Component {
       .catch(window.store.onError)
   }
 
-  removeFileEditEvent = () => {
-    this.clearRef()
-    if (this.watchingFile) {
-      window.pre.ipcOffEvent('file-change', this.onFileChange)
-      window.pre.runGlobalAsync('unwatchFile', this.watchingFile)
-      window.fs.unlink(this.watchingFile).catch(console.log)
-      delete this.watchingFile
-    }
-  }
-
-  editWithSystemEditor = async (text) => {
-    const {
-      path,
-      name,
-      type
-    } = this.state.file
-    let tempPath = ''
-    if (type === typeMap.local) {
-      tempPath = window.pre.resolve(path, name)
-    } else {
-      const id = generate()
-      tempPath = window.pre.resolve(
-        window.pre.tempDir, `electerm-temp-${id}-${name}`
-      )
-      await window.fs.writeFile(tempPath, text)
-    }
-    this.watchingFile = tempPath
-    this.watchFile(tempPath)
-  }
-
-  editWithCustomEditor = async (text, editorCommand) => {
-    const {
-      path,
-      name,
-      type
-    } = this.state.file
-    let tempPath = ''
-    if (type === typeMap.local) {
-      tempPath = window.pre.resolve(path, name)
-    } else {
-      const id = generate()
-      tempPath = window.pre.resolve(
-        window.pre.tempDir, `electerm-temp-${id}-${name}`
-      )
-      await window.fs.writeFile(tempPath, text)
-    }
-    this.watchingFile = tempPath
-    window.pre.runGlobalAsync('watchFile', tempPath)
-    await window.pre.runGlobalAsync('openFileWithEditor', tempPath, editorCommand)
-    window.pre.ipcOnEvent('file-change', this.onFileChange)
-  }
-
-  onFileChange = (e, text) => {
-    this.editor.editWithSystemEditorDone({
-      id: this.id,
-      text
-    })
-  }
-
-  watchFile = async (tempPath) => {
-    window.pre.runGlobalAsync('watchFile', tempPath)
-    window.fs.openFile(tempPath)
-      .catch(window.store.onError)
-    window.pre.showItemInFolder(tempPath)
-    window.pre.ipcOnEvent('file-change', this.onFileChange)
-  }
-
   gotoFolderInTerminal = () => {
     const {
       path, name
@@ -767,53 +700,31 @@ export default class FileSection extends React.Component {
     return p
   }
 
-  fetchEditorText = async (path, type) => {
-    const text = typeMap.remote === type
-      ? await this.props.readRemoteFile(path)
-      : await window.fs.readFile(path)
-    return text
-  }
-
-  onSubmitEditFile = async (mode, type, path, text, noClose) => {
-    let r
-    try {
-      r = typeMap.remote === type
-        ? await this.props.saveRemoteEditorFile({
-          path,
-          text,
-          mode
-        })
-        : await window.fs.writeFile(
-          path,
-          text,
-          mode
-        )
-    } catch (error) {
-      window.store.onError(error)
-      this.editor?.setState({ loading: false })
-      return false
-    }
-    const data = {
-      loading: false
-    }
-    if (r && !noClose) {
-      data.id = ''
-      data.file = null
-      data.text = ''
-      this.clearRef()
-    }
-    this.editor?.setState(data)
-    if (r && !noClose) {
-      this.props[`${type}List`]()
-    }
-    return r
+  createEditorSession = () => {
+    const file = Object.freeze({ ...this.state.file })
+    const type = file.type
+    const readRemoteFile = this.props.readRemoteFile
+    const saveRemoteEditorFile = this.props.saveRemoteEditorFile
+    const refresh = this.props[`${type}List`]
+    const fsApi = window.fs
+    return Object.freeze({
+      file,
+      readText: path => type === typeMap.remote
+        ? readRemoteFile(path)
+        : fsApi.readFile(path),
+      saveText: ({ path, text, mode }) => type === typeMap.remote
+        ? saveRemoteEditorFile({ path, text, mode })
+        : fsApi.writeFile(path, text, mode),
+      refresh: () => refresh()
+    })
   }
 
   editFile = () => {
-    refs.add(this.id, this)
+    const session = this.createEditorSession()
     this.editor?.openEditor({
       id: this.id,
-      file: this.state.file
+      file: session.file,
+      session
     })
   }
 

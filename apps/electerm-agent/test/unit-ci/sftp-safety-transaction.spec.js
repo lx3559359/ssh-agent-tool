@@ -5420,20 +5420,36 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
     __dirname,
     '../../src/client/components/sftp/sftp-entry.jsx'
   ), 'utf8')
-  const editorSubmitSource = itemSource.slice(
-    itemSource.indexOf('onSubmitEditFile = async'),
-    itemSource.indexOf('\n  editFile =', itemSource.indexOf('onSubmitEditFile = async'))
+  const textEditorSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/text-editor/text-editor.jsx'
+  ), 'utf8')
+  const editorSessionSource = itemSource.slice(
+    itemSource.indexOf('createEditorSession ='),
+    itemSource.indexOf('\n  editFile =', itemSource.indexOf('createEditorSession ='))
+  )
+  const editorSubmitSource = textEditorSource.slice(
+    textEditorSource.indexOf('handleSubmit = async'),
+    textEditorSource.indexOf(
+      '\n  openExternalEditor =',
+      textEditorSource.indexOf('handleSubmit = async')
+    )
   )
 
   assert.match(itemSource, /changeRemoteFileMode/)
   assert.match(itemSource, /renameRemoteFile/)
   assert.match(itemSource, /saveRemoteEditorFile/)
+  assert.match(editorSessionSource, /saveText:/)
+  assert.match(editorSessionSource, /saveRemoteEditorFile\(\{ path, text, mode \}\)/)
+  assert.match(editorSubmitSource, /session\.saveText\(/)
   assert.match(editorSubmitSource, /catch \(error\)/)
   assert.doesNotMatch(editorSubmitSource, /\.catch\(window\.store\.onError\)/)
   assert.match(
     editorSubmitSource,
-    /if \(r && !noClose\) \{[\s\S]{0,180}this\.clearRef\(\)/
+    /if \(result && !force\) \{[\s\S]{0,180}this\.closeEditorSession\(session\)/
   )
+  assert.match(editorSubmitSource, /await session\.refresh\(\)/)
+  assert.doesNotMatch(itemSource, /editFile[\s\S]{0,120}refs\.add\(this\.id/)
   assert.match(itemSource, /Number\.parseInt\(String\(permission\), 8\)/)
   assert.match(
     itemSource,
