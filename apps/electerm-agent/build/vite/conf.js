@@ -5,6 +5,10 @@ import { cwd, version } from './common.js'
 import { resolve } from 'path'
 import def from './def.js'
 
+const outputDirectory = process.env.SHELLPILOT_VITE_OUT_DIR
+  ? resolve(process.env.SHELLPILOT_VITE_OUT_DIR)
+  : resolve(cwd, '../../work/app/assets')
+
 function buildInput () {
   return {
     electerm: resolve(cwd, '../../src/client/entry/electerm.jsx'),
@@ -63,14 +67,14 @@ export default defineConfig({
     cssCodeSplit: false,
     codeSplitting: false,
     emptyOutDir: false,
-    outDir: resolve(cwd, '../../work/app/assets'),
+    outDir: outputDirectory,
     rollupOptions: {
       input: buildInput(),
       output: {
         format: 'esm',
         entryFileNames: `js/[name]-${version}.js`,
         chunkFileNames: `chunk/[name]-${version}-[hash].js`,
-        dir: resolve(cwd, '../../work/app/assets'),
+        dir: outputDirectory,
         assetFileNames: chunkInfo => {
           const { name } = chunkInfo
           if (/\.(png|jpe?g|gif|svg|webp|ico|bmp)$/i.test(name)) {
