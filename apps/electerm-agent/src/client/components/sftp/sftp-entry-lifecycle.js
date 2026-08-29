@@ -362,6 +362,9 @@ export async function reconnectSftpEntryRemote (entry) {
 export async function bindSftpEntryRemoteSession (entry, binding = {}) {
   const nextGeneration = String(binding.sshSessionGeneration || '').trim()
   const nextTerminalPid = String(binding.sshTerminalPid || '').trim()
+  const terminalSessionChanged =
+    String(entry.sshSessionGeneration || '').trim() !== nextGeneration ||
+    String(entry.sshTerminalPid || '').trim() !== nextTerminalPid
   const drain = drainRemoteFileGeneration(entry)
   await drain.promise
   if (!isCurrentRemoteFileGeneration(entry, drain.generation) ||
@@ -372,6 +375,13 @@ export async function bindSftpEntryRemoteSession (entry, binding = {}) {
   entry.port = binding.port
   entry.sshSessionGeneration = nextGeneration
   entry.sshTerminalPid = nextTerminalPid
+  if (terminalSessionChanged) {
+    try {
+      entry.resetRemoteFileLeaseOutcome?.()
+    } catch {
+      // UI outcome reset must not prevent binding the authoritative session.
+    }
+  }
   if (!activateRemoteFileGeneration(entry, drain.generation)) return undefined
   const token = captureLifecycle(entry)
   const remote = entry.shouldRenderRemote()

@@ -63,11 +63,12 @@ function createEntryStateHarness () {
     },
     activeRemoteFileLeases: new Set(),
     uncertainRemoteFileLeases: new Set(),
-    setState (update) {
+    setState (update, callback) {
       const patch = typeof update === 'function'
         ? update(this.state)
         : update
       if (patch) this.state = { ...this.state, ...patch }
+      callback?.()
     }
   }
 }
@@ -432,7 +433,7 @@ test('stale acquisition release failure keeps stale primary and lease uncertaint
   assert.equal(entry.activeRemoteFileLeases.size, 1)
 })
 
-test('generation drain immediately invalidates identity and rejects old probe events', async () => {
+test('generation drain invalidates identity and preserves unresolved lease outcome', async () => {
   const entry = createAsyncEntryHarness()
   const acquisitionGate = deferred()
   const leaseObserved = deferred()
@@ -485,9 +486,9 @@ test('generation drain immediately invalidates identity and rejects old probe ev
   await leaseObserved.promise
   assert.equal(entry.state.remoteFileStatus, 'busy')
   const drain = lifecycle.drainRemoteFileGeneration(entry)
-  assert.equal(entry.state.remoteFileStatus, 'idle')
+  assert.equal(entry.state.remoteFileStatus, 'busy')
   assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
-  assert.equal(entry.activeRemoteFileLeases.size, 0)
+  assert.equal(entry.activeRemoteFileLeases.size, 1)
   await drain.promise
 
   acquisitionGate.resolve()
@@ -496,9 +497,10 @@ test('generation drain immediately invalidates identity and rejects old probe ev
     assert.equal(error.releaseError, releaseFailure)
     return true
   })
-  assert.equal(entry.state.remoteFileStatus, 'idle')
+  assert.equal(entry.state.remoteFileStatus, 'uncertain')
   assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
-  assert.equal(entry.activeRemoteFileLeases.size, 0)
+  assert.equal(entry.activeRemoteFileLeases.size, 1)
+  assert.equal(entry.uncertainRemoteFileLeases.size, 1)
 })
 
 test('committed mutation release failure keeps the active lease and warns against retry', async () => {
@@ -509,6 +511,7 @@ test('committed mutation release failure keeps the active lease and warns agains
     accepting: true,
     capabilities: new Set(),
     settlements: new Set(),
+    backends: new Map(),
     tail: Promise.resolve()
   }
   installClassField(entry, 'captureRemoteFileIdentityToken')
@@ -518,6 +521,8 @@ test('committed mutation release failure keeps the active lease and warns agains
     )
   })
   installClassField(entry, 'publishRemoteFileLeaseState')
+  installClassField(entry, 'publishRemoteFileIdentity')
+  installClassField(entry, 'invalidateRemoteFileIdentity')
   const identityToken = entry.captureRemoteFileIdentityToken()
   entry.publishRemoteFileLeaseState({
     state: 'acquired',
@@ -554,6 +559,145 @@ test('committed mutation release failure keeps the active lease and warns agains
   assert.deepEqual(reports, [releaseFailure])
   assert.equal(entry.state.remoteFileStatus, 'uncertain')
   assert.equal(entry.activeRemoteFileLeases.size, 1)
+  assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
+
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  entry.sftp = { destroy: async () => true }
+  entry.sftpSafetyProgressHandlers = { clear: () => {} }
+  entry.sftpSafetyAdapter = { discardAllPreparedProofs: () => {} }
+  entry.clearTransferSafetySessionPins = () => {}
+  entry.initRemoteAll = async () => true
+  entry.runSftpBackgroundTask = task => task()
+  installClassField(entry, 'handleReloadRemoteSftp', {
+    activateRemoteFileGeneration: lifecycle.activateRemoteFileGeneration,
+    drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
+    isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration
+  })
+
+  await entry.handleReloadRemoteSftp()
+  assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
+  assert.equal(entry.state.remoteFileStatus, 'uncertain')
+  assert.deepEqual([...entry.activeRemoteFileLeases], [
+    'mutation-release-failure'
+  ])
+  assert.deepEqual([...entry.uncertainRemoteFileLeases], [
+    'mutation-release-failure'
+  ])
+  assert.equal(entry.publishRemoteFileIdentity({
+    loginUsername: 'hik',
+    effectiveUid: '0',
+    effectiveUsername: 'root',
+    channel: 'pty-root'
+  }, identityToken), false)
+  assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
+})
+
+test('reload keeps a same-session active lease busy until release really succeeds', async () => {
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  const entry = createAsyncEntryHarness()
+  const releaseGate = deferred()
+  installClassField(entry, 'captureRemoteFileIdentityToken')
+  installClassField(entry, 'isCurrentRemoteFileIdentityToken', {
+    isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration
+  })
+  installClassField(entry, 'invalidateRemoteFileIdentity')
+  installClassField(entry, 'publishRemoteFileLeaseState')
+  const identityToken = entry.captureRemoteFileIdentityToken()
+  entry.publishRemoteFileLeaseState({
+    state: 'acquired',
+    operationId: 'reload-active'
+  }, identityToken)
+  entry.remoteFileGeneration.capabilities.add({
+    async release () {
+      await releaseGate.promise
+      entry.publishRemoteFileLeaseState({
+        state: 'released',
+        operationId: 'reload-active'
+      }, identityToken)
+      return true
+    }
+  })
+  entry.sftp = { destroy: async () => true }
+  entry.sftpSafetyProgressHandlers = { clear: () => {} }
+  entry.sftpSafetyAdapter = { discardAllPreparedProofs: () => {} }
+  entry.initRemoteAll = async () => true
+  entry.runSftpBackgroundTask = task => task()
+  installClassField(entry, 'handleReloadRemoteSftp', {
+    activateRemoteFileGeneration: lifecycle.activateRemoteFileGeneration,
+    drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
+    isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration
+  })
+
+  const reload = entry.handleReloadRemoteSftp()
+  await Promise.resolve()
+  assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
+  assert.equal(entry.state.remoteFileStatus, 'busy')
+  assert.deepEqual([...entry.activeRemoteFileLeases], ['reload-active'])
+
+  releaseGate.resolve()
+  await reload
+  assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
+  assert.equal(entry.state.remoteFileStatus, 'idle')
+  assert.equal(entry.activeRemoteFileLeases.size, 0)
+  assert.equal(entry.uncertainRemoteFileLeases.size, 0)
+})
+
+test('authoritative terminal rebind clears uncertainty and rejects old session events', async () => {
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  const entry = createAsyncEntryHarness()
+  installClassField(entry, 'captureRemoteFileIdentityToken')
+  installClassField(entry, 'isCurrentRemoteFileIdentityToken', {
+    isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration
+  })
+  installClassField(entry, 'invalidateRemoteFileIdentity')
+  installClassField(entry, 'resetRemoteFileLeaseOutcome')
+  installClassField(entry, 'publishRemoteFileLeaseState')
+  installClassField(entry, 'publishRemoteFileIdentity')
+  const oldToken = entry.captureRemoteFileIdentityToken()
+  entry.publishRemoteFileLeaseState({
+    state: 'acquired',
+    operationId: 'old-session-lease'
+  }, oldToken)
+  entry.publishRemoteFileLeaseState({
+    state: 'release-failed',
+    operationId: 'old-session-lease',
+    error: new Error('old terminal release unknown')
+  }, oldToken)
+  entry.sftp = { destroy: async () => true }
+  entry.shouldRenderRemote = () => false
+  entry.initLocalAll = () => {}
+
+  await lifecycle.bindSftpEntryRemoteSession(entry, {
+    terminalId: 'tab-1',
+    port: 41002,
+    sshSessionGeneration: 'generation-2',
+    sshTerminalPid: '5252'
+  })
+
+  assert.equal(entry.sshSessionGeneration, 'generation-2')
+  assert.equal(entry.sshTerminalPid, '5252')
+  assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
+  assert.equal(entry.state.remoteFileStatus, 'idle')
+  assert.equal(entry.activeRemoteFileLeases.size, 0)
+  assert.equal(entry.uncertainRemoteFileLeases.size, 0)
+  assert.equal(entry.publishRemoteFileLeaseState({
+    state: 'release-failed',
+    operationId: 'old-session-lease',
+    error: new Error('late old terminal event')
+  }, oldToken), false)
+  assert.equal(entry.publishRemoteFileIdentity({
+    loginUsername: 'hik',
+    effectiveUid: '0',
+    effectiveUsername: 'root',
+    channel: 'pty-root'
+  }, oldToken), false)
+  assert.equal(entry.state.remoteFileStatus, 'idle')
   assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
 })
 
