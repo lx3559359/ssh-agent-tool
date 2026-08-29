@@ -116,6 +116,60 @@ async function createLocalSftpFixture () {
   const stagingReads = []
   const stagingWrites = []
   const stagingCleanups = []
+  const stagingMetadataOverrides = new Map()
+  const isStagingPath = input => {
+    const normalized = normalizeRootOnlyPath(input)
+    return normalized.endsWith('/.shellpilot-privileged-transfers') ||
+      normalized.includes('/.shellpilot-privileged-transfers/')
+  }
+  const statStagingPath = async input => {
+    const normalized = normalizeRootOnlyPath(input)
+    if (!isStagingPath(normalized)) {
+      throw new Error('Fixture staging metadata is outside the staging namespace')
+    }
+    const stats = await fs.lstat(resolveVirtualPath(root, normalized))
+    const device = stats.dev || 1
+    const inode = stats.ino || 1
+    const binding = stagingMetadataOverrides.get(normalized)
+    const currentOverride = binding &&
+      String(binding.device) === String(device) &&
+      String(binding.inode) === String(inode)
+      ? binding
+      : null
+    if (binding && !currentOverride) stagingMetadataOverrides.delete(normalized)
+    return {
+      type: stats.isDirectory()
+        ? 'directory'
+        : stats.isFile()
+          ? 'file'
+          : stats.isSymbolicLink()
+            ? 'link'
+            : 'special',
+      mode: stats.isDirectory() ? 0o700 : 0o600,
+      uid: Number.isInteger(stats.uid) ? stats.uid : 0,
+      gid: Number.isInteger(stats.gid) ? stats.gid : 0,
+      device,
+      inode,
+      ...currentOverride
+    }
+  }
+  const setStagingMetadataForTest = async (input, attrs = {}) => {
+    const normalized = normalizeRootOnlyPath(input)
+    const metadata = await statStagingPath(normalized)
+    const override = {
+      device: metadata.device,
+      inode: metadata.inode
+    }
+    for (const key of ['mode', 'uid', 'gid']) {
+      if (!Object.hasOwn(attrs, key)) continue
+      const value = Number(attrs[key])
+      if (!Number.isSafeInteger(value) || value < 0) {
+        throw new Error(`Invalid fixture staging ${key}`)
+      }
+      override[key] = value
+    }
+    stagingMetadataOverrides.set(normalized, override)
+  }
 
   return {
     root,
@@ -137,11 +191,9 @@ async function createLocalSftpFixture () {
       const normalized = normalizeRootOnlyPath(input)
       return normalized === '/root-only' || normalized.startsWith('/root-only/')
     },
-    isStagingPath: input => {
-      const normalized = normalizeRootOnlyPath(input)
-      return normalized.endsWith('/.shellpilot-privileged-transfers') ||
-        normalized.includes('/.shellpilot-privileged-transfers/')
-    },
+    isStagingPath,
+    statStagingPath,
+    setStagingMetadataForTest,
     getRootEntry: input => cloneRootEntry(rootOnly.get(normalizeRootOnlyPath(input))),
     statRootPath: input => cloneRootEntry(requireRootEntry(input)),
     listRootDirectory: input => {

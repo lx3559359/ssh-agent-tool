@@ -365,14 +365,14 @@ function assertRootRemovalProof (fixture, entryPath, args, prefix, digestKey, si
 async function assertStageRootProof (fixture, args) {
   requireFixtureProof(args.rootRealPath === args.rootPath, 'stage root path')
   requireFixtureProof(fixture.isStagingPath(args.rootPath), 'stage root namespace')
-  const stats = await fs.promises.lstat(fixture.resolve(args.rootPath))
-  requireFixtureProof(stats.isDirectory(), 'stage root type')
-  requireFixtureProof(String(args.rootDevice) === String(stats.dev || 1), 'stage root device')
-  requireFixtureProof(String(args.rootInode) === String(stats.ino || 1), 'stage root inode')
-  requireFixtureProof(String(args.rootUid) === String(stats.uid || 0), 'stage root uid')
-  requireFixtureProof(String(args.rootGid) === String(stats.gid || 0), 'stage root gid')
-  requireFixtureProof(args.rootMode === '700', 'stage root mode')
-  return stats
+  const metadata = await fixture.statStagingPath(args.rootPath)
+  requireFixtureProof(metadata.type === 'directory', 'stage root type')
+  requireFixtureProof(String(args.rootDevice) === String(metadata.device), 'stage root device')
+  requireFixtureProof(String(args.rootInode) === String(metadata.inode), 'stage root inode')
+  requireFixtureProof(String(args.rootUid) === String(metadata.uid), 'stage root uid')
+  requireFixtureProof(String(args.rootGid) === String(metadata.gid), 'stage root gid')
+  requireFixtureProof(args.rootMode === fixtureMode(metadata), 'stage root mode')
+  return metadata
 }
 
 async function assertStageObjectProof (fixture, args, { allowAbsent = false } = {}) {
@@ -521,7 +521,7 @@ async function writePrivilegedFileResult (
       Promise.resolve()
         .then(async () => {
           if (activeStagePath) {
-            await fs.promises.rm(activeStagePath, { force: true })
+            await options.removePrivilegedStagePath(activeStagePath)
             fixture?.stagingCleanups.push({
               operation: request.operation,
               path: request.args.rootPath,
@@ -534,6 +534,7 @@ async function writePrivilegedFileResult (
         })
         .catch(error => {
           record.cancellationError = error?.stack || error?.message || String(error)
+          options.recordPrivilegedCleanupError?.(error)
         })
         .finally(() => {
           if (shellState.activePrivilegedRequest === activeRequest) {
@@ -698,17 +699,16 @@ async function writePrivilegedFileResult (
       fixture.removeRootPath(args.targetPath)
       if (operation === 'remove-peer-bound') fixture.removeRootPath(args.peerPath)
     } else if (operation === 'stage-handshake') {
-      const localRoot = fixture.resolve(args.rootPath)
       const challengePath = fixture.resolve(path.posix.join(args.rootPath, args.challengeName))
       const responsePath = fixture.resolve(path.posix.join(args.rootPath, args.responseName))
+      requireFixtureProof(fixture.isStagingPath(args.rootPath), 'handshake root namespace')
+      const rootMetadata = await fixture.statStagingPath(args.rootPath)
+      requireFixtureProof(rootMetadata.type === 'directory', 'handshake root type')
+      requireFixtureProof(args.rootMode === fixtureMode(rootMetadata), 'handshake root mode')
+      requireFixtureProof(String(args.rootUid) === String(rootMetadata.uid), 'handshake root uid')
+      requireFixtureProof(String(args.rootGid) === String(rootMetadata.gid), 'handshake root gid')
       const challengeBytes = await fs.promises.readFile(challengePath)
       fixture.stagingReads.push({ operation, path: args.rootPath, objectName: args.challengeName })
-      const rootStats = await fs.promises.lstat(localRoot)
-      requireFixtureProof(rootStats.isDirectory(), 'handshake root type')
-      requireFixtureProof(fixture.isStagingPath(args.rootPath), 'handshake root namespace')
-      requireFixtureProof(args.rootMode === '700', 'handshake root mode')
-      requireFixtureProof(String(args.rootUid) === String(rootStats.uid || 0), 'handshake root uid')
-      requireFixtureProof(String(args.rootGid) === String(rootStats.gid || 0), 'handshake root gid')
       requireFixtureProof(String(args.challengeSize) === String(challengeBytes.length), 'handshake challenge size')
       if (sha256(challengeBytes) !== args.challenge) throw new Error('stage challenge mismatch')
       const response = sha256(`${args.challenge}:root`)
@@ -722,12 +722,12 @@ async function writePrivilegedFileResult (
         1,
         'handshake',
         response,
-        String(rootStats.uid || 0),
-        String(rootStats.gid || 0),
-        '700',
+        String(rootMetadata.uid),
+        String(rootMetadata.gid),
+        fixtureMode(rootMetadata),
         args.rootPath,
-        String(rootStats.dev || 1),
-        String(rootStats.ino || 1)
+        String(rootMetadata.device),
+        String(rootMetadata.inode)
       )
     } else if (operation === 'stage-export' || operation === 'stage-export-range') {
       await assertStageRootProof(fixture, args)
@@ -1386,6 +1386,7 @@ async function startLocalSshServer (options = {}) {
   const fixtureTimers = new Set()
   const activePrivilegedHandlers = new Set()
   const activePrivilegedRequests = new Set()
+  const privilegedCleanupErrors = new Set()
   let nextConnectionId = 1
   const state = {
     authenticationCount: 0,
@@ -1415,12 +1416,14 @@ async function startLocalSshServer (options = {}) {
     stagingCleanups: options.sftpFixture?.stagingCleanups || [],
     activePrivilegedHandlers: 0,
     activePrivilegedRequests: 0,
-    activeFixtureTimers: 0
+    activeFixtureTimers: 0,
+    privilegedCleanupErrors: 0
   }
   const updateActiveCounts = () => {
     state.activePrivilegedHandlers = activePrivilegedHandlers.size
     state.activePrivilegedRequests = activePrivilegedRequests.size
     state.activeFixtureTimers = fixtureTimers.size
+    state.privilegedCleanupErrors = privilegedCleanupErrors.size
   }
   const scheduleFixtureTimer = (callback, delay) => {
     const timer = setTimeout(() => {
@@ -1448,6 +1451,9 @@ async function startLocalSshServer (options = {}) {
   }
   options = {
     ...options,
+    removePrivilegedStagePath: options.removePrivilegedStagePath || (
+      target => fs.promises.rm(target, { force: true })
+    ),
     scheduleFixtureTimer,
     clearFixtureTimer,
     trackPrivilegedHandler,
@@ -1457,6 +1463,10 @@ async function startLocalSshServer (options = {}) {
     },
     unregisterPrivilegedRequest: request => {
       activePrivilegedRequests.delete(request)
+      updateActiveCounts()
+    },
+    recordPrivilegedCleanupError: error => {
+      privilegedCleanupErrors.add(error)
       updateActiveCounts()
     }
   }
@@ -1574,13 +1584,42 @@ async function startLocalSshServer (options = {}) {
   const close = async () => {
     if (closePromise) return closePromise
     closePromise = (async () => {
-      for (const request of [...activePrivilegedRequests]) request.cancel()
-      await Promise.allSettled([...activePrivilegedHandlers])
+      const closeErrors = []
+      for (const request of [...activePrivilegedRequests]) {
+        try {
+          request.cancel()
+        } catch (error) {
+          closeErrors.push(error)
+        }
+      }
+      const handlerResults = await Promise.allSettled([
+        ...activePrivilegedHandlers
+      ])
+      for (const result of handlerResults) {
+        if (result.status === 'rejected') closeErrors.push(result.reason)
+      }
+      closeErrors.push(...privilegedCleanupErrors)
       for (const timer of [...fixtureTimers]) clearFixtureTimer(timer)
-      for (const client of clients) client.end()
-      await new Promise((resolve, reject) => {
-        server.close(error => error ? reject(error) : resolve())
-      })
+      for (const client of clients) {
+        try {
+          client.end()
+        } catch (error) {
+          closeErrors.push(error)
+        }
+      }
+      try {
+        await new Promise((resolve, reject) => {
+          server.close(error => error ? reject(error) : resolve())
+        })
+      } catch (error) {
+        closeErrors.push(error)
+      }
+      if (closeErrors.length) {
+        throw new AggregateError(
+          closeErrors,
+          'Local SSH fixture cleanup failed'
+        )
+      }
     })()
     return closePromise
   }

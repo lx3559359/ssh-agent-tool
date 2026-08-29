@@ -392,6 +392,46 @@ test('local OSC 698 fixture rejects stale mutation proofs without changing its m
       assert.notEqual(result.exitCode, 0)
       assert.deepEqual(fixture.statRootPath(targetPath), before)
       assert.deepEqual(fixture.readRootBuffer(targetPath), beforeContent)
+      assert.deepEqual(await fs.promises.readFile(fixture.resolve(stagePath)), staged)
+    })
+  })
+
+  await t.test('stage cleanup rejects a mismatched fixture root mode', async () => {
+    await withPrivilegedFixture(async ({ fixture, shell }) => {
+      const rootPath = '/home/shellpilot/.shellpilot-privileged-transfers/mode-test'
+      const objectName = 'cleanup-proof'
+      const objectPath = path.posix.join(rootPath, objectName)
+      await fs.promises.mkdir(fixture.resolve(rootPath), {
+        recursive: true,
+        mode: 0o700
+      })
+      const staged = Buffer.from('must remain after rejected cleanup\n')
+      await fs.promises.writeFile(fixture.resolve(objectPath), staged, {
+        flag: 'wx',
+        mode: 0o600
+      })
+      await fixture.setStagingMetadataForTest(rootPath, { mode: 0o755 })
+      const rootStats = await fs.promises.lstat(fixture.resolve(rootPath))
+      const result = await runPrivilegedRequest(shell, {
+        operation: 'stage-cleanup',
+        args: {
+          rootPath,
+          rootRealPath: rootPath,
+          rootDevice: String(rootStats.dev || 1),
+          rootInode: String(rootStats.ino || 1),
+          rootUid: String(rootStats.uid || 0),
+          rootGid: String(rootStats.gid || 0),
+          rootMode: '700',
+          objectName,
+          sha256: digest(staged),
+          size: String(staged.length)
+        }
+      })
+      assert.notEqual(result.exitCode, 0)
+      assert.deepEqual(
+        await fs.promises.readFile(fixture.resolve(objectPath)),
+        staged
+      )
     })
   })
 })
@@ -454,6 +494,70 @@ test('local SSH fixture close cancels and joins active privileged handlers', asy
       request => request.token === token
     ), true)
     assert.deepEqual(await fixture.listStagingFiles(), [])
+  } finally {
+    client?.end()
+    await server.close().catch(() => {})
+    await fixture.cleanup()
+  }
+})
+
+test('local SSH fixture close rejects aggregated privileged cleanup errors', async () => {
+  const fixture = await createLocalSftpFixture()
+  const cleanupError = new Error('injected privileged cleanup failure')
+  const server = await startLocalSshServer({
+    managedPtyTasks: true,
+    sftpRoot: fixture.root,
+    sftpFixture: fixture,
+    rootDownloadDelayMs: 750,
+    removePrivilegedStagePath: async () => { throw cleanupError }
+  })
+  let client
+  try {
+    client = await connectClient(server)
+    const shell = await openRootFixtureShell(server, client)
+    const rootPath = '/home/shellpilot/.shellpilot-privileged-transfers/close-error'
+    await fs.promises.mkdir(fixture.resolve(rootPath), {
+      recursive: true,
+      mode: 0o700
+    })
+    const rootStats = await fs.promises.lstat(fixture.resolve(rootPath))
+    const sourcePath = '/root-only/cancel.bin'
+    const source = fixture.statRootPath(sourcePath)
+    const token = privilegedTokenSequence.toString(16).padStart(32, '0')
+    privilegedTokenSequence += 1
+    shell.stream.write(buildPrivilegedFileCommand({
+      token,
+      request: {
+        operation: 'stage-export',
+        args: {
+          rootPath,
+          rootRealPath: rootPath,
+          rootDevice: String(rootStats.dev || 1),
+          rootInode: String(rootStats.ino || 1),
+          rootUid: String(rootStats.uid || 0),
+          rootGid: String(rootStats.gid || 0),
+          rootMode: '700',
+          objectName: 'close-error-download',
+          sourcePath,
+          ...parentProof(fixture, sourcePath, 'source'),
+          sourceDevice: String(source.device),
+          sourceInode: String(source.inode),
+          expectedSize: String(source.content.length),
+          maxSize: String(source.content.length)
+        }
+      }
+    }) + '\r')
+    await waitFor(() => server.state.privilegedFileRequests.some(
+      request => request.token === token && request.stageReady === true
+    ))
+    await assert.rejects(server.close(), error => {
+      assert.equal(error instanceof AggregateError, true)
+      assert.equal(error.errors.includes(cleanupError), true)
+      return true
+    })
+    assert.equal(server.state.activePrivilegedHandlers, 0)
+    assert.equal(server.state.activePrivilegedRequests, 0)
+    assert.equal(server.state.activeFixtureTimers, 0)
   } finally {
     client?.end()
     await server.close().catch(() => {})

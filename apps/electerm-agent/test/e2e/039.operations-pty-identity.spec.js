@@ -682,8 +682,8 @@ test('operations and the complete remote file panel inherit su root then return 
       item.id === cancelTransferId || item.originalId === cancelTransferId
     ))
     expect(cancelHistory).toBeTruthy()
-    expect(cancelHistory.status).not.toBe('success')
-    expect(['cancelled', 'failed']).toContain(cancelHistory.classification)
+    expect(cancelHistory.status).toBe('cancelled')
+    expect(cancelHistory.classification).toBe('cancelled')
     await expectRemoteFileWorkSettled(page)
     await expect.poll(() => ({
       handlers: sshServer.state.activePrivilegedHandlers,
