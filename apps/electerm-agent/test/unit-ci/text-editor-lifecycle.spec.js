@@ -167,7 +167,11 @@ function createTextEditorHarness ({ refsMap = new Map(), windowHarness } = {}) {
   }
   const fields = [
     'setStateProxy',
+    'beginEditorTransition',
+    'captureEditorTransition',
+    'isCurrentEditorTransition',
     'isCurrentEditorSession',
+    'cleanupExternalEditorResource',
     'disposeExternalEditor',
     'closeEditorSession',
     'openEditor',
@@ -335,6 +339,147 @@ test('old external-editor callbacks cannot write into a newer editor session', a
   assert.equal(calls.ipcOff.length, 1)
 })
 
+test('a late A-to-B cleanup cannot overwrite a newer C editor transition', async () => {
+  const firstCleanup = deferred()
+  const secondCleanup = deferred()
+  const sessionA = {
+    readText: async () => 'A',
+    saveText: async () => true,
+    refresh: async () => {}
+  }
+  const sessionB = {
+    readText: async () => 'B',
+    saveText: async () => true,
+    refresh: async () => {}
+  }
+  const sessionC = {
+    readText: async () => 'C',
+    saveText: async () => true,
+    refresh: async () => {}
+  }
+  const editor = createTextEditorHarness()
+  editor.editorSession = sessionA
+  editor.state = {
+    ...editor.state,
+    file: remoteFile('a.conf'),
+    id: 'A',
+    text: 'A',
+    loading: false
+  }
+  let cleanupCount = 0
+  editor.disposeExternalEditor = session => {
+    if (session !== sessionA) return Promise.resolve()
+    cleanupCount += 1
+    return cleanupCount === 1 ? firstCleanup.promise : secondCleanup.promise
+  }
+
+  const openingB = editor.openEditor({
+    id: 'B',
+    file: remoteFile('b.conf'),
+    session: sessionB
+  })
+  await flushAsync()
+  const openingC = editor.openEditor({
+    id: 'C',
+    file: remoteFile('c.conf'),
+    session: sessionC
+  })
+  await flushAsync()
+
+  secondCleanup.resolve(true)
+  await openingC
+  firstCleanup.resolve(true)
+  await openingB
+
+  assert.equal(editor.editorSession, sessionC)
+  assert.equal(editor.state.file.name, 'c.conf')
+  assert.equal(editor.state.text, 'C')
+})
+
+test('a completed save cannot close or refresh over a newly opened file', async () => {
+  const cleanupStarted = deferred()
+  const cleanup = deferred()
+  let refreshA = 0
+  const sessionA = {
+    readText: async () => 'A',
+    saveText: async () => true,
+    refresh: async () => { refreshA += 1 }
+  }
+  const sessionB = {
+    readText: async () => 'B',
+    saveText: async () => true,
+    refresh: async () => {}
+  }
+  const editor = createTextEditorHarness()
+  await editor.openEditor({
+    id: 'A',
+    file: remoteFile('a.conf'),
+    session: sessionA
+  })
+  editor.disposeExternalEditor = session => {
+    if (session !== sessionA) return Promise.resolve()
+    cleanupStarted.resolve()
+    return cleanup.promise
+  }
+
+  const saving = editor.handleSubmit({ text: 'saved A' })
+  await cleanupStarted.promise
+  await editor.openEditor({
+    id: 'B',
+    file: remoteFile('b.conf'),
+    session: sessionB
+  })
+  cleanup.resolve(true)
+  assert.equal(await saving, true)
+
+  assert.equal(editor.editorSession, sessionB)
+  assert.equal(editor.state.file.name, 'b.conf')
+  assert.equal(editor.state.text, 'B')
+  assert.equal(refreshA, 0)
+})
+
+test('unmount preempts an editor open waiting for old cleanup', async () => {
+  const cleanup = deferred()
+  const sessionA = {
+    readText: async () => 'A',
+    saveText: async () => true,
+    refresh: async () => {}
+  }
+  const sessionB = {
+    readText: async () => 'B',
+    saveText: async () => true,
+    refresh: async () => {}
+  }
+  const editor = createTextEditorHarness()
+  editor.editorSession = sessionA
+  editor.state = {
+    ...editor.state,
+    file: remoteFile('a.conf'),
+    id: 'A',
+    text: 'A',
+    loading: false
+  }
+  editor.disposeExternalEditor = session => session === sessionA
+    ? cleanup.promise
+    : Promise.resolve()
+
+  const opening = editor.openEditor({
+    id: 'B',
+    file: remoteFile('b.conf'),
+    session: sessionB
+  })
+  await flushAsync()
+  const fileAtUnmount = editor.state.file
+  const textAtUnmount = editor.state.text
+  const unmounting = editor.componentWillUnmount()
+  cleanup.resolve(true)
+  await Promise.all([opening, unmounting])
+
+  assert.equal(editor.editorSession, null)
+  assert.equal(editor.state.file, fileAtUnmount)
+  assert.equal(editor.state.text, textAtUnmount)
+})
+
 test('cancel and unmount idempotently release listener watcher and remote temp file', async () => {
   const { calls, windowHarness } = createWindowHarness()
   const session = {
@@ -386,6 +531,47 @@ test('cancel during remote temp creation still removes the completed temp file',
   assert.equal(calls.global.filter(call => call[0] === 'watchFile').length, 0)
   assert.equal(calls.unlinks.length, 1)
 })
+
+for (const action of ['cancel', 'unmount']) {
+  test(`${action} waits for delayed watcher setup before exact cleanup`, async () => {
+    const watchSetup = deferred()
+    const { calls, windowHarness } = createWindowHarness()
+    windowHarness.pre.runGlobalAsync = async (...args) => {
+      calls.global.push(args)
+      if (args[0] === 'watchFile') return watchSetup.promise
+      return true
+    }
+    const session = {
+      readText: async () => 'source',
+      saveText: async () => true,
+      refresh: async () => {}
+    }
+    const editor = createTextEditorHarness({ windowHarness })
+    await editor.openEditor({ id: 'remote', file: remoteFile(), session })
+    const opening = editor.editWith()
+    await flushAsync()
+
+    let cleanupSettled = false
+    const cleanup = Promise.resolve(action === 'cancel'
+      ? editor.cancel()
+      : editor.componentWillUnmount())
+      .then(() => { cleanupSettled = true })
+    await flushAsync()
+    assert.equal(cleanupSettled, false)
+    assert.equal(
+      calls.global.filter(call => call[0] === 'unwatchFile').length,
+      0
+    )
+
+    watchSetup.resolve(true)
+    await Promise.all([opening, cleanup])
+    assert.equal(
+      calls.global.filter(call => call[0] === 'unwatchFile').length,
+      1
+    )
+    assert.equal(calls.unlinks.length, 1)
+  })
+}
 
 test('failed save restores loading and keeps the same editor session retryable', async () => {
   const failure = new Error('save failed')

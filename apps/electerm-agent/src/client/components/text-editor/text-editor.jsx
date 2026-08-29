@@ -32,7 +32,10 @@ export default class TextEditor extends PureComponent {
 
   componentWillUnmount () {
     refsStatic.remove('text-editor')
-    return this.closeEditorSession(this.editorSession)
+    const session = this.editorSession
+    this.beginEditorTransition(null)
+    this.editorUnmounted = true
+    return this.disposeExternalEditor(session)
   }
 
   setStateProxy = (state, cb) => {
@@ -42,70 +45,143 @@ export default class TextEditor extends PureComponent {
     return this.setState(state, cb)
   }
 
-  isCurrentEditorSession = session => (
-    Boolean(session) && this.editorSession === session
+  beginEditorTransition = session => {
+    const transition = Object.freeze({
+      epoch: (this.editorEpoch || 0) + 1,
+      session: session || null
+    })
+    this.editorEpoch = transition.epoch
+    this.editorSession = transition.session
+    this.editorSessionReady = false
+    return transition
+  }
+
+  captureEditorTransition = () => Object.freeze({
+    epoch: this.editorEpoch || 0,
+    session: this.editorSession || null
+  })
+
+  isCurrentEditorTransition = transition => (
+    Boolean(transition) &&
+    !this.editorUnmounted &&
+    this.editorEpoch === transition.epoch &&
+    this.editorSession === transition.session
   )
+
+  isCurrentEditorSession = (session, transition) => (
+    Boolean(session) &&
+    this.editorSession === session &&
+    (!transition || this.isCurrentEditorTransition(transition))
+  )
+
+  cleanupExternalEditorResource = resource => {
+    if (!resource) return Promise.resolve()
+    if (resource.cleanupPromise) return resource.cleanupPromise
+    if (resource.listenerAttached) {
+      resource.listenerAttached = false
+      try {
+        window.pre.ipcOffEvent('file-change', resource.onFileChange)
+      } catch {}
+    }
+    resource.cleanupPromise = (async () => {
+      try {
+        await resource.watchSetupPromise
+      } catch {}
+      try {
+        await window.pre.runGlobalAsync('unwatchFile', resource.path)
+      } catch {}
+      if (resource.temporary) {
+        try {
+          await window.fs.unlink(resource.path)
+        } catch {}
+      }
+    })()
+    return resource.cleanupPromise
+  }
 
   disposeExternalEditor = async session => {
     const resource = this.externalEditorResource
     if (!resource || (session && resource.session !== session)) return
     this.externalEditorResource = null
-    if (resource.listenerAttached) {
-      try {
-        window.pre.ipcOffEvent('file-change', resource.onFileChange)
-      } catch {}
-    }
-    const cleanup = []
-    try {
-      cleanup.push(window.pre.runGlobalAsync('unwatchFile', resource.path))
-    } catch {}
-    if (resource.temporary) {
-      try {
-        cleanup.push(window.fs.unlink(resource.path))
-      } catch {}
-    }
-    await Promise.allSettled(cleanup)
+    await this.cleanupExternalEditorResource(resource)
   }
 
-  closeEditorSession = async session => {
-    if (!session) return
-    if (this.editorSession === session) this.editorSession = null
+  closeEditorSession = async (
+    session,
+    transition = this.captureEditorTransition(),
+    { hide = false } = {}
+  ) => {
+    if (session && !this.isCurrentEditorSession(session, transition)) return null
+    const closing = this.beginEditorTransition(null)
+    if (hide) {
+      this.setStateProxy({
+        id: '',
+        file: null,
+        text: '',
+        loading: false
+      })
+    }
     await this.disposeExternalEditor(session)
+    if (!this.isCurrentEditorTransition(closing)) return null
+    return closing
   }
 
   openEditor = async (data) => {
+    if (this.editorUnmounted) return false
     const { session, ...editorState } = data
     const previousSession = this.editorSession
+    const transition = this.beginEditorTransition(session)
+    if (data.id && data.file && session) {
+      this.setStateProxy({
+        ...editorState,
+        path: resolve(data.file.path, data.file.name),
+        loading: true
+      })
+    } else if (data.id === '') {
+      this.setStateProxy({
+        id: '',
+        file: null,
+        text: '',
+        loading: false
+      })
+    } else {
+      this.setStateProxy({ ...editorState, loading: false })
+    }
     if (previousSession && previousSession !== session) {
       await this.disposeExternalEditor(previousSession)
+      if (!this.isCurrentEditorTransition(transition)) return false
     }
-    this.editorSession = session || null
-    this.setStateProxy(editorState)
     if (data.id && data.file && session) {
-      return this.fetchText({ ...data, session })
+      return this.fetchText({ ...data, session, transition })
     }
-    if (data.id === '') {
-      return this.cancel()
+    if (this.isCurrentEditorTransition(transition)) {
+      this.editorSessionReady = true
     }
-    this.setStateProxy({ loading: false })
     return false
   }
 
   editWithSystemEditorDone = (data) => {
     const session = data.session || this.editorSession
-    if (!this.isCurrentEditorSession(session)) return false
+    const transition = data.transition || this.captureEditorTransition()
+    if (!this.isCurrentEditorSession(session, transition) ||
+      !this.editorSessionReady) return false
     if (data.text === this.state.text) {
       this.setStateProxy({ loading: false })
       return false
     }
-    this.setStateProxy({ text: data.text }, () => this.doSubmit(session))
+    this.setStateProxy(
+      { text: data.text },
+      () => this.doSubmit(session, transition)
+    )
     return true
   }
 
   fetchText = async ({
-    file, session = this.editorSession
+    file,
+    session = this.editorSession,
+    transition = this.captureEditorTransition()
   }) => {
-    if (!this.isCurrentEditorSession(session)) return false
+    if (!this.isCurrentEditorSession(session, transition)) return false
     this.setStateProxy({
       loading: true
     })
@@ -122,19 +198,20 @@ export default class TextEditor extends PureComponent {
     try {
       text = await session.readText(p, type)
     } catch (error) {
-      if (this.isCurrentEditorSession(session)) {
+      if (this.isCurrentEditorSession(session, transition)) {
         this.setStateProxy({ loading: false })
         window.store.onError(error)
       }
       return false
     }
-    if (!this.isCurrentEditorSession(session)) return false
+    if (!this.isCurrentEditorSession(session, transition)) return false
+    this.editorSessionReady = true
     const editorCommand = this.getAutoOpenCustomEditorCommand()
     this.setStateProxy({
       text,
       loading: false
     }, () => {
-      if (editorCommand) {
+      if (editorCommand && this.isCurrentEditorTransition(transition)) {
         this.editWithCustom(editorCommand)
       }
     })
@@ -152,25 +229,31 @@ export default class TextEditor extends PureComponent {
     return safeGetItem(CUSTOM_EDITOR_COMMAND_LS_KEY).trim()
   }
 
-  doSubmit = session => {
-    if (!this.isCurrentEditorSession(session)) return false
+  doSubmit = (session, transition = this.captureEditorTransition()) => {
+    if (!this.isCurrentEditorSession(session, transition)) return false
     return this.handleSubmit({
       text: this.state.text
-    }, true)
+    }, true, transition)
   }
 
-  handleSubmit = async (res, force = false) => {
+  handleSubmit = async (
+    res,
+    force = false,
+    expectedTransition
+  ) => {
+    const transition = expectedTransition || this.captureEditorTransition()
+    const session = transition.session
+    const { path, file } = this.state
+    if (!this.isCurrentEditorSession(session, transition) ||
+      !this.editorSessionReady || !file) {
+      this.setStateProxy({ loading: false })
+      return false
+    }
     this.setStateProxy({
       loading: true
     })
     if (!force && res.text === this.state.text) {
       return this.cancel()
-    }
-    const session = this.editorSession
-    const { path, file } = this.state
-    if (!this.isCurrentEditorSession(session) || !file) {
-      this.setStateProxy({ loading: false })
-      return false
     }
     const {
       type,
@@ -185,39 +268,47 @@ export default class TextEditor extends PureComponent {
         text: res.text
       })
     } catch (error) {
-      if (this.isCurrentEditorSession(session)) {
+      if (this.isCurrentEditorSession(session, transition)) {
         this.setStateProxy({ loading: false })
         window.store.onError(error)
       }
       return false
     }
-    if (!this.isCurrentEditorSession(session)) return Boolean(result)
+    if (!this.isCurrentEditorSession(session, transition)) {
+      return Boolean(result)
+    }
     if (result && !force) {
-      await this.closeEditorSession(session)
-      this.setStateProxy({
-        id: '',
-        file: null,
-        text: '',
-        loading: false
-      })
+      const closing = await this.closeEditorSession(
+        session,
+        transition,
+        { hide: true }
+      )
+      if (!closing) return Boolean(result)
       try {
         await session.refresh()
       } catch (error) {
-        window.store.onError(error)
+        if (this.isCurrentEditorTransition(closing)) {
+          window.store.onError(error)
+        }
       }
+      if (!this.isCurrentEditorTransition(closing)) return Boolean(result)
     } else {
-      this.setStateProxy({ loading: false })
+      if (this.isCurrentEditorTransition(transition)) {
+        this.setStateProxy({ loading: false })
+      }
     }
     return Boolean(result)
   }
 
   openExternalEditor = async editorCommand => {
     const session = this.editorSession
+    const transition = this.captureEditorTransition()
     const file = this.state.file
     this.setStateProxy({
       loading: true
     })
-    if (!this.isCurrentEditorSession(session) || !file) {
+    if (!this.isCurrentEditorSession(session, transition) ||
+      !this.editorSessionReady || !file) {
       this.setStateProxy({ loading: false })
       return false
     }
@@ -228,7 +319,7 @@ export default class TextEditor extends PureComponent {
     } = file
     const { text } = this.state
     await this.disposeExternalEditor(session)
-    if (!this.isCurrentEditorSession(session)) return false
+    if (!this.isCurrentEditorSession(session, transition)) return false
     let tempPath
     let temporary = false
     let resource
@@ -249,29 +340,35 @@ export default class TextEditor extends PureComponent {
         )
         await window.fs.writeFile(tempPath, text)
       }
-      if (!this.isCurrentEditorSession(session)) {
+      if (!this.isCurrentEditorSession(session, transition)) {
         await removeUntrackedTemp()
         return false
       }
       resource = {
         session,
+        transition,
         path: tempPath,
         temporary,
-        listenerAttached: false
+        listenerAttached: false,
+        cleanupPromise: null
       }
       resource.onFileChange = (event, nextText) => {
         if (this.externalEditorResource !== resource ||
-          !this.isCurrentEditorSession(session)) return
+          !this.isCurrentEditorSession(session, transition)) return
         this.editWithSystemEditorDone({
           session,
+          transition,
           text: nextText
         })
       }
       this.externalEditorResource = resource
-      await window.pre.runGlobalAsync('watchFile', tempPath)
+      resource.watchSetupPromise = Promise.resolve().then(() => (
+        window.pre.runGlobalAsync('watchFile', tempPath)
+      ))
+      await resource.watchSetupPromise
       if (this.externalEditorResource !== resource ||
-        !this.isCurrentEditorSession(session)) {
-        await this.disposeExternalEditor(session)
+        !this.isCurrentEditorSession(session, transition)) {
+        await this.cleanupExternalEditorResource(resource)
         return false
       }
       window.pre.ipcOnEvent('file-change', resource.onFileChange)
@@ -284,20 +381,24 @@ export default class TextEditor extends PureComponent {
         )
       } else {
         await window.fs.openFile(tempPath)
+        if (!this.isCurrentEditorTransition(transition)) {
+          await this.cleanupExternalEditorResource(resource)
+          return false
+        }
         window.pre.showItemInFolder(tempPath)
       }
-      if (this.isCurrentEditorSession(session)) {
+      if (this.isCurrentEditorSession(session, transition)) {
         this.setStateProxy({ loading: false })
         return true
       }
       return false
     } catch (error) {
       if (resource) {
-        await this.disposeExternalEditor(session)
+        await this.cleanupExternalEditorResource(resource)
       } else {
         await removeUntrackedTemp()
       }
-      if (this.isCurrentEditorSession(session)) {
+      if (this.isCurrentEditorSession(session, transition)) {
         this.setStateProxy({ loading: false })
         window.store.onError(error)
       }
@@ -311,14 +412,8 @@ export default class TextEditor extends PureComponent {
 
   cancel = () => {
     const session = this.editorSession
-    const cleanup = this.closeEditorSession(session)
-    this.setStateProxy({
-      id: '',
-      file: null,
-      text: '',
-      loading: false
-    })
-    return cleanup
+    const transition = this.captureEditorTransition()
+    return this.closeEditorSession(session, transition, { hide: true })
   }
 
   render () {

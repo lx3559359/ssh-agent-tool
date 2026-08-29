@@ -5446,7 +5446,7 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
   assert.doesNotMatch(editorSubmitSource, /\.catch\(window\.store\.onError\)/)
   assert.match(
     editorSubmitSource,
-    /if \(result && !force\) \{[\s\S]{0,180}this\.closeEditorSession\(session\)/
+    /if \(result && !force\) \{[\s\S]{0,240}this\.closeEditorSession\([\s\S]{0,80}session,[\s\S]{0,80}transition,[\s\S]{0,80}\{ hide: true \}/
   )
   assert.match(editorSubmitSource, /await session\.refresh\(\)/)
   assert.doesNotMatch(itemSource, /editFile[\s\S]{0,120}refs\.add\(this\.id/)
