@@ -577,7 +577,7 @@ function decodeCondition (request) {
     const variable = argumentVariables[key]
     const environmentVariable = argumentEnvironmentVariables[key]
     return `${variable}="$(__sp_decode "$${environmentVariable}")" && ` +
-      `${variable}=$` + `{${variable}%?}`
+      `${variable}=\${${variable}%?}`
   }).join(' && ')
 }
 
