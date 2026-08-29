@@ -233,6 +233,167 @@ async function readProtocolBuffer (fixture, remotePath) {
     : fixture.readRootBuffer(remotePath)
 }
 
+function fixtureProofError (label) {
+  const error = new Error(`OSC 698 fixture proof mismatch: ${label}`)
+  error.code = 'FIXTURE_PROOF_MISMATCH'
+  return error
+}
+
+function requireFixtureProof (condition, label) {
+  if (!condition) throw fixtureProofError(label)
+}
+
+function fixtureMode (entry) {
+  return Number(entry.mode).toString(8)
+}
+
+function assertRootParentProof (fixture, entryPath, args, prefix, trust = false) {
+  const parentPath = path.posix.dirname(entryPath)
+  const parent = fixture.statRootPath(parentPath)
+  requireFixtureProof(parent.type === 'directory', `${prefix} parent type`)
+  requireFixtureProof(parent.uid === 0, `${prefix} parent uid`)
+  requireFixtureProof((parent.mode & 0o22) === 0, `${prefix} parent mode`)
+  requireFixtureProof(
+    args[`${prefix}ParentRealPath`] === parentPath,
+    `${prefix} parent path`
+  )
+  requireFixtureProof(
+    String(args[`${prefix}ParentDevice`]) === String(parent.device),
+    `${prefix} parent device`
+  )
+  requireFixtureProof(
+    String(args[`${prefix}ParentInode`]) === String(parent.inode),
+    `${prefix} parent inode`
+  )
+  if (trust) {
+    requireFixtureProof(
+      String(args[`${prefix}ParentUid`]) === String(parent.uid),
+      `${prefix} parent trusted uid`
+    )
+    requireFixtureProof(
+      args[`${prefix}ParentMode`] === fixtureMode(parent),
+      `${prefix} parent trusted mode`
+    )
+  }
+  return parent
+}
+
+function assertRootEntryProof (fixture, entryPath, args, prefix) {
+  const entry = fixture.statRootPath(entryPath)
+  requireFixtureProof(
+    String(args[`${prefix}Device`]) === String(entry.device),
+    `${prefix} device`
+  )
+  requireFixtureProof(
+    String(args[`${prefix}Inode`]) === String(entry.inode),
+    `${prefix} inode`
+  )
+  if (Object.hasOwn(args, `${prefix}Type`)) {
+    requireFixtureProof(
+      args[`${prefix}Type`] === entry.type,
+      `${prefix} type`
+    )
+  }
+  return entry
+}
+
+async function assertProtocolParentProof (fixture, entryPath, args, prefix) {
+  if (!fixture.isStagingPath(entryPath)) {
+    return assertRootParentProof(fixture, entryPath, args, prefix)
+  }
+  const parentPath = path.posix.dirname(entryPath)
+  const parent = await fs.promises.lstat(fixture.resolve(parentPath))
+  requireFixtureProof(parent.isDirectory(), `${prefix} stage parent type`)
+  requireFixtureProof(
+    args[`${prefix}ParentRealPath`] === parentPath,
+    `${prefix} stage parent path`
+  )
+  requireFixtureProof(
+    String(args[`${prefix}ParentDevice`]) === String(parent.dev || 1),
+    `${prefix} stage parent device`
+  )
+  requireFixtureProof(
+    String(args[`${prefix}ParentInode`]) === String(parent.ino || 1),
+    `${prefix} stage parent inode`
+  )
+  return parent
+}
+
+async function assertProtocolEntryProof (fixture, entryPath, args, prefix) {
+  if (!fixture.isStagingPath(entryPath)) {
+    return assertRootEntryProof(fixture, entryPath, args, prefix)
+  }
+  const entry = await fs.promises.lstat(fixture.resolve(entryPath))
+  requireFixtureProof(
+    String(args[`${prefix}Device`]) === String(entry.dev || 1),
+    `${prefix} stage device`
+  )
+  requireFixtureProof(
+    String(args[`${prefix}Inode`]) === String(entry.ino || 1),
+    `${prefix} stage inode`
+  )
+  return entry
+}
+
+function assertRootRemovalProof (fixture, entryPath, args, prefix, digestKey, sizeKey) {
+  assertRootParentProof(fixture, entryPath, args, prefix)
+  const entry = assertRootEntryProof(fixture, entryPath, args, prefix)
+  requireFixtureProof(
+    args[`${prefix}Mode`] === fixtureMode(entry),
+    `${prefix} mode`
+  )
+  requireFixtureProof(
+    String(args[`${prefix}Uid`]) === String(entry.uid),
+    `${prefix} uid`
+  )
+  requireFixtureProof(
+    String(args[`${prefix}Gid`]) === String(entry.gid),
+    `${prefix} gid`
+  )
+  const expectedSize = entry.type === 'file' ? entry.content.length : 0
+  const expectedDigest = entry.type === 'file'
+    ? sha256(entry.content)
+    : '0'.repeat(64)
+  requireFixtureProof(
+    String(args[sizeKey]) === String(expectedSize),
+    `${prefix} size`
+  )
+  requireFixtureProof(args[digestKey] === expectedDigest, `${prefix} digest`)
+  return entry
+}
+
+async function assertStageRootProof (fixture, args) {
+  requireFixtureProof(args.rootRealPath === args.rootPath, 'stage root path')
+  requireFixtureProof(fixture.isStagingPath(args.rootPath), 'stage root namespace')
+  const stats = await fs.promises.lstat(fixture.resolve(args.rootPath))
+  requireFixtureProof(stats.isDirectory(), 'stage root type')
+  requireFixtureProof(String(args.rootDevice) === String(stats.dev || 1), 'stage root device')
+  requireFixtureProof(String(args.rootInode) === String(stats.ino || 1), 'stage root inode')
+  requireFixtureProof(String(args.rootUid) === String(stats.uid || 0), 'stage root uid')
+  requireFixtureProof(String(args.rootGid) === String(stats.gid || 0), 'stage root gid')
+  requireFixtureProof(args.rootMode === '700', 'stage root mode')
+  return stats
+}
+
+async function assertStageObjectProof (fixture, args, { allowAbsent = false } = {}) {
+  await assertStageRootProof(fixture, args)
+  const objectPath = path.posix.join(args.rootPath, args.objectName)
+  let stats
+  try {
+    stats = await fs.promises.lstat(fixture.resolve(objectPath))
+  } catch (error) {
+    if (allowAbsent && error?.code === 'ENOENT') {
+      return { content: null, objectPath, missing: true }
+    }
+    throw error
+  }
+  requireFixtureProof(stats.isFile(), 'stage object type')
+  const content = await fs.promises.readFile(fixture.resolve(objectPath))
+  requireFixtureProof(String(args.size) === String(content.length), 'stage object size')
+  requireFixtureProof(args.sha256 === sha256(content), 'stage object digest')
+  return { content, objectPath }
+}
+
 function writePrivilegedData (stream, request, sequence, total, kind, ...fields) {
   stream.write(privilegedFileMarker(
     request.token,
@@ -244,10 +405,10 @@ function writePrivilegedData (stream, request, sequence, total, kind, ...fields)
   ))
 }
 
-function finishShellCommand (stream, nonce, status = 0) {
+function finishShellCommand (stream, nonce, status = 0, scheduleTimer = setTimeout) {
   if (nonce) {
     stream.write(osc633(nonce, 'D', String(status)))
-    setTimeout(() => {
+    scheduleTimer(() => {
       if (!stream.destroyed) {
         writeTrackedPrompt(stream, nonce, { leadingNewline: true })
       }
@@ -355,7 +516,7 @@ async function writePrivilegedFileResult (
         return false
       }
       cancelled = true
-      clearTimeout(delayTimer)
+      options.clearFixtureTimer?.(delayTimer)
       delayResolve?.()
       Promise.resolve()
         .then(async () => {
@@ -378,9 +539,15 @@ async function writePrivilegedFileResult (
           if (shellState.activePrivilegedRequest === activeRequest) {
             shellState.activePrivilegedRequest = null
           }
+          options.unregisterPrivilegedRequest?.(activeRequest)
           if (!stream.destroyed) {
             stream.write(privilegedFileMarker(request.token, 'end', '130'))
-            finishShellCommand(stream, nonce, 130)
+            finishShellCommand(
+              stream,
+              nonce,
+              130,
+              options.scheduleFixtureTimer
+            )
           }
           cancellationResolve()
         })
@@ -388,6 +555,7 @@ async function writePrivilegedFileResult (
     }
   }
   shellState.activePrivilegedRequest = activeRequest
+  options.registerPrivilegedRequest?.(activeRequest)
   stream.write(privilegedFileMarker(
     request.token,
     'start',
@@ -404,6 +572,10 @@ async function writePrivilegedFileResult (
     if (operation === 'probe') {
       // The protocol boundary and identity are the probe result.
     } else if (operation === 'list' || operation === 'list-bound') {
+      if (operation === 'list-bound') {
+        await assertProtocolParentProof(fixture, args.path, args, 'source')
+        await assertProtocolEntryProof(fixture, args.path, args, 'source')
+      }
       const entries = fixture.listRootDirectory(args.path)
       entries.forEach((entry, index) => {
         writePrivilegedData(
@@ -422,6 +594,9 @@ async function writePrivilegedFileResult (
         )
       })
     } else if (operation === 'lstat' || operation === 'lstat-bound' || operation === 'stat') {
+      if (operation === 'lstat-bound') {
+        await assertProtocolParentProof(fixture, args.path, args, 'source')
+      }
       let metadata
       try {
         metadata = await protocolMetadata(fixture, args.path)
@@ -446,6 +621,11 @@ async function writePrivilegedFileResult (
       fixture.statRootPath(args.path)
       writePrivilegedData(stream, request, 1, 1, 'text', args.path)
     } else if (operation === 'mkdir-bound') {
+      assertRootParentProof(fixture, args.targetPath, args, 'target', true)
+      requireFixtureProof(
+        fixture.getRootEntry(args.targetPath) === null,
+        'mkdir target must be absent'
+      )
       const entry = fixture.mkdirRootDirectory(args.targetPath, {
         mode: Number.parseInt(args.targetMode, 8),
         uid: Number(args.targetUid),
@@ -461,12 +641,60 @@ async function writePrivilegedFileResult (
         String(entry.inode)
       )
     } else if (operation === 'metadata-bound') {
-      fixture.chmodRootPath(args.targetPath, Number.parseInt(args.targetMode, 8))
+      assertRootParentProof(fixture, args.targetPath, args, 'target', true)
+      assertRootEntryProof(fixture, args.targetPath, args, 'target')
+      fixture.chmodRootPath(
+        args.targetPath,
+        Number.parseInt(args.targetMode, 8),
+        { uid: Number(args.targetUid), gid: Number(args.targetGid) }
+      )
     } else if (operation === 'touch-bound') {
+      assertRootParentProof(fixture, args.targetPath, args, 'target', true)
+      assertRootEntryProof(fixture, args.targetPath, args, 'target')
       fixture.touchRootPath(args.targetPath)
     } else if (operation === 'rename-bound') {
+      assertRootParentProof(fixture, args.sourcePath, args, 'source', true)
+      const source = assertRootEntryProof(
+        fixture,
+        args.sourcePath,
+        args,
+        'source'
+      )
+      const targetParent = assertRootParentProof(
+        fixture,
+        args.targetPath,
+        args,
+        'target',
+        true
+      )
+      requireFixtureProof(
+        fixture.getRootEntry(args.targetPath) === null,
+        'rename target must be absent'
+      )
+      requireFixtureProof(
+        String(source.device) === String(targetParent.device),
+        'rename target filesystem'
+      )
       fixture.renameRootPath(args.sourcePath, args.targetPath)
     } else if (operation === 'remove-bound' || operation === 'remove-peer-bound') {
+      assertRootRemovalProof(
+        fixture,
+        args.targetPath,
+        args,
+        'target',
+        'sha256',
+        'size'
+      )
+      if (operation === 'remove-peer-bound') {
+        assertRootRemovalProof(
+          fixture,
+          args.peerPath,
+          args,
+          'peer',
+          'peerSha256',
+          'peerSize'
+        )
+      }
       fixture.removeRootPath(args.targetPath)
       if (operation === 'remove-peer-bound') fixture.removeRootPath(args.peerPath)
     } else if (operation === 'stage-handshake') {
@@ -475,12 +703,18 @@ async function writePrivilegedFileResult (
       const responsePath = fixture.resolve(path.posix.join(args.rootPath, args.responseName))
       const challengeBytes = await fs.promises.readFile(challengePath)
       fixture.stagingReads.push({ operation, path: args.rootPath, objectName: args.challengeName })
+      const rootStats = await fs.promises.lstat(localRoot)
+      requireFixtureProof(rootStats.isDirectory(), 'handshake root type')
+      requireFixtureProof(fixture.isStagingPath(args.rootPath), 'handshake root namespace')
+      requireFixtureProof(args.rootMode === '700', 'handshake root mode')
+      requireFixtureProof(String(args.rootUid) === String(rootStats.uid || 0), 'handshake root uid')
+      requireFixtureProof(String(args.rootGid) === String(rootStats.gid || 0), 'handshake root gid')
+      requireFixtureProof(String(args.challengeSize) === String(challengeBytes.length), 'handshake challenge size')
       if (sha256(challengeBytes) !== args.challenge) throw new Error('stage challenge mismatch')
       const response = sha256(`${args.challenge}:root`)
       await fs.promises.writeFile(responsePath, response, { flag: 'wx', mode: 0o600 })
       await fs.promises.chmod(responsePath, 0o600)
       fixture.stagingWrites.push({ operation, path: args.rootPath, objectName: args.responseName })
-      const rootStats = await fs.promises.stat(localRoot)
       writePrivilegedData(
         stream,
         request,
@@ -496,7 +730,24 @@ async function writePrivilegedFileResult (
         String(rootStats.ino || 1)
       )
     } else if (operation === 'stage-export' || operation === 'stage-export-range') {
+      await assertStageRootProof(fixture, args)
+      assertRootParentProof(fixture, args.sourcePath, args, 'source')
+      const source = assertRootEntryProof(
+        fixture,
+        args.sourcePath,
+        args,
+        'source'
+      )
+      requireFixtureProof(source.type === 'file', 'export source type')
       let content = fixture.readRootBuffer(args.sourcePath)
+      requireFixtureProof(
+        String(args.expectedSize) === String(content.length),
+        'export source size'
+      )
+      requireFixtureProof(
+        content.length <= Number(args.maxSize),
+        'export source max size'
+      )
       if (operation === 'stage-export-range') {
         const offset = Number(args.offset)
         content = content.subarray(offset, offset + Number(args.maxBytes))
@@ -511,7 +762,7 @@ async function writePrivilegedFileResult (
         args.sourcePath === '/root-only/cancel.bin') {
         await new Promise(resolve => {
           delayResolve = resolve
-          delayTimer = setTimeout(
+          delayTimer = options.scheduleFixtureTimer(
             resolve,
             Number(options.rootDownloadDelayMs ?? 5000)
           )
@@ -524,12 +775,17 @@ async function writePrivilegedFileResult (
       }
       writePrivilegedData(stream, request, 1, 1, 'digest', sha256(content), String(content.length))
     } else if (operation === 'stage-import') {
-      const stagePath = fixture.resolve(path.posix.join(args.rootPath, args.objectName))
-      const content = await fs.promises.readFile(stagePath)
+      const { content, objectPath } = await assertStageObjectProof(fixture, args)
+      const stagePath = fixture.resolve(objectPath)
       fixture.stagingReads.push({ operation, path: args.rootPath, objectName: args.objectName, size: content.length })
-      if (sha256(content) !== args.sha256 || content.length !== Number(args.size)) {
-        throw new Error('stage import digest mismatch')
-      }
+      assertRootParentProof(fixture, args.targetPath, args, 'target', true)
+      requireFixtureProof(args.mustBeAbsent === '1', 'import mustBeAbsent')
+      requireFixtureProof(args.targetDevice === '0', 'import absent device')
+      requireFixtureProof(args.targetInode === '0', 'import absent inode')
+      requireFixtureProof(
+        fixture.getRootEntry(args.targetPath) === null,
+        'import target must be absent'
+      )
       const entry = fixture.writeRootFile(args.targetPath, content, {
         mode: Number.parseInt(args.targetMode, 8),
         uid: Number(args.targetUid),
@@ -557,12 +813,40 @@ async function writePrivilegedFileResult (
     } else if (operation === 'stage-import-cleanup') {
       writePrivilegedData(stream, request, 1, 1, 'import-cleanup', '1', 'none')
     } else if (operation === 'stage-cleanup') {
-      const stagePath = fixture.resolve(path.posix.join(args.rootPath, args.objectName))
-      await fs.promises.rm(stagePath, { force: true })
+      const { objectPath, missing } = await assertStageObjectProof(
+        fixture,
+        args,
+        { allowAbsent: true }
+      )
+      const stagePath = fixture.resolve(objectPath)
+      if (!missing) await fs.promises.rm(stagePath, { force: true })
       fixture.stagingCleanups.push({ operation, path: args.rootPath, objectName: args.objectName })
     } else if (operation === 'digest-cleanup') {
       fixture.stagingCleanups.push({ operation, path: args.rootPath, objectName: args.objectName })
     } else if (['sha256-bound', 'sha256-range-bound', 'sha256'].includes(operation)) {
+      if (operation !== 'sha256') {
+        await assertStageRootProof(fixture, args)
+        await assertProtocolParentProof(fixture, args.path, args, 'source')
+        const source = await assertProtocolEntryProof(
+          fixture,
+          args.path,
+          args,
+          'source'
+        )
+        const sourceContent = await readProtocolBuffer(fixture, args.path)
+        requireFixtureProof(
+          fixture.isStagingPath(args.path) ? source.isFile() : source.type === 'file',
+          'digest source type'
+        )
+        requireFixtureProof(
+          String(args.expectedSize) === String(sourceContent.length),
+          'digest source size'
+        )
+        requireFixtureProof(
+          sourceContent.length <= Number(args.maxSize),
+          'digest source max size'
+        )
+      }
       let content = await readProtocolBuffer(fixture, args.path)
       if (operation === 'sha256-range-bound') {
         const offset = Number(args.offset)
@@ -583,8 +867,14 @@ async function writePrivilegedFileResult (
   if (shellState.activePrivilegedRequest === activeRequest) {
     shellState.activePrivilegedRequest = null
   }
+  options.unregisterPrivilegedRequest?.(activeRequest)
   stream.write(privilegedFileMarker(request.token, 'end', String(exitCode)))
-  finishShellCommand(stream, nonce, exitCode)
+  finishShellCommand(
+    stream,
+    nonce,
+    exitCode,
+    options.scheduleFixtureTimer
+  )
 }
 
 function runCommand (stream, command, state, sessionId, shellState, options) {
@@ -599,7 +889,7 @@ function runCommand (stream, command, state, sessionId, shellState, options) {
     // The client intentionally discards the first OSC chunk while ending
     // output suppression. A real shell emits the next prompt separately.
     stream.write(osc633(shellState.shellIntegrationNonce, 'A'))
-    setTimeout(() => {
+    options.scheduleFixtureTimer(() => {
       writeTrackedPrompt(stream, shellState.shellIntegrationNonce)
     }, 20)
     return
@@ -626,7 +916,7 @@ function runCommand (stream, command, state, sessionId, shellState, options) {
     shellState.identity = { uid: '0', username: 'root' }
     shellState.shellIntegrationActive = false
     state.effectiveIdentity = { ...shellState.identity }
-    setTimeout(() => {
+    options.scheduleFixtureTimer(() => {
       if (!stream.destroyed) {
         stream.write('root shell active\r\nroot@fixture:# ')
       }
@@ -649,7 +939,7 @@ function runCommand (stream, command, state, sessionId, shellState, options) {
       shellState
     )
   } else if (privileged) {
-    writePrivilegedFileResult(
+    const handler = writePrivilegedFileResult(
       stream,
       privileged,
       state,
@@ -657,7 +947,14 @@ function runCommand (stream, command, state, sessionId, shellState, options) {
       shellState,
       options,
       nonce
-    ).catch(() => finishShellCommand(stream, nonce, 1))
+    )
+    options.trackPrivilegedHandler(handler)
+    handler.catch(() => finishShellCommand(
+      stream,
+      nonce,
+      1,
+      options.scheduleFixtureTimer
+    ))
     return
   } else if (command === 'echo shellpilot-e2e') {
     stream.write('shellpilot-e2e\r\n')
@@ -689,11 +986,16 @@ function attachShell (stream, state, sessionId, options) {
   state.effectiveIdentity = { ...shellState.identity }
 
   stream.on('error', () => {})
-  setTimeout(() => {
+  options.scheduleFixtureTimer(() => {
     if (stream.destroyed) return
     state.shellCount += 1
     stream.write('ShellPilot E2E ready\r\n$ ')
   }, Number(options.initialPromptDelayMs ?? 250))
+  const cancelActivePrivilegedRequest = () => {
+    shellState.activePrivilegedRequest?.cancel?.()
+  }
+  stream.once('close', cancelActivePrivilegedRequest)
+  stream.once('end', cancelActivePrivilegedRequest)
   stream.on('data', chunk => {
     const input = typeof chunk === 'string'
       ? chunk
@@ -1081,6 +1383,9 @@ function attachSftp (sftp, root, state, fixture) {
 
 async function startLocalSshServer (options = {}) {
   const clients = new Set()
+  const fixtureTimers = new Set()
+  const activePrivilegedHandlers = new Set()
+  const activePrivilegedRequests = new Set()
   let nextConnectionId = 1
   const state = {
     authenticationCount: 0,
@@ -1107,7 +1412,53 @@ async function startLocalSshServer (options = {}) {
     cancelledPrivilegedFileRequests: [],
     stagingReads: options.sftpFixture?.stagingReads || [],
     stagingWrites: options.sftpFixture?.stagingWrites || [],
-    stagingCleanups: options.sftpFixture?.stagingCleanups || []
+    stagingCleanups: options.sftpFixture?.stagingCleanups || [],
+    activePrivilegedHandlers: 0,
+    activePrivilegedRequests: 0,
+    activeFixtureTimers: 0
+  }
+  const updateActiveCounts = () => {
+    state.activePrivilegedHandlers = activePrivilegedHandlers.size
+    state.activePrivilegedRequests = activePrivilegedRequests.size
+    state.activeFixtureTimers = fixtureTimers.size
+  }
+  const scheduleFixtureTimer = (callback, delay) => {
+    const timer = setTimeout(() => {
+      fixtureTimers.delete(timer)
+      updateActiveCounts()
+      callback()
+    }, delay)
+    fixtureTimers.add(timer)
+    updateActiveCounts()
+    return timer
+  }
+  const clearFixtureTimer = timer => {
+    if (timer === undefined || timer === null) return
+    clearTimeout(timer)
+    fixtureTimers.delete(timer)
+    updateActiveCounts()
+  }
+  const trackPrivilegedHandler = handler => {
+    activePrivilegedHandlers.add(handler)
+    updateActiveCounts()
+    handler.finally(() => {
+      activePrivilegedHandlers.delete(handler)
+      updateActiveCounts()
+    }).catch(() => {})
+  }
+  options = {
+    ...options,
+    scheduleFixtureTimer,
+    clearFixtureTimer,
+    trackPrivilegedHandler,
+    registerPrivilegedRequest: request => {
+      activePrivilegedRequests.add(request)
+      updateActiveCounts()
+    },
+    unregisterPrivilegedRequest: request => {
+      activePrivilegedRequests.delete(request)
+      updateActiveCounts()
+    }
   }
   const server = new Server({
     hostKeys: [HOST_KEY]
@@ -1180,7 +1531,7 @@ async function startLocalSshServer (options = {}) {
           const recordCancellation = () => {
             if (settled) return false
             settled = true
-            clearTimeout(timer)
+            clearFixtureTimer(timer)
             cancelActiveExec = () => false
             state.cancelledExecCommands.push(info.command)
             try {
@@ -1193,7 +1544,7 @@ async function startLocalSshServer (options = {}) {
           stream.on('error', () => {})
           stream.once('close', recordCancellation)
           if (delayMs > 0) {
-            timer = setTimeout(finish, delayMs)
+            timer = scheduleFixtureTimer(finish, delayMs)
           } else {
             finish()
           }
@@ -1219,6 +1570,21 @@ async function startLocalSshServer (options = {}) {
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
 
+  let closePromise
+  const close = async () => {
+    if (closePromise) return closePromise
+    closePromise = (async () => {
+      for (const request of [...activePrivilegedRequests]) request.cancel()
+      await Promise.allSettled([...activePrivilegedHandlers])
+      for (const timer of [...fixtureTimers]) clearFixtureTimer(timer)
+      for (const client of clients) client.end()
+      await new Promise((resolve, reject) => {
+        server.close(error => error ? reject(error) : resolve())
+      })
+    })()
+    return closePromise
+  }
+
   return {
     host: '127.0.0.1',
     port: server.address().port,
@@ -1228,14 +1594,7 @@ async function startLocalSshServer (options = {}) {
     disconnectClients () {
       for (const client of clients) client.end()
     },
-    async close () {
-      for (const client of clients) {
-        client.end()
-      }
-      await new Promise((resolve, reject) => {
-        server.close(error => error ? reject(error) : resolve())
-      })
-    }
+    close
   }
 }
 

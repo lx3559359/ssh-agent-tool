@@ -219,9 +219,11 @@ async function createLocalSftpFixture () {
         rootOnly.set(normalizedTarget + candidate.slice(normalizedSource.length), entry)
       }
     },
-    chmodRootPath: (input, mode) => {
+    chmodRootPath: (input, mode, attrs = {}) => {
       const entry = requireRootEntry(input)
       entry.mode = Number(mode)
+      if (Object.hasOwn(attrs, 'uid')) entry.uid = Number(attrs.uid)
+      if (Object.hasOwn(attrs, 'gid')) entry.gid = Number(attrs.gid)
       entry.mtime += 1
     },
     touchRootPath: input => {
@@ -254,6 +256,25 @@ async function createLocalSftpFixture () {
         }
       }
       await visit(root)
+      return found.sort()
+    },
+    async listLocalFiles () {
+      const found = []
+      const visit = async current => {
+        const entries = await fs.readdir(current, { withFileTypes: true })
+        for (const entry of entries) {
+          const candidate = assertPathInsideRoot(
+            localRoot,
+            path.join(current, entry.name)
+          )
+          if (entry.isDirectory()) {
+            await visit(candidate)
+          } else {
+            found.push(path.relative(localRoot, candidate).replace(/\\/g, '/'))
+          }
+        }
+      }
+      await visit(localRoot)
       return found.sort()
     },
     async cleanup () {

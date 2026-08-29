@@ -96,15 +96,15 @@ async function openRemoteFilePanel (page) {
 }
 
 async function gotoRemotePath (page, remotePath, options = {}) {
+  const requestEpoch = await remoteRequestEpoch(page)
   const input = page.locator(
     '.session-current .sftp-remote-section .sftp-title input'
   )
   await input.fill(remotePath)
   await input.press('Enter')
-  await expect.poll(() => page.evaluate(() => {
-    const entry = window.refs.get('sftp-' + window.store.activeTabId)
-    return entry?.state.remoteLoading === false
-  }), { timeout: 30000 }).toBe(true)
+  await waitForRemoteRequestCycle(page, requestEpoch, {
+    compensation: !options.expectFailure
+  })
   if (options.expectFailure) return
   await expect(input).toHaveValue(remotePath, { timeout: 30000 })
   await expect.poll(() => page.evaluate(() => {
@@ -144,6 +144,7 @@ async function saveRemoteEditor (page) {
     const tracker = await trackerReady()
     return tracker.operationsBusy === false && tracker.ready === true
   }, { timeout: 5000 }).toBe(true)
+  const requestEpoch = await remoteRequestEpoch(page)
   await remoteEditor(page)
     .locator('form > .pd1t.pd2b')
     .first()
@@ -155,6 +156,7 @@ async function saveRemoteEditor (page) {
   await expect(confirmation).toBeVisible({ timeout: 15000 })
   await confirmation.locator('.custom-modal-ok-btn').click()
   await expect(remoteEditor(page)).toHaveCount(0, { timeout: 30000 })
+  await waitForRemoteRequestCycle(page, requestEpoch)
 }
 
 function remoteRow (page, name) {
@@ -171,10 +173,6 @@ async function waitForRemotePanelReady (page) {
       terminal?.operationsPtyTaskController?.isBusy?.() === false &&
       terminal?.isCommandSafetyTrackerReady?.() === true
   })
-  await expect.poll(readReady, { timeout: 15000 }).toBe(true)
-  // remoteList intentionally performs a one-second compensation refresh.
-  // Wait beyond that window, then prove the replacement row is operable.
-  await page.waitForTimeout(1250)
   await expect.poll(readReady, { timeout: 15000 }).toBe(true)
 }
 
@@ -204,11 +202,25 @@ async function clickFileMenuAction (page, actionKey) {
 async function recentTransferHistory (page) {
   return page.evaluate(() => window.store.transferHistory.slice(0, 6)
     .map(item => ({
+      id: item.id,
+      originalId: item.originalId,
       name: item.name || item.fromFile?.name || '',
       status: item.status,
+      classification: item.status === 'cancelled'
+        ? 'cancelled'
+        : item.status === 'success'
+          ? 'success'
+          : 'failed',
       error: item.error || '',
       outcomeCounts: item.outcomeCounts
     })))
+}
+
+function preserveCleanupFailure (primaryError, cleanupErrors, error) {
+  cleanupErrors.push(error)
+  if (!primaryError) return
+  primaryError.cleanupErrors = cleanupErrors
+  if (!primaryError.cleanupError) primaryError.cleanupError = error
 }
 
 async function setLocalPath (page, localPath) {
@@ -225,6 +237,7 @@ async function setLocalPath (page, localPath) {
 
 async function createRemoteDirectoryFromUi (page, name) {
   await waitForRemotePanelReady(page)
+  const requestEpoch = await remoteRequestEpoch(page)
   await page.locator('.session-current .file-list.remote .parent-file-item')
     .click({ button: 'right' })
   await clickFileMenuAction(page, 'newDirectory')
@@ -234,6 +247,7 @@ async function createRemoteDirectoryFromUi (page, name) {
   await input.fill(name)
   await page.locator('.session-current .sftp-panel-title').first().click()
   await expect(remoteRow(page, name)).toBeVisible({ timeout: 30000 })
+  await waitForRemoteRequestCycle(page, requestEpoch)
 }
 
 async function transferFromContextMenu (page, type, name) {
@@ -248,6 +262,7 @@ async function transferFromContextMenu (page, type, name) {
 
 async function renameRemoteFromUi (page, oldName, newName) {
   await waitForRemotePanelReady(page)
+  const requestEpoch = await remoteRequestEpoch(page)
   await remoteRow(page, oldName).click({ button: 'right' })
   await clickFileMenuAction(page, 'doRename')
   const input = page.locator(
@@ -262,10 +277,12 @@ async function renameRemoteFromUi (page, oldName, newName) {
   await confirmation.locator('.custom-modal-ok-btn').click()
   await expect(remoteRow(page, newName)).toBeVisible({ timeout: 30000 })
   await expect(remoteRow(page, oldName)).toHaveCount(0)
+  await waitForRemoteRequestCycle(page, requestEpoch)
 }
 
 async function chmodRemoteFromUi (page, name) {
   await waitForRemotePanelReady(page)
+  const requestEpoch = await remoteRequestEpoch(page)
   await remoteRow(page, name).click({ button: 'right' })
   await clickFileMenuAction(page, 'editPermission')
   const permissionButton = page
@@ -284,11 +301,13 @@ async function chmodRemoteFromUi (page, name) {
   }).last()
   await expect(confirmation).toBeVisible({ timeout: 30000 })
   await confirmation.locator('.custom-modal-ok-btn').click()
+  await waitForRemoteRequestCycle(page, requestEpoch)
   return initiallyActive
 }
 
 async function deleteRemoteFromUi (page, name, { fast = false } = {}) {
   await waitForRemotePanelReady(page)
+  const requestEpoch = await remoteRequestEpoch(page)
   const row = remoteRow(page, name)
   await row.click({ button: 'right' })
   await clickFileMenuAction(page, fast ? 'quickDelete' : 'del')
@@ -298,6 +317,26 @@ async function deleteRemoteFromUi (page, name, { fast = false } = {}) {
   await expect(ok).toBeEnabled({ timeout: 30000 })
   await ok.click()
   await expect(row).toHaveCount(0, { timeout: 30000 })
+  await waitForRemoteRequestCycle(page, requestEpoch)
+}
+
+async function remoteRequestEpoch (page) {
+  return page.evaluate(() => (
+    window.refs.get('sftp-' + window.store.activeTabId)
+      ?.sftpRemoteRequestEpoch || 0
+  ))
+}
+
+async function waitForRemoteRequestCycle (
+  page,
+  requestEpoch,
+  { compensation = true } = {}
+) {
+  const expectedEpoch = requestEpoch + (compensation ? 2 : 1)
+  await expect.poll(() => remoteRequestEpoch(page), { timeout: 30000 })
+    .toBeGreaterThanOrEqual(expectedEpoch)
+  await waitForRemotePanelReady(page)
+  await expectRemoteFileWorkSettled(page)
 }
 
 async function expectRemoteFileWorkSettled (page) {
@@ -331,13 +370,20 @@ test('operations and the complete remote file panel inherit su root then return 
   })
   let run
   let primaryError
+  let cleanupFailure
 
   try {
     run = await launchQualityApp(electron)
     const { page } = run
     await dismissStartupModals(page)
     await connectWithQuickWizard(page, sshServer)
-    await page.waitForTimeout(5000)
+    await expect.poll(() => activeTerminal(page), { timeout: 20000 })
+      .toBe(true)
+    await expect.poll(() => sshServer.state.sftpEvents.filter(event => (
+      event.event === 'OPENDIR' && event.path === '/home/shellpilot'
+    )).length, { timeout: 20000 }).toBeGreaterThan(1)
+    await waitForRemotePanelReady(page)
+    await expectRemoteFileWorkSettled(page)
     const terminalSnapshot = await page.evaluate(() => {
       const terminal = window.refs.get('term-' + window.store.activeTabId)
       return {
@@ -506,8 +552,10 @@ test('operations and the complete remote file panel inherit su root then return 
     )).toBe(true)
 
     await setLocalPath(page, fixture.localRoot)
+    const uploadRequestEpoch = await remoteRequestEpoch(page)
     await transferFromContextMenu(page, 'local', 'upload.txt')
     await verifyFileTransfersComplete(page)
+    await waitForRemoteRequestCycle(page, uploadRequestEpoch)
     const uploadHistory = await recentTransferHistory(page)
     expect(uploadHistory.some(item =>
       item.name === 'upload.txt' && item.status === 'success'
@@ -581,7 +629,21 @@ test('operations and the complete remote file panel inherit su root then return 
     )).toBe(true)
 
     const ctrlCBefore = sshServer.state.ctrlCCount
+    const transferHistoryBeforeCancel = await page.evaluate(() => (
+      window.store.transferHistory.length
+    ))
     await transferFromContextMenu(page, 'remote', 'cancel.bin')
+    await expect.poll(() => page.evaluate(() => (
+      window.store.fileTransfers.find(item => (
+        (item.name || item.fromFile?.name) === 'cancel.bin'
+      ))?.id || ''
+    )), { timeout: 30000 }).not.toBe('')
+    const cancelTransferId = await page.evaluate(() => (
+      window.store.fileTransfers.find(item => (
+        (item.name || item.fromFile?.name) === 'cancel.bin'
+      ))?.id || ''
+    ))
+    expect(cancelTransferId).not.toBe('')
     await expect.poll(() => sshServer.state.privilegedFileRequests.some(
       request => request.operation === 'stage-export' &&
         request.args.sourcePath === '/root-only/cancel.bin' &&
@@ -596,8 +658,44 @@ test('operations and the complete remote file panel inherit su root then return 
     await page.keyboard.press('Control+C')
     await expect.poll(() => sshServer.state.ctrlCCount).toBe(ctrlCBefore + 1)
     await verifyFileTransfersComplete(page)
+    await expect.poll(() => page.evaluate(({ id, historyStart }) => {
+      const item = window.store.transferHistory.find((entry, index) => (
+        index < window.store.transferHistory.length - historyStart &&
+        (entry.id === id || entry.originalId === id)
+      ))
+      if (!item) return null
+      return {
+        id: item.id,
+        originalId: item.originalId,
+        status: item.status,
+        classification: item.status === 'cancelled'
+          ? 'cancelled'
+          : item.status === 'success'
+            ? 'success'
+            : 'failed'
+      }
+    }, {
+      id: cancelTransferId,
+      historyStart: transferHistoryBeforeCancel
+    }), { timeout: 30000 }).not.toBeNull()
+    const cancelHistory = (await recentTransferHistory(page)).find(item => (
+      item.id === cancelTransferId || item.originalId === cancelTransferId
+    ))
+    expect(cancelHistory).toBeTruthy()
+    expect(cancelHistory.status).not.toBe('success')
+    expect(['cancelled', 'failed']).toContain(cancelHistory.classification)
     await expectRemoteFileWorkSettled(page)
+    await expect.poll(() => ({
+      handlers: sshServer.state.activePrivilegedHandlers,
+      requests: sshServer.state.activePrivilegedRequests,
+      timers: sshServer.state.activeFixtureTimers
+    })).toEqual({ handlers: 0, requests: 0, timers: 0 })
     await expect.poll(() => fixture.listStagingFiles()).toEqual([])
+    await expect.poll(async () => (await fixture.listLocalFiles())
+      .filter(name => /cancel\.bin|partial|\.shellpilot/i.test(name)))
+      .toEqual([])
+    await expect(fs.stat(fixture.localPath('cancel.bin')))
+      .rejects.toMatchObject({ code: 'ENOENT' })
     expect(sshServer.state.cancelledPrivilegedFileRequests.some(
       request => request.operation === 'stage-export' &&
         request.args.sourcePath === '/root-only/cancel.bin'
@@ -631,11 +729,21 @@ test('operations and the complete remote file panel inherit su root then return 
     const probesBeforeLoginBrowse = sshServer.state.privilegedFileRequests
       .filter(request => request.operation === 'probe').length
     await terminal.locator('.term-sftp-tabs .type-tab:visible').nth(1).click()
+    await gotoRemotePath(page, '/home/shellpilot')
+    await expect(page.locator(
+      '.session-current .sftp-remote-section .sftp-title input'
+    )).toHaveValue('/home/shellpilot')
     const rootOnlyDenialsBeforeLoginBrowse =
       sshServer.state.rootOnlySftpDenials.length
     await gotoRemotePath(page, '/root-only', { expectFailure: true })
     await expect.poll(() => sshServer.state.rootOnlySftpDenials.length)
       .toBeGreaterThan(rootOnlyDenialsBeforeLoginBrowse)
+    await expect(page.locator(
+      '.session-current .sftp-remote-section .sftp-title input'
+    )).toHaveValue('/home/shellpilot')
+    await expect(remoteRow(page, 'app.conf')).toHaveCount(0)
+    await expect(page.locator('.notification:visible').last())
+      .toContainText(/EACCES|permission|denied|权限|拒绝|OSC 698/i)
     await expect(page.locator('.sftp-login-identity'))
       .toContainText(`SSH 登录：${sshServer.username}`)
     await expect(page.locator('.sftp-file-identity'))
@@ -679,7 +787,7 @@ test('operations and the complete remote file panel inherit su root then return 
           editorSpinning: Boolean(editor?.querySelector('.ant-spin-spinning')),
           editorRefPresent: [...window.refs.keys()].some(key =>
             String(key).startsWith('editor-')),
-          notifications: [...document.querySelectorAll('.ant-notification-notice')]
+          notifications: [...document.querySelectorAll('.notification')]
             .map(item => item.textContent)
         }
       }).catch(() => null)
@@ -721,12 +829,30 @@ test('operations and the complete remote file panel inherit su root then return 
     }, null, 2))
     throw error
   } finally {
-    await sshServer.close().catch(() => {})
-    if (run) {
-      await cleanupQualityApp(run.electronApp, run.profileRoot).catch(error => {
-        if (!primaryError) throw error
-      })
+    const cleanupErrors = []
+    try {
+      await sshServer.close()
+    } catch (error) {
+      preserveCleanupFailure(primaryError, cleanupErrors, error)
     }
-    await fixture.cleanup().catch(() => {})
+    if (run) {
+      try {
+        await cleanupQualityApp(run.electronApp, run.profileRoot)
+      } catch (error) {
+        preserveCleanupFailure(primaryError, cleanupErrors, error)
+      }
+    }
+    try {
+      await fixture.cleanup()
+    } catch (error) {
+      preserveCleanupFailure(primaryError, cleanupErrors, error)
+    }
+    if (!primaryError && cleanupErrors.length === 1) {
+      cleanupFailure = cleanupErrors[0]
+    }
+    if (!primaryError && cleanupErrors.length > 1) {
+      cleanupFailure = new AggregateError(cleanupErrors, '039 cleanup failed')
+    }
   }
+  if (cleanupFailure) throw cleanupFailure
 })
