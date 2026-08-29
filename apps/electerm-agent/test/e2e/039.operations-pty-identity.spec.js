@@ -1,3 +1,4 @@
+const { promises: fs } = require('node:fs')
 const { _electron: electron, expect, test } = require('@playwright/test')
 const { createLocalSftpFixture } = require('./common/local-sftp-fixture')
 const { startLocalSshServer } = require('./common/local-ssh-server')
@@ -5,8 +6,11 @@ const {
   cleanupQualityApp,
   launchQualityApp
 } = require('./common/quality-e2e-app')
+const {
+  verifyFileTransfersComplete
+} = require('./common/common')
 
-test.setTimeout(180000)
+test.setTimeout(240000)
 
 async function dismissStartupModals (page) {
   const modal = page.locator('.custom-modal-container:visible')
@@ -82,11 +86,248 @@ async function runPacketCaptureFromOperationsUi (page) {
   return workspace
 }
 
-test('operations and packet capture inherit su root while SFTP keeps the login identity', async () => {
+async function openRemoteFilePanel (page) {
+  const terminal = page.locator('.session-current')
+  await terminal.locator('.term-sftp-tabs .type-tab:visible').nth(1).click()
+  await expect.poll(() => page.evaluate(() => {
+    const entry = window.refs.get('sftp-' + window.store.activeTabId)
+    return Boolean(entry?.sftp && entry.state.remoteLoading === false)
+  }), { timeout: 30000 }).toBe(true)
+}
+
+async function gotoRemotePath (page, remotePath, options = {}) {
+  const input = page.locator(
+    '.session-current .sftp-remote-section .sftp-title input'
+  )
+  await input.fill(remotePath)
+  await input.press('Enter')
+  await expect.poll(() => page.evaluate(() => {
+    const entry = window.refs.get('sftp-' + window.store.activeTabId)
+    return entry?.state.remoteLoading === false
+  }), { timeout: 30000 }).toBe(true)
+  if (options.expectFailure) return
+  await expect(input).toHaveValue(remotePath, { timeout: 30000 })
+  await expect.poll(() => page.evaluate(() => {
+    const entry = window.refs.get('sftp-' + window.store.activeTabId)
+    return entry?.state.remotePath
+  })).toBe(remotePath)
+}
+
+function remoteEditor (page) {
+  return page.locator('.custom-modal-wrap:visible').filter({
+    has: page.locator('.simple-editor textarea')
+  }).last()
+}
+
+async function openRemoteEditor (page, name) {
+  const row = page.locator(
+    `.session-current .file-list.remote .sftp-item[title="${name}"]`
+  )
+  await expect(row).toBeVisible({ timeout: 30000 })
+  await row.dblclick()
+  await expect(remoteEditor(page)).toBeVisible({ timeout: 30000 })
+}
+
+async function replaceRemoteEditorText (page, text) {
+  await remoteEditor(page).locator('.simple-editor textarea').fill(text)
+}
+
+async function saveRemoteEditor (page) {
+  const trackerReady = () => page.evaluate(() => {
+    const terminal = window.refs.get('term-' + window.store.activeTabId)
+    return {
+      ready: terminal?.isCommandSafetyTrackerReady?.(),
+      operationsBusy: terminal?.operationsPtyTaskController?.isBusy?.()
+    }
+  })
+  await expect.poll(async () => {
+    const tracker = await trackerReady()
+    return tracker.operationsBusy === false && tracker.ready === true
+  }, { timeout: 5000 }).toBe(true)
+  await remoteEditor(page)
+    .locator('form > .pd1t.pd2b')
+    .first()
+    .locator('button.ant-btn-primary')
+    .click({ timeout: 5000 })
+  const confirmation = page.locator('.custom-modal-wrap:visible').filter({
+    has: page.locator('.sftp-safety-confirmation')
+  }).last()
+  await expect(confirmation).toBeVisible({ timeout: 15000 })
+  await confirmation.locator('.custom-modal-ok-btn').click()
+  await expect(remoteEditor(page)).toHaveCount(0, { timeout: 30000 })
+}
+
+function remoteRow (page, name) {
+  return page.locator(
+    `.session-current .file-list.remote .sftp-item[title="${name}"]`
+  )
+}
+
+async function waitForRemotePanelReady (page) {
+  const readReady = () => page.evaluate(() => {
+    const entry = window.refs.get('sftp-' + window.store.activeTabId)
+    const terminal = window.refs.get('term-' + window.store.activeTabId)
+    return entry?.state.remoteLoading === false &&
+      terminal?.operationsPtyTaskController?.isBusy?.() === false &&
+      terminal?.isCommandSafetyTrackerReady?.() === true
+  })
+  await expect.poll(readReady, { timeout: 15000 }).toBe(true)
+  // remoteList intentionally performs a one-second compensation refresh.
+  // Wait beyond that window, then prove the replacement row is operable.
+  await page.waitForTimeout(1250)
+  await expect.poll(readReady, { timeout: 15000 }).toBe(true)
+}
+
+async function exposeFileMenuActions (page) {
+  const moreActions = page.locator(
+    '.ant-dropdown:visible [data-menu-id$="-moreActionsMenu"]'
+  ).first()
+  if (await moreActions.isVisible().catch(() => false)) {
+    await moreActions.hover()
+    await expect(page.locator(
+      '.ant-dropdown-menu-submenu-popup:visible'
+    ).last()).toBeVisible({ timeout: 5000 })
+  }
+}
+
+async function clickFileMenuAction (page, actionKey) {
+  await exposeFileMenuActions(page)
+  const item = page.locator(
+    '.ant-dropdown:visible, .ant-dropdown-menu-submenu-popup:visible'
+  ).locator(
+    `[data-menu-id$="-${actionKey}"]:not(.ant-dropdown-menu-item-disabled)`
+  ).first()
+  await expect(item).toBeVisible({ timeout: 5000 })
+  await item.click()
+}
+
+async function recentTransferHistory (page) {
+  return page.evaluate(() => window.store.transferHistory.slice(0, 6)
+    .map(item => ({
+      name: item.name || item.fromFile?.name || '',
+      status: item.status,
+      error: item.error || '',
+      outcomeCounts: item.outcomeCounts
+    })))
+}
+
+async function setLocalPath (page, localPath) {
+  const input = page.locator(
+    '.session-current .sftp-local-section .sftp-title input'
+  )
+  await input.fill(localPath)
+  await input.press('Enter')
+  await expect.poll(() => page.evaluate(() => {
+    const entry = window.refs.get('sftp-' + window.store.activeTabId)
+    return entry?.state.localLoading === false ? entry.state.localPath : ''
+  }), { timeout: 30000 }).toBe(localPath)
+}
+
+async function createRemoteDirectoryFromUi (page, name) {
+  await waitForRemotePanelReady(page)
+  await page.locator('.session-current .file-list.remote .parent-file-item')
+    .click({ button: 'right' })
+  await clickFileMenuAction(page, 'newDirectory')
+  const input = page.locator(
+    '.session-current .file-list.remote .sftp-item input'
+  ).last()
+  await input.fill(name)
+  await page.locator('.session-current .sftp-panel-title').first().click()
+  await expect(remoteRow(page, name)).toBeVisible({ timeout: 30000 })
+}
+
+async function transferFromContextMenu (page, type, name) {
+  await waitForRemotePanelReady(page)
+  const row = page.locator(
+    `.session-current .file-list.${type} .sftp-item[title="${name}"]`
+  )
+  await expect(row).toBeVisible({ timeout: 30000 })
+  await row.click({ button: 'right' })
+  await clickFileMenuAction(page, 'doTransfer')
+}
+
+async function renameRemoteFromUi (page, oldName, newName) {
+  await waitForRemotePanelReady(page)
+  await remoteRow(page, oldName).click({ button: 'right' })
+  await clickFileMenuAction(page, 'doRename')
+  const input = page.locator(
+    '.session-current .file-list.remote .sftp-item input'
+  ).last()
+  await input.fill(newName)
+  await page.locator('.session-current .sftp-panel-title').first().click()
+  const confirmation = page.locator('.custom-modal-wrap:visible').filter({
+    has: page.locator('.sftp-safety-confirmation')
+  }).last()
+  await expect(confirmation).toBeVisible({ timeout: 30000 })
+  await confirmation.locator('.custom-modal-ok-btn').click()
+  await expect(remoteRow(page, newName)).toBeVisible({ timeout: 30000 })
+  await expect(remoteRow(page, oldName)).toHaveCount(0)
+}
+
+async function chmodRemoteFromUi (page, name) {
+  await waitForRemotePanelReady(page)
+  await remoteRow(page, name).click({ button: 'right' })
+  await clickFileMenuAction(page, 'editPermission')
+  const permissionButton = page
+    .locator('.custom-modal-container .file-props > .pd1b > .pd1b')
+    .filter({ hasText: /其他|other/i })
+    .locator('.ant-btn')
+    .filter({ hasText: /写|write/i })
+    .first()
+  await expect(permissionButton).toBeVisible()
+  const initiallyActive = String(await permissionButton.getAttribute('class'))
+    .includes('ant-btn-primary')
+  await permissionButton.click()
+  await page.locator('.custom-modal-footer .ant-btn-primary').click()
+  const confirmation = page.locator('.custom-modal-wrap:visible').filter({
+    has: page.locator('.sftp-safety-confirmation')
+  }).last()
+  await expect(confirmation).toBeVisible({ timeout: 30000 })
+  await confirmation.locator('.custom-modal-ok-btn').click()
+  return initiallyActive
+}
+
+async function deleteRemoteFromUi (page, name, { fast = false } = {}) {
+  await waitForRemotePanelReady(page)
+  const row = remoteRow(page, name)
+  await row.click({ button: 'right' })
+  await clickFileMenuAction(page, fast ? 'quickDelete' : 'del')
+  const confirmation = page.locator('.custom-modal-wrap:visible').last()
+  await expect(confirmation).toBeVisible({ timeout: 30000 })
+  const ok = confirmation.locator('.custom-modal-ok-btn')
+  await expect(ok).toBeEnabled({ timeout: 30000 })
+  await ok.click()
+  await expect(row).toHaveCount(0, { timeout: 30000 })
+}
+
+async function expectRemoteFileWorkSettled (page) {
+  await expect.poll(() => page.evaluate(() => {
+    const entry = window.refs.get('sftp-' + window.store.activeTabId)
+    const terminal = window.refs.get('term-' + window.store.activeTabId)
+    const generation = entry?.remoteFileGeneration
+    return {
+      transfers: window.store.fileTransfers.length,
+      busy: terminal?.operationsPtyTaskController?.isBusy?.(),
+      capabilities: generation?.capabilities?.size || 0,
+      settlements: generation?.settlements?.size || 0,
+      backends: generation?.backends?.size || 0
+    }
+  }), { timeout: 30000 }).toEqual({
+    transfers: 0,
+    busy: false,
+    capabilities: 0,
+    settlements: 0,
+    backends: 0
+  })
+}
+
+test('operations and the complete remote file panel inherit su root then return to the login identity', async () => {
   const fixture = await createLocalSftpFixture()
   const sshServer = await startLocalSshServer({
     managedPtyTasks: true,
-    sftpRoot: fixture.root
+    sftpRoot: fixture.root,
+    sftpFixture: fixture,
+    rootDownloadDelayMs: 30000
   })
   let run
   let primaryError
@@ -209,8 +450,7 @@ test('operations and packet capture inherit su root while SFTP keeps the login i
       .toContainText('当前 Shell：root')
     await workspace.locator('button[aria-label="关闭运维工具"]').click()
 
-    const terminal = page.locator('.session-current')
-    await terminal.locator('.term-sftp-tabs .type-tab:visible').nth(1).click()
+    await openRemoteFilePanel(page)
     await expect.poll(
       () => sshServer.state.sftpSessions,
       { timeout: 20000 }
@@ -220,7 +460,153 @@ test('operations and packet capture inherit su root while SFTP keeps the login i
       username => username === sshServer.username
     )).toBe(true)
 
-    await terminal.locator('.term-sftp-tabs .type-tab:visible').first().click()
+    await gotoRemotePath(page, '/root-only')
+    await expect(page.locator('.sftp-file-identity')).toContainText(
+      '文件操作：root（当前终端）'
+    )
+    const ordinarySftp = await page.evaluate(async () => {
+      const entry = window.refs.get('sftp-' + window.store.activeTabId)
+      try {
+        await entry.sftp.lstat('/root-only/app.conf')
+        return { denied: false }
+      } catch (error) {
+        return {
+          denied: true,
+          code: error?.code || '',
+          message: error?.message || String(error)
+        }
+      }
+    })
+    expect(ordinarySftp.denied, JSON.stringify(ordinarySftp)).toBe(true)
+    expect(sshServer.state.rootOnlySftpDenials.length).toBeGreaterThan(0)
+
+    const stageImportsBeforeEditorSave = sshServer.state.privilegedFileRequests
+      .filter(request => request.operation === 'stage-import').length
+    await openRemoteEditor(page, 'app.conf')
+    await expect(remoteEditor(page).locator('.simple-editor textarea'))
+      .toHaveValue('enabled=false\n', { timeout: 15000 })
+    await replaceRemoteEditorText(page, 'enabled=true\n')
+    await saveRemoteEditor(page)
+    await expect.poll(() => fixture.readRootFile('/root-only/app.conf'))
+      .toBe('enabled=true\n')
+    const editorSaveImports = sshServer.state.privilegedFileRequests
+      .filter(request => request.operation === 'stage-import')
+      .slice(stageImportsBeforeEditorSave)
+    expect(editorSaveImports.length).toBeGreaterThan(0)
+    expect(editorSaveImports.some(
+      request => request.args.targetPath?.startsWith('/root-only/')
+    )).toBe(true)
+
+    await createRemoteDirectoryFromUi(page, 'created-by-root')
+    expect(fixture.getRootEntry('/root-only/created-by-root')?.type)
+      .toBe('directory')
+    expect(sshServer.state.privilegedFileRequests.some(
+      request => request.operation === 'mkdir-bound' &&
+        request.args.targetPath === '/root-only/created-by-root'
+    )).toBe(true)
+
+    await setLocalPath(page, fixture.localRoot)
+    await transferFromContextMenu(page, 'local', 'upload.txt')
+    await verifyFileTransfersComplete(page)
+    const uploadHistory = await recentTransferHistory(page)
+    expect(uploadHistory.some(item =>
+      item.name === 'upload.txt' && item.status === 'success'
+    ), JSON.stringify(uploadHistory)).toBe(true)
+    await expect.poll(() => fixture.readRootFile('/root-only/upload.txt'))
+      .toBe('uploaded through root staging\n')
+    expect(fixture.stagingReads.some(
+      item => item.operation === 'stage-import'
+    )).toBe(true)
+
+    await renameRemoteFromUi(page, 'upload.txt', 'renamed.txt')
+    expect(fixture.getRootEntry('/root-only/upload.txt')).toBeNull()
+    expect(fixture.readRootFile('/root-only/renamed.txt'))
+      .toBe('uploaded through root staging\n')
+    expect(sshServer.state.privilegedFileRequests.some(
+      request => request.operation === 'rename-bound' &&
+        request.args.targetPath === '/root-only/renamed.txt'
+    )).toBe(true)
+
+    const otherWriteWasActive = await chmodRemoteFromUi(page, 'renamed.txt')
+    await expect.poll(() => Boolean(
+      fixture.getRootEntry('/root-only/renamed.txt').mode & 0o2
+    )).toBe(!otherWriteWasActive)
+    expect(sshServer.state.privilegedFileRequests.some(
+      request => request.operation === 'metadata-bound' &&
+        request.args.targetPath === '/root-only/renamed.txt'
+    )).toBe(true)
+
+    const safeDeleteRequestsBefore =
+      sshServer.state.privilegedFileRequests.length
+    await deleteRemoteFromUi(page, 'renamed.txt')
+    expect(fixture.getRootEntry('/root-only/renamed.txt')).toBeNull()
+    const safeDeleteRequests = sshServer.state.privilegedFileRequests
+      .slice(safeDeleteRequestsBefore)
+    const safeDeleteMove = safeDeleteRequests.find(
+      request => request.operation === 'rename-bound' &&
+        request.args.sourcePath === '/root-only/renamed.txt' &&
+        request.args.targetPath.startsWith(
+          '/root-only/.shellpilot-transactions/'
+        )
+    )
+    expect(safeDeleteMove).toBeTruthy()
+    expect(safeDeleteRequests.some(
+      request => request.operation === 'remove-bound' &&
+        request.args.targetPath === safeDeleteMove.args.targetPath
+    )).toBe(true)
+
+    const fastDeleteRequestsBefore =
+      sshServer.state.privilegedFileRequests.length
+    await deleteRemoteFromUi(page, 'created-by-root', { fast: true })
+    expect(fixture.getRootEntry('/root-only/created-by-root')).toBeNull()
+    const fastDeleteRequests = sshServer.state.privilegedFileRequests
+      .slice(fastDeleteRequestsBefore)
+    expect(fastDeleteRequests.some(
+      request => request.operation === 'remove-bound' &&
+        request.args.targetPath === '/root-only/created-by-root'
+    )).toBe(true)
+    expect(fastDeleteRequests.some(
+      request => request.operation === 'rename-bound' &&
+        request.args.sourcePath === '/root-only/created-by-root'
+    )).toBe(false)
+
+    await transferFromContextMenu(page, 'remote', 'app.conf')
+    await verifyFileTransfersComplete(page)
+    await expect.poll(() => fs.readFile(
+      fixture.localPath('app.conf'),
+      'utf8'
+    )).toBe('enabled=true\n')
+    expect(fixture.stagingWrites.some(
+      item => item.operation === 'stage-export-range'
+    )).toBe(true)
+
+    const ctrlCBefore = sshServer.state.ctrlCCount
+    await transferFromContextMenu(page, 'remote', 'cancel.bin')
+    await expect.poll(() => sshServer.state.privilegedFileRequests.some(
+      request => request.operation === 'stage-export' &&
+        request.args.sourcePath === '/root-only/cancel.bin' &&
+        request.stageReady === true
+    ), { timeout: 30000 }).toBe(true)
+    await page.locator('.session-current .term-sftp-tabs .type-tab:visible')
+      .first()
+      .click()
+    await page.evaluate(() => {
+      window.refs.get('term-' + window.store.activeTabId)?.term?.focus()
+    })
+    await page.keyboard.press('Control+C')
+    await expect.poll(() => sshServer.state.ctrlCCount).toBe(ctrlCBefore + 1)
+    await verifyFileTransfersComplete(page)
+    await expectRemoteFileWorkSettled(page)
+    await expect.poll(() => fixture.listStagingFiles()).toEqual([])
+    expect(sshServer.state.cancelledPrivilegedFileRequests.some(
+      request => request.operation === 'stage-export' &&
+        request.args.sourcePath === '/root-only/cancel.bin'
+    )).toBe(true)
+    expect(fixture.stagingCleanups.some(
+      item => item.cancelled === true
+    )).toBe(true)
+
+    const terminal = page.locator('.session-current')
     await sendTerminalLine(page, 'exit')
     await expect.poll(
       () => sshServer.state.effectiveIdentity?.username,
@@ -241,8 +627,98 @@ test('operations and packet capture inherit su root while SFTP keeps the login i
     expect(afterExit.runtimeIdentity.effectiveUsername)
       .toBe(sshServer.username)
     expect(afterExit.endpoint.connectionUsername).toBe(sshServer.username)
+
+    const probesBeforeLoginBrowse = sshServer.state.privilegedFileRequests
+      .filter(request => request.operation === 'probe').length
+    await terminal.locator('.term-sftp-tabs .type-tab:visible').nth(1).click()
+    const rootOnlyDenialsBeforeLoginBrowse =
+      sshServer.state.rootOnlySftpDenials.length
+    await gotoRemotePath(page, '/root-only', { expectFailure: true })
+    await expect.poll(() => sshServer.state.rootOnlySftpDenials.length)
+      .toBeGreaterThan(rootOnlyDenialsBeforeLoginBrowse)
+    await expect(page.locator('.sftp-login-identity'))
+      .toContainText(`SSH 登录：${sshServer.username}`)
+    await expect(page.locator('.sftp-file-identity'))
+      .toContainText(`文件操作：${sshServer.username}（SFTP）`)
+    const loginIdentityProbes = sshServer.state.privilegedFileRequests
+      .filter(request => request.operation === 'probe')
+      .slice(probesBeforeLoginBrowse)
+    expect(loginIdentityProbes.length).toBeGreaterThan(0)
+    expect(loginIdentityProbes.some(
+      request => request.identity.username === sshServer.username
+    )).toBe(true)
+    expect(sshServer.state.rootOnlySftpDenials.length).toBeGreaterThan(1)
+    await expectRemoteFileWorkSettled(page)
+    expect(fixture.stagingReads.length).toBeGreaterThan(0)
+    expect(fixture.stagingWrites.length).toBeGreaterThan(0)
+    expect(fixture.stagingCleanups.length).toBeGreaterThan(0)
+    expect(fixture.stagingReads.some(
+      item => item.operation === 'sftp-read'
+    )).toBe(true)
+    expect(fixture.stagingWrites.some(
+      item => item.operation === 'sftp-write'
+    )).toBe(true)
   } catch (error) {
     primaryError = error
+    let remoteState = null
+    if (run) {
+      remoteState = await run.page.evaluate(() => {
+        const entry = window.refs.get('sftp-' + window.store.activeTabId)
+        const terminal = window.refs.get('term-' + window.store.activeTabId)
+        const editor = [...document.querySelectorAll('.custom-modal-wrap')]
+          .find(item => item.querySelector('.simple-editor textarea'))
+        if (!entry) return null
+        return {
+          remotePath: entry.state.remotePath,
+          remoteLoading: entry.state.remoteLoading,
+          remoteFileStatus: entry.state.remoteFileStatus,
+          remoteFileIdentity: entry.state.remoteFileIdentity,
+          leaseOutcomes: entry.state.remoteFileLeaseOutcomes,
+          operationsBusy: terminal?.operationsPtyTaskController?.isBusy?.(),
+          operationsOwner: terminal?.operationsPtyTaskController?.owner?.(),
+          editorSpinning: Boolean(editor?.querySelector('.ant-spin-spinning')),
+          editorRefPresent: [...window.refs.keys()].some(key =>
+            String(key).startsWith('editor-')),
+          notifications: [...document.querySelectorAll('.ant-notification-notice')]
+            .map(item => item.textContent)
+        }
+      }).catch(() => null)
+    }
+    console.error('039 failure state:', JSON.stringify({
+      message: error?.message || String(error),
+      shellCount: sshServer.state.shellCount,
+      ctrlCCount: sshServer.state.ctrlCCount,
+      sftpSessions: sshServer.state.sftpSessions,
+      effectiveIdentity: sshServer.state.effectiveIdentity,
+      shellIntegrationRearms: sshServer.state.shellIntegrationRearms,
+      managedPtyCount: sshServer.state.managedPtyScripts.length,
+      privilegedFileRequests: sshServer.state.privilegedFileRequests.slice(-20).map(
+        ({ operation, identity, args, error, cancelled, stageReady }) => ({
+          operation,
+          identity,
+          args: {
+            path: args.path,
+            sourcePath: args.sourcePath,
+            targetPath: args.targetPath,
+            peerPath: args.peerPath,
+            objectName: args.objectName
+          },
+          error,
+          cancelled,
+          stageReady
+        })
+      ),
+      rootOnlySftpDenials: sshServer.state.rootOnlySftpDenials.slice(-20),
+      stagingReads: fixture.stagingReads.slice(-12),
+      stagingWrites: fixture.stagingWrites.slice(-12),
+      stagingCleanups: fixture.stagingCleanups.slice(-12),
+      sftpEvents: sshServer.state.sftpEvents.slice(-12),
+      remoteState,
+      commandKinds: sshServer.state.commands.slice(-12).map(command => ({
+        privileged: command.includes('SHELLPILOT_FILE'),
+        length: command.length
+      }))
+    }, null, 2))
     throw error
   } finally {
     await sshServer.close().catch(() => {})

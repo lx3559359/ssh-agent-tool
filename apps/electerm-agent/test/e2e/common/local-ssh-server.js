@@ -1,5 +1,5 @@
 const { once } = require('node:events')
-const { generateKeyPairSync } = require('node:crypto')
+const { createHash, generateKeyPairSync } = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
 const { StringDecoder } = require('node:string_decoder')
@@ -40,8 +40,9 @@ function osc633 (nonce, type, payload = '') {
   return `\u001b]633;${type};${nonce}${payload ? `;${payload}` : ''}\u0007`
 }
 
-function writeTrackedPrompt (stream, nonce) {
+function writeTrackedPrompt (stream, nonce, { leadingNewline = false } = {}) {
   stream.write(
+    (leadingNewline ? '\r\n\u001b[2J\u001b[H' : '') +
     osc633(nonce, 'P', 'Cwd=/home/shellpilot') +
     osc633(nonce, 'A') +
     '$ ' +
@@ -55,6 +56,205 @@ function managedPtyMarker (token, phase, ...fields) {
 
 function encodeMarkerField (value) {
   return Buffer.from(String(value), 'utf8').toString('base64')
+}
+
+const privilegedCapabilities = [
+  'sh', 'cleanShell', 'printf', 'id', 'tr', 'stat', 'base64', 'sha256',
+  'procFd', 'noclobber', 'cat', 'gnuStat', 'gnuMv', 'realpath', 'readlink',
+  'chown', 'chmod', 'rm', 'rmdir', 'find', 'head', 'wc', 'gnuDd', 'mkfifo',
+  'touch'
+].map(name => `${name}=1`).join(',')
+
+const privilegedArgumentNames = Object.freeze({
+  PATH: 'path',
+  ROOT_PATH: 'rootPath',
+  ROOT_REAL_PATH: 'rootRealPath',
+  ROOT_DEVICE: 'rootDevice',
+  ROOT_INODE: 'rootInode',
+  ROOT_UID: 'rootUid',
+  ROOT_GID: 'rootGid',
+  ROOT_MODE: 'rootMode',
+  CHALLENGE_NAME: 'challengeName',
+  RESPONSE_NAME: 'responseName',
+  CHALLENGE: 'challenge',
+  CHALLENGE_SIZE: 'challengeSize',
+  OBJECT_NAME: 'objectName',
+  SOURCE_PATH: 'sourcePath',
+  SOURCE_PARENT_REAL_PATH: 'sourceParentRealPath',
+  SOURCE_PARENT_DEVICE: 'sourceParentDevice',
+  SOURCE_PARENT_INODE: 'sourceParentInode',
+  SOURCE_PARENT_UID: 'sourceParentUid',
+  SOURCE_PARENT_MODE: 'sourceParentMode',
+  SOURCE_DEVICE: 'sourceDevice',
+  SOURCE_INODE: 'sourceInode',
+  SOURCE_TYPE: 'sourceType',
+  TARGET_PATH: 'targetPath',
+  TEMP_PATH: 'tempPath',
+  TEMP_PARENT_REAL_PATH: 'tempParentRealPath',
+  TEMP_PARENT_DEVICE: 'tempParentDevice',
+  TEMP_PARENT_INODE: 'tempParentInode',
+  TEMP_PARENT_UID: 'tempParentUid',
+  TEMP_PARENT_MODE: 'tempParentMode',
+  SHA256: 'sha256',
+  SIZE: 'size',
+  TARGET_MODE: 'targetMode',
+  TARGET_UID: 'targetUid',
+  TARGET_GID: 'targetGid',
+  MUST_BE_ABSENT: 'mustBeAbsent',
+  TARGET_PARENT_REAL_PATH: 'targetParentRealPath',
+  TARGET_PARENT_DEVICE: 'targetParentDevice',
+  TARGET_PARENT_INODE: 'targetParentInode',
+  TARGET_PARENT_UID: 'targetParentUid',
+  TARGET_PARENT_MODE: 'targetParentMode',
+  TARGET_DEVICE: 'targetDevice',
+  TARGET_INODE: 'targetInode',
+  TARGET_TYPE: 'targetType',
+  PEER_PATH: 'peerPath',
+  PEER_PARENT_REAL_PATH: 'peerParentRealPath',
+  PEER_PARENT_DEVICE: 'peerParentDevice',
+  PEER_PARENT_INODE: 'peerParentInode',
+  PEER_DEVICE: 'peerDevice',
+  PEER_INODE: 'peerInode',
+  PEER_TYPE: 'peerType',
+  PEER_MODE: 'peerMode',
+  PEER_UID: 'peerUid',
+  PEER_GID: 'peerGid',
+  PEER_SHA256: 'peerSha256',
+  PEER_SIZE: 'peerSize',
+  INITIAL_MODE: 'initialMode',
+  INITIAL_UID: 'initialUid',
+  INITIAL_GID: 'initialGid',
+  EXPECTED_SIZE: 'expectedSize',
+  MAX_SIZE: 'maxSize',
+  OFFSET: 'offset',
+  MAX_BYTES: 'maxBytes'
+})
+
+function privilegedFileMarker (token, phase, ...fields) {
+  return `\u001b]698;SHELLPILOT_FILE;${token};${phase};${fields.join(';')}\u0007`
+}
+
+function privilegedOperationFrom (body, args) {
+  if (Object.keys(args).length === 0 && body.trim() === ':') return 'probe'
+  if (args.challengeName) return 'stage-handshake'
+  if (args.tempPath) return 'stage-import-cleanup'
+  if (args.mustBeAbsent) return 'stage-import'
+  if (args.peerPath) return 'remove-peer-bound'
+  if (args.sourcePath && args.targetPath) return 'rename-bound'
+  if (args.targetPath && args.sha256 && args.size) return 'remove-bound'
+  if (args.targetPath && args.targetMode && args.targetDevice) return 'metadata-bound'
+  if (args.targetPath && args.targetDevice) return 'touch-bound'
+  if (args.targetPath && args.targetMode) return 'mkdir-bound'
+  if (args.sourcePath && args.objectName && args.offset) return 'stage-export-range'
+  if (args.sourcePath && args.objectName) return 'stage-export'
+  if (args.path && args.objectName && args.offset) return 'sha256-range-bound'
+  if (args.path && args.objectName) return 'sha256-bound'
+  if (args.objectName && args.sha256 && args.size) return 'stage-cleanup'
+  if (args.objectName) return 'digest-cleanup'
+  if (args.sourceParentDevice && body.includes('__sp_emit_entry')) return 'list-bound'
+  if (args.sourceParentDevice && body.includes('missing')) return 'lstat-bound'
+  if (body.includes('__sp_emit_entry')) return 'list'
+  if (body.includes('missing')) return 'lstat'
+  if (body.includes('__sp_emit_stat')) return 'stat'
+  if (body.includes('readlink --')) return 'readlink'
+  if (body.includes('realpath --')) return 'realpath'
+  if (body.trim() === 'return 1') return 'sha256'
+  return null
+}
+
+function parsePrivilegedFileCommand (command) {
+  const token = /SHELLPILOT_TOKEN='([a-f0-9]{32,128})'/.exec(command)?.[1]
+  if (!token || !command.includes('SHELLPILOT_FILE')) return null
+  const args = {}
+  const argumentPattern = /SHELLPILOT_ARG_([A-Z0-9_]+)='([A-Za-z0-9+/=]+)'/g
+  for (const match of command.matchAll(argumentPattern)) {
+    const key = privilegedArgumentNames[match[1]]
+    if (!key) continue
+    args[key] = Buffer.from(match[2], 'base64').toString('utf8')
+  }
+  const body = /__sp_run_operation\(\) \{ ([\s\S]*); \}; __sp_status=125;/.exec(command)?.[1] || ''
+  const operation = privilegedOperationFrom(body, args)
+  return operation ? { token, operation, args, body } : null
+}
+
+function sha256 (value) {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+function rootMetadata (fixture, remotePath, entry, includeBinding = true) {
+  const parentPath = remotePath === '/' ? '/' : path.posix.dirname(remotePath)
+  const parent = fixture.statRootPath(parentPath)
+  const type = entry.type === 'directory' ? 0x4000 : 0x8000
+  const size = entry.type === 'file' ? entry.content.length : 0
+  const metadata = [
+    (type | entry.mode).toString(16), size, entry.atime, entry.mtime,
+    entry.uid, entry.gid
+  ]
+  if (includeBinding) {
+    metadata.push(entry.device, entry.inode, parent.device, parent.inode)
+  }
+  return metadata.join(';')
+}
+
+async function stagingMetadata (fixture, remotePath) {
+  const localPath = fixture.resolve(remotePath)
+  const parentPath = path.posix.dirname(remotePath)
+  const [stats, parent] = await Promise.all([
+    fs.promises.lstat(localPath),
+    fs.promises.lstat(fixture.resolve(parentPath))
+  ])
+  const type = stats.isDirectory() ? 0x4000 : 0x8000
+  const mode = stats.isDirectory() ? 0o700 : 0o600
+  return [
+    (type | mode).toString(16),
+    stats.isFile() ? stats.size : 0,
+    Math.floor(stats.atimeMs / 1000),
+    Math.floor(stats.mtimeMs / 1000),
+    String(stats.uid || 0),
+    String(stats.gid || 0),
+    String(stats.dev || 1),
+    String(stats.ino || 1),
+    String(parent.dev || 1),
+    String(parent.ino || 1)
+  ].join(';')
+}
+
+async function protocolMetadata (fixture, remotePath) {
+  if (fixture.isStagingPath(remotePath)) {
+    return stagingMetadata(fixture, remotePath)
+  }
+  const entry = fixture.getRootEntry(remotePath)
+  return entry ? rootMetadata(fixture, remotePath, entry) : null
+}
+
+async function readProtocolBuffer (fixture, remotePath) {
+  return fixture.isStagingPath(remotePath)
+    ? fs.promises.readFile(fixture.resolve(remotePath))
+    : fixture.readRootBuffer(remotePath)
+}
+
+function writePrivilegedData (stream, request, sequence, total, kind, ...fields) {
+  stream.write(privilegedFileMarker(
+    request.token,
+    'data',
+    String(sequence),
+    String(total),
+    kind,
+    ...fields.map(encodeMarkerField)
+  ))
+}
+
+function finishShellCommand (stream, nonce, status = 0) {
+  if (nonce) {
+    stream.write(osc633(nonce, 'D', String(status)))
+    setTimeout(() => {
+      if (!stream.destroyed) {
+        writeTrackedPrompt(stream, nonce, { leadingNewline: true })
+      }
+    }, 20)
+  } else {
+    stream.write('$ ')
+  }
 }
 
 function parseManagedPtyCommand (command) {
@@ -121,6 +321,272 @@ function writeManagedPtyResult (
   stream.write(managedPtyMarker(managed.token, 'end', '0'))
 }
 
+async function writePrivilegedFileResult (
+  stream,
+  request,
+  state,
+  sessionId,
+  shellState,
+  options,
+  nonce
+) {
+  const fixture = options.sftpFixture
+  const identity = { ...shellState.identity }
+  const record = {
+    sessionId,
+    token: request.token,
+    operation: request.operation,
+    args: { ...request.args },
+    identity
+  }
+  state.privilegedFileRequests.push(record)
+  let activeStagePath = ''
+  let delayResolve
+  let delayTimer
+  let cancellationResolve
+  let cancelled = false
+  const cancellationDone = new Promise(resolve => {
+    cancellationResolve = resolve
+  })
+  const activeRequest = {
+    token: request.token,
+    cancel: () => {
+      if (cancelled || shellState.activePrivilegedRequest !== activeRequest) {
+        return false
+      }
+      cancelled = true
+      clearTimeout(delayTimer)
+      delayResolve?.()
+      Promise.resolve()
+        .then(async () => {
+          if (activeStagePath) {
+            await fs.promises.rm(activeStagePath, { force: true })
+            fixture?.stagingCleanups.push({
+              operation: request.operation,
+              path: request.args.rootPath,
+              objectName: request.args.objectName,
+              cancelled: true
+            })
+          }
+          record.cancelled = true
+          state.cancelledPrivilegedFileRequests.push(record)
+        })
+        .catch(error => {
+          record.cancellationError = error?.stack || error?.message || String(error)
+        })
+        .finally(() => {
+          if (shellState.activePrivilegedRequest === activeRequest) {
+            shellState.activePrivilegedRequest = null
+          }
+          if (!stream.destroyed) {
+            stream.write(privilegedFileMarker(request.token, 'end', '130'))
+            finishShellCommand(stream, nonce, 130)
+          }
+          cancellationResolve()
+        })
+      return true
+    }
+  }
+  shellState.activePrivilegedRequest = activeRequest
+  stream.write(privilegedFileMarker(
+    request.token,
+    'start',
+    encodeMarkerField(identity.uid),
+    encodeMarkerField(identity.username),
+    encodeMarkerField(privilegedCapabilities)
+  ))
+  let exitCode = fixture ? 0 : 1
+  try {
+    const { args, operation } = request
+    if (exitCode !== 0 || (identity.uid !== '0' && operation !== 'probe')) {
+      throw new Error('root identity required')
+    }
+    if (operation === 'probe') {
+      // The protocol boundary and identity are the probe result.
+    } else if (operation === 'list' || operation === 'list-bound') {
+      const entries = fixture.listRootDirectory(args.path)
+      entries.forEach((entry, index) => {
+        writePrivilegedData(
+          stream,
+          request,
+          index + 1,
+          entries.length,
+          'entry',
+          entry.name,
+          rootMetadata(
+            fixture,
+            path.posix.join(args.path, entry.name),
+            entry,
+            false
+          )
+        )
+      })
+    } else if (operation === 'lstat' || operation === 'lstat-bound' || operation === 'stat') {
+      let metadata
+      try {
+        metadata = await protocolMetadata(fixture, args.path)
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error
+      }
+      if (!metadata && operation !== 'stat') {
+        writePrivilegedData(stream, request, 1, 1, 'missing', '1')
+      } else if (!metadata) {
+        exitCode = 1
+      } else {
+        writePrivilegedData(
+          stream,
+          request,
+          1,
+          1,
+          'metadata',
+          metadata
+        )
+      }
+    } else if (operation === 'readlink' || operation === 'realpath') {
+      fixture.statRootPath(args.path)
+      writePrivilegedData(stream, request, 1, 1, 'text', args.path)
+    } else if (operation === 'mkdir-bound') {
+      const entry = fixture.mkdirRootDirectory(args.targetPath, {
+        mode: Number.parseInt(args.targetMode, 8),
+        uid: Number(args.targetUid),
+        gid: Number(args.targetGid)
+      })
+      writePrivilegedData(
+        stream,
+        request,
+        1,
+        1,
+        'binding',
+        String(entry.device),
+        String(entry.inode)
+      )
+    } else if (operation === 'metadata-bound') {
+      fixture.chmodRootPath(args.targetPath, Number.parseInt(args.targetMode, 8))
+    } else if (operation === 'touch-bound') {
+      fixture.touchRootPath(args.targetPath)
+    } else if (operation === 'rename-bound') {
+      fixture.renameRootPath(args.sourcePath, args.targetPath)
+    } else if (operation === 'remove-bound' || operation === 'remove-peer-bound') {
+      fixture.removeRootPath(args.targetPath)
+      if (operation === 'remove-peer-bound') fixture.removeRootPath(args.peerPath)
+    } else if (operation === 'stage-handshake') {
+      const localRoot = fixture.resolve(args.rootPath)
+      const challengePath = fixture.resolve(path.posix.join(args.rootPath, args.challengeName))
+      const responsePath = fixture.resolve(path.posix.join(args.rootPath, args.responseName))
+      const challengeBytes = await fs.promises.readFile(challengePath)
+      fixture.stagingReads.push({ operation, path: args.rootPath, objectName: args.challengeName })
+      if (sha256(challengeBytes) !== args.challenge) throw new Error('stage challenge mismatch')
+      const response = sha256(`${args.challenge}:root`)
+      await fs.promises.writeFile(responsePath, response, { flag: 'wx', mode: 0o600 })
+      await fs.promises.chmod(responsePath, 0o600)
+      fixture.stagingWrites.push({ operation, path: args.rootPath, objectName: args.responseName })
+      const rootStats = await fs.promises.stat(localRoot)
+      writePrivilegedData(
+        stream,
+        request,
+        1,
+        1,
+        'handshake',
+        response,
+        String(rootStats.uid || 0),
+        String(rootStats.gid || 0),
+        '700',
+        args.rootPath,
+        String(rootStats.dev || 1),
+        String(rootStats.ino || 1)
+      )
+    } else if (operation === 'stage-export' || operation === 'stage-export-range') {
+      let content = fixture.readRootBuffer(args.sourcePath)
+      if (operation === 'stage-export-range') {
+        const offset = Number(args.offset)
+        content = content.subarray(offset, offset + Number(args.maxBytes))
+      }
+      const stagePath = fixture.resolve(path.posix.join(args.rootPath, args.objectName))
+      activeStagePath = stagePath
+      await fs.promises.writeFile(stagePath, content, { flag: 'wx', mode: 0o600 })
+      await fs.promises.chmod(stagePath, 0o600)
+      fixture.stagingWrites.push({ operation, path: args.rootPath, objectName: args.objectName, size: content.length })
+      record.stageReady = true
+      if (operation === 'stage-export' &&
+        args.sourcePath === '/root-only/cancel.bin') {
+        await new Promise(resolve => {
+          delayResolve = resolve
+          delayTimer = setTimeout(
+            resolve,
+            Number(options.rootDownloadDelayMs ?? 5000)
+          )
+        })
+        delayResolve = null
+        if (cancelled) {
+          await cancellationDone
+          return
+        }
+      }
+      writePrivilegedData(stream, request, 1, 1, 'digest', sha256(content), String(content.length))
+    } else if (operation === 'stage-import') {
+      const stagePath = fixture.resolve(path.posix.join(args.rootPath, args.objectName))
+      const content = await fs.promises.readFile(stagePath)
+      fixture.stagingReads.push({ operation, path: args.rootPath, objectName: args.objectName, size: content.length })
+      if (sha256(content) !== args.sha256 || content.length !== Number(args.size)) {
+        throw new Error('stage import digest mismatch')
+      }
+      const entry = fixture.writeRootFile(args.targetPath, content, {
+        mode: Number.parseInt(args.targetMode, 8),
+        uid: Number(args.targetUid),
+        gid: Number(args.targetGid)
+      })
+      await fs.promises.unlink(stagePath)
+      fixture.stagingCleanups.push({ operation, path: args.rootPath, objectName: args.objectName })
+      writePrivilegedData(stream, request, 1, 1, 'temp-claim', String(entry.device), String(entry.inode))
+      writePrivilegedData(stream, request, 1, 1, 'moving', String(entry.device), String(entry.inode), String(args.rootGid || 0))
+      writePrivilegedData(
+        stream,
+        request,
+        1,
+        1,
+        'installed',
+        args.sha256,
+        args.size,
+        String(entry.device),
+        String(entry.inode),
+        Number(entry.mode).toString(8),
+        String(entry.uid),
+        String(entry.gid)
+      )
+      writePrivilegedData(stream, request, 1, 1, 'import-cleanup', '1', 'complete')
+    } else if (operation === 'stage-import-cleanup') {
+      writePrivilegedData(stream, request, 1, 1, 'import-cleanup', '1', 'none')
+    } else if (operation === 'stage-cleanup') {
+      const stagePath = fixture.resolve(path.posix.join(args.rootPath, args.objectName))
+      await fs.promises.rm(stagePath, { force: true })
+      fixture.stagingCleanups.push({ operation, path: args.rootPath, objectName: args.objectName })
+    } else if (operation === 'digest-cleanup') {
+      fixture.stagingCleanups.push({ operation, path: args.rootPath, objectName: args.objectName })
+    } else if (['sha256-bound', 'sha256-range-bound', 'sha256'].includes(operation)) {
+      let content = await readProtocolBuffer(fixture, args.path)
+      if (operation === 'sha256-range-bound') {
+        const offset = Number(args.offset)
+        content = content.subarray(offset, offset + Number(args.maxBytes))
+      }
+      writePrivilegedData(stream, request, 1, 1, 'digest', sha256(content), String(content.length))
+    } else {
+      exitCode = 1
+    }
+  } catch (error) {
+    if (cancelled) {
+      await cancellationDone
+      return
+    }
+    record.error = error?.stack || error?.message || String(error)
+    exitCode = 1
+  }
+  if (shellState.activePrivilegedRequest === activeRequest) {
+    shellState.activePrivilegedRequest = null
+  }
+  stream.write(privilegedFileMarker(request.token, 'end', String(exitCode)))
+  finishShellCommand(stream, nonce, exitCode)
+}
+
 function runCommand (stream, command, state, sessionId, shellState, options) {
   const integration = command.match(/__e_nonce=[\s\S]*?([a-f0-9]{32})/)
   if (integration) {
@@ -143,6 +609,9 @@ function runCommand (stream, command, state, sessionId, shellState, options) {
   state.commandEvents.push({ sessionId, command })
   const managed = options.managedPtyTasks
     ? parseManagedPtyCommand(command)
+    : null
+  const privileged = options.sftpFixture
+    ? parsePrivilegedFileCommand(command)
     : null
   const nonce = shellState.shellIntegrationActive
     ? shellState.shellIntegrationNonce
@@ -179,6 +648,17 @@ function runCommand (stream, command, state, sessionId, shellState, options) {
       sessionId,
       shellState
     )
+  } else if (privileged) {
+    writePrivilegedFileResult(
+      stream,
+      privileged,
+      state,
+      sessionId,
+      shellState,
+      options,
+      nonce
+    ).catch(() => finishShellCommand(stream, nonce, 1))
+    return
   } else if (command === 'echo shellpilot-e2e') {
     stream.write('shellpilot-e2e\r\n')
   } else if (command === 'pwd') {
@@ -218,13 +698,26 @@ function attachShell (stream, state, sessionId, options) {
     const input = typeof chunk === 'string'
       ? chunk
       : inputDecoder.write(chunk)
+    if (!line && /^(?:SHELLPILOT_TOKEN=|__sp_token=)/.test(input)) {
+      shellState.suppressLineEcho = true
+    }
+    let echoed = ''
+    const flushEcho = () => {
+      if (!echoed) return
+      stream.write(echoed)
+      echoed = ''
+    }
     for (const char of input) {
       const code = char.codePointAt(0)
       if (code === 3) {
+        flushEcho()
         state.ctrlCCount += 1
         line = ''
         stream.write('^C')
-        if (shellState.shellIntegrationActive) {
+        const cancellationStarted = shellState.activePrivilegedRequest?.cancel?.()
+        if (cancellationStarted) {
+          // The active bounded request emits its end marker and tracked prompt.
+        } else if (shellState.shellIntegrationActive) {
           writeTrackedPrompt(stream, shellState.shellIntegrationNonce)
         } else {
           writePrompt(stream)
@@ -237,6 +730,7 @@ function attachShell (stream, state, sessionId, options) {
           lastWasCarriageReturn = false
           continue
         }
+        flushEcho()
         lastWasCarriageReturn = code === 13
         stream.write('\r\n')
         runCommand(
@@ -248,23 +742,29 @@ function attachShell (stream, state, sessionId, options) {
           options
         )
         line = ''
+        shellState.suppressLineEcho = false
         continue
       }
       lastWasCarriageReturn = false
       if (code === 8 || code === 127) {
+        flushEcho()
         line = line.slice(0, -1)
         stream.write('\b \b')
         continue
       }
       line += char
-      stream.write(char)
+      if (!shellState.suppressLineEcho) echoed += char
     }
+    flushEcho()
   })
 }
 
-function sftpAttrs (stats) {
+function sftpAttrs (stats, { fixture, remotePath } = {}) {
+  const mode = fixture?.isStagingPath(remotePath)
+    ? (stats.mode & 0xF000) | (stats.isDirectory() ? 0o700 : 0o600)
+    : stats.mode
   return {
-    mode: stats.mode,
+    mode,
     uid: stats.uid || 0,
     gid: stats.gid || 0,
     size: stats.size,
@@ -308,7 +808,7 @@ function openFlags (flags) {
   return 'r'
 }
 
-function attachSftp (sftp, root, state) {
+function attachSftp (sftp, root, state, fixture) {
   const handles = new Map()
   let nextHandle = 1
   const status = utils.sftp.STATUS_CODE
@@ -320,7 +820,23 @@ function attachSftp (sftp, root, state) {
   }
   const getHandle = handle => handles.get(handle.toString('hex'))
   const replyError = (reqid, error) => sftp.status(reqid, sftpStatusForError(error))
-  const resolve = value => resolveVirtualPath(root, value)
+  const normalizeRemotePath = value => path.posix.normalize(
+    '/' + String(value || '/').replace(/\\/g, '/')
+  )
+  const resolve = value => {
+    const remotePath = normalizeRemotePath(value)
+    if (fixture?.isRootOnlyPath(remotePath)) {
+      state.rootOnlySftpDenials.push(remotePath)
+      const error = new Error('Root-only fixture path requires OSC 698')
+      error.code = 'EACCES'
+      throw error
+    }
+    return resolveVirtualPath(root, remotePath)
+  }
+  const attrsFor = (stats, remotePath) => sftpAttrs(stats, {
+    fixture,
+    remotePath: normalizeRemotePath(remotePath)
+  })
   const applyPathAttrs = async (localPath, attrs = {}) => {
     if (Number.isFinite(attrs.size)) await fs.promises.truncate(localPath, attrs.size)
     if (Number.isFinite(attrs.mode)) await fs.promises.chmod(localPath, attrs.mode)
@@ -340,11 +856,14 @@ function attachSftp (sftp, root, state) {
 
   state.sftpSessions += 1
   sftp.on('REALPATH', (reqid, givenPath) => {
+    const filename = !givenPath || givenPath === '.'
+      ? '/home/shellpilot'
+      : normalizeRemotePath(givenPath)
+    state.sftpEvents.push({ event: 'REALPATH', path: filename })
     try {
-      const filename = path.posix.normalize('/' + String(givenPath || '/').replace(/\\/g, '/'))
       fs.stat(resolve(filename), (error, stats) => {
         if (error) return replyError(reqid, error)
-        sftp.name(reqid, [{ filename, longname: sftpLongname(filename, stats), attrs: sftpAttrs(stats) }])
+        sftp.name(reqid, [{ filename, longname: sftpLongname(filename, stats), attrs: attrsFor(stats, filename) }])
       })
     } catch (error) {
       replyError(reqid, error)
@@ -352,10 +871,17 @@ function attachSftp (sftp, root, state) {
   })
   for (const eventName of ['STAT', 'LSTAT']) {
     sftp.on(eventName, (reqid, filename) => {
+      state.sftpEvents.push({ event: eventName, path: normalizeRemotePath(filename) })
       try {
         fs[eventName === 'STAT' ? 'stat' : 'lstat'](resolve(filename), (error, stats) => {
           if (error) return replyError(reqid, error)
-          sftp.attrs(reqid, sftpAttrs(stats))
+          state.sftpEvents.push({
+            event: `${eventName}_RESULT`,
+            path: normalizeRemotePath(filename),
+            mode: stats.mode,
+            permissions: stats.mode & 0o7777
+          })
+          sftp.attrs(reqid, attrsFor(stats, filename))
         })
       } catch (error) {
         replyError(reqid, error)
@@ -363,6 +889,7 @@ function attachSftp (sftp, root, state) {
     })
   }
   sftp.on('OPENDIR', (reqid, dirname) => {
+    state.sftpEvents.push({ event: 'OPENDIR', path: normalizeRemotePath(dirname) })
     try {
       const localPath = resolve(dirname)
       fs.readdir(localPath, { withFileTypes: true }, async (error, entries) => {
@@ -374,7 +901,7 @@ function attachSftp (sftp, root, state) {
             records.push({
               filename: entry.name,
               longname: sftpLongname(entry.name, stats),
-              attrs: sftpAttrs(stats)
+              attrs: attrsFor(stats, path.posix.join(dirname, entry.name))
             })
           }
           sftp.handle(reqid, makeHandle({ type: 'dir', records, sent: false }))
@@ -395,10 +922,15 @@ function attachSftp (sftp, root, state) {
     sftp.name(reqid, record.records)
   })
   sftp.on('OPEN', (reqid, filename, flags) => {
+    state.sftpEvents.push({ event: 'OPEN', path: normalizeRemotePath(filename) })
     try {
       fs.open(resolve(filename), openFlags(flags), (error, fd) => {
         if (error) return replyError(reqid, error)
-        sftp.handle(reqid, makeHandle({ type: 'file', fd }))
+        sftp.handle(reqid, makeHandle({
+          type: 'file',
+          fd,
+          remotePath: normalizeRemotePath(filename)
+        }))
       })
     } catch (error) {
       replyError(reqid, error)
@@ -411,6 +943,14 @@ function attachSftp (sftp, root, state) {
     fs.read(record.fd, buffer, 0, length, offset, (error, bytesRead) => {
       if (error) return replyError(reqid, error)
       if (!bytesRead) return sftp.status(reqid, status.EOF)
+      if (fixture?.isStagingPath(record.remotePath)) {
+        fixture.stagingReads.push({
+          operation: 'sftp-read',
+          path: record.remotePath,
+          offset,
+          size: bytesRead
+        })
+      }
       sftp.data(reqid, buffer.subarray(0, bytesRead))
     })
   })
@@ -420,6 +960,14 @@ function attachSftp (sftp, root, state) {
     fs.write(record.fd, data, 0, data.length, offset, error => {
       if (error) return replyError(reqid, error)
       state.sftpWrites += 1
+      if (fixture?.isStagingPath(record.remotePath)) {
+        fixture.stagingWrites.push({
+          operation: 'sftp-write',
+          path: record.remotePath,
+          offset,
+          size: data.length
+        })
+      }
       sftp.status(reqid, status.OK)
     })
   })
@@ -428,7 +976,7 @@ function attachSftp (sftp, root, state) {
     if (!record || record.type !== 'file') return sftp.status(reqid, status.FAILURE)
     fs.fstat(record.fd, (error, stats) => {
       if (error) return replyError(reqid, error)
-      sftp.attrs(reqid, sftpAttrs(stats))
+      sftp.attrs(reqid, attrsFor(stats, record.remotePath))
     })
   })
   sftp.on('FSETSTAT', (reqid, handle, attrs) => {
@@ -451,10 +999,14 @@ function attachSftp (sftp, root, state) {
   })
   const pathOperation = (eventName, method, success) => {
     sftp.on(eventName, (reqid, filename, attrs) => {
+      state.sftpEvents.push({
+        event: eventName,
+        path: normalizeRemotePath(filename)
+      })
       try {
         fs[method](resolve(filename), ...(success?.args || []), error => {
           if (error) return replyError(reqid, error)
-          success?.after?.()
+          success?.after?.(normalizeRemotePath(filename))
           sftp.status(reqid, status.OK)
         })
       } catch (error) {
@@ -462,9 +1014,48 @@ function attachSftp (sftp, root, state) {
       }
     })
   }
-  pathOperation('MKDIR', 'mkdir', { args: [{ recursive: false }] })
-  pathOperation('RMDIR', 'rmdir')
-  pathOperation('REMOVE', 'unlink')
+  sftp.on('MKDIR', (reqid, filename, attrs = {}) => {
+    state.sftpEvents.push({
+      event: 'MKDIR',
+      path: normalizeRemotePath(filename),
+      requestedMode: attrs.mode
+    })
+    try {
+      const requestedMode = fixture?.isStagingPath(filename)
+        ? 0o700
+        : Number.isFinite(attrs.mode)
+          ? attrs.mode & 0o7777
+          : 0o777
+      fs.mkdir(resolve(filename), {
+        recursive: false,
+        mode: requestedMode
+      }, async error => {
+        if (error) return replyError(reqid, error)
+        try {
+          await fs.promises.chmod(resolve(filename), requestedMode)
+          sftp.status(reqid, status.OK)
+        } catch (attrsError) {
+          replyError(reqid, attrsError)
+        }
+      })
+    } catch (error) {
+      replyError(reqid, error)
+    }
+  })
+  pathOperation('RMDIR', 'rmdir', {
+    after: remotePath => {
+      if (fixture?.isStagingPath(remotePath)) {
+        fixture.stagingCleanups.push({ operation: 'sftp-rmdir', path: remotePath })
+      }
+    }
+  })
+  pathOperation('REMOVE', 'unlink', {
+    after: remotePath => {
+      if (fixture?.isStagingPath(remotePath)) {
+        fixture.stagingCleanups.push({ operation: 'sftp-remove', path: remotePath })
+      }
+    }
+  })
   sftp.on('RENAME', (reqid, oldPath, newPath) => {
     try {
       fs.rename(resolve(oldPath), resolve(newPath), error => {
@@ -501,6 +1092,8 @@ async function startLocalSshServer (options = {}) {
     sftpSessions: 0,
     sftpWrites: 0,
     sftpRenames: 0,
+    sftpEvents: [],
+    rootOnlySftpDenials: [],
     shellIntegrationNonce: '',
     shellIntegrationRearms: 0,
     effectiveIdentity: null,
@@ -509,7 +1102,12 @@ async function startLocalSshServer (options = {}) {
     cancelledExecCommands: [],
     commands: [],
     commandEvents: [],
-    shellSessionIds: []
+    shellSessionIds: [],
+    privilegedFileRequests: options.sftpFixture?.privilegedFileRequests || [],
+    cancelledPrivilegedFileRequests: [],
+    stagingReads: options.sftpFixture?.stagingReads || [],
+    stagingWrites: options.sftpFixture?.stagingWrites || [],
+    stagingCleanups: options.sftpFixture?.stagingCleanups || []
   }
   const server = new Server({
     hostKeys: [HOST_KEY]
@@ -606,7 +1204,12 @@ async function startLocalSshServer (options = {}) {
         })
         if (options.sftpRoot) {
           session.on('sftp', acceptSftp => {
-            attachSftp(acceptSftp(), options.sftpRoot, state)
+            attachSftp(
+              acceptSftp(),
+              options.sftpRoot,
+              state,
+              options.sftpFixture
+            )
           })
         }
       })
@@ -637,5 +1240,7 @@ async function startLocalSshServer (options = {}) {
 }
 
 module.exports = {
+  parsePrivilegedFileCommand,
+  privilegedFileMarker,
   startLocalSshServer
 }

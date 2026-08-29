@@ -1355,3 +1355,43 @@ test('unit fixture uses an RFC 5737 address for the sanitized VPS example', () =
     'the repeated VPS fixture must use an RFC 5737 documentation address'
   )
 })
+
+test('local root file E2E is isolated and models the privileged protocol without host root', () => {
+  const sftpFixtureSource = fs.readFileSync(
+    path.join(root, 'test/e2e/common/local-sftp-fixture.js'),
+    'utf8'
+  )
+  const sshFixtureSource = fs.readFileSync(
+    path.join(root, 'test/e2e/common/local-ssh-server.js'),
+    'utf8'
+  )
+  const e2eSource = fs.readFileSync(
+    path.join(root, 'test/e2e/039.operations-pty-identity.spec.js'),
+    'utf8'
+  )
+
+  assert.match(sftpFixtureSource, /rootOnly/)
+  assert.match(sftpFixtureSource, /privilegedFileRequests/)
+  assert.match(sftpFixtureSource, /stagingReads/)
+  assert.match(sftpFixtureSource, /stagingWrites/)
+  assert.match(sftpFixtureSource, /stagingCleanups/)
+  assert.match(sshFixtureSource, /SHELLPILOT_FILE/)
+  assert.match(sshFixtureSource, /parsePrivilegedFileCommand/)
+  assert.match(sshFixtureSource, /rootOnlySftpDenials/)
+  assert.match(sshFixtureSource, /cancelledPrivilegedFileRequests/)
+  assert.match(e2eSource, /\/root-only/)
+  assert.match(e2eSource, /stage-import/)
+  assert.match(e2eSource, /mkdir-bound/)
+  assert.match(e2eSource, /rename-bound/)
+  assert.match(e2eSource, /metadata-bound/)
+  assert.match(
+    e2eSource,
+    /clickFileMenuAction\(page, fast \? 'quickDelete' : 'del'\)/
+  )
+  assert.match(e2eSource, /Control\+C/)
+  assert.match(e2eSource, /\u6587\u4ef6\u64cd\u4f5c：root（当前终端）/)
+  assert.doesNotMatch(
+    sftpFixtureSource + sshFixtureSource + e2eSource,
+    /process\.env|SHELLPILOT_E2E_(?:HOST|USER|PASS|PORT)|\.ssh[\\/]|id\s+-u\s+root|sudo\s|runuser\s|127\.0\.0\.1:\d{2,5}/
+  )
+})
