@@ -298,7 +298,8 @@ export default class Sftp extends Component {
       this.props.pane === paneMap.fileManager
     if (
       switchedToSftp &&
-      !this.state.inited &&
+      this.shouldRenderRemote() &&
+      this.props.tab?.sftpCreated !== true &&
       !this.state.loadingSftp &&
       !this.state.remoteLoading
     ) {

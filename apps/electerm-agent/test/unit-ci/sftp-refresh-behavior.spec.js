@@ -2,6 +2,10 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
 const fs = require('node:fs')
+const vm = require('node:vm')
+const parser = require('@babel/parser')
+const traverse = require('@babel/traverse').default
+const generate = require('@babel/generator').default
 
 function readSftpSource (relativePath) {
   return fs.readFileSync(
@@ -15,6 +19,25 @@ function readClientCommonSource (relativePath) {
     path.resolve(__dirname, '../../src/client/common', relativePath),
     'utf8'
   )
+}
+
+function loadClassMethod (source, name, dependencies = {}) {
+  const ast = parser.parse(source, {
+    sourceType: 'module',
+    plugins: ['jsx', 'classProperties', 'optionalChaining']
+  })
+  let method
+  traverse(ast, {
+    ClassMethod (nodePath) {
+      if (nodePath.node.key?.name === name) method = nodePath.node
+    }
+  })
+  assert.ok(method, `component must define ${name}`)
+  return vm.runInNewContext(`(${generate({
+    ...method,
+    type: 'FunctionExpression',
+    id: null
+  }).code})`, dependencies)
 }
 
 test('sftp file item refresh reloads the active side list', () => {
@@ -69,19 +92,49 @@ test('sftp history click updates path temp and reloads that side', () => {
   assert.match(body, /this\[`\$\{type\}List`\]\(undefined,\s*undefined,\s*oldPath\)/)
 })
 
-test('opening SFTP retries initialization after a hidden preload failure', () => {
+test('opening SFTP retries a hidden preload failure without repeating an initialized remote', () => {
   const source = readSftpSource('sftp-entry.jsx')
-  const start = source.indexOf('componentDidUpdate (prevProps, prevState) {')
-  const end = source.indexOf('componentWillUnmount () {')
-  const body = source.slice(start, end)
+  const componentDidUpdate = loadClassMethod(source, 'componentDidUpdate', {
+    paneMap: { fileManager: 'fileManager' },
+    typeMap: { local: 'local', remote: 'remote' }
+  })
+  let retries = 0
+  const entry = {
+    props: {
+      pane: 'fileManager',
+      tab: { sftpCreated: false },
+      config: { autoRefreshWhenSwitchToSftp: false }
+    },
+    state: {
+      inited: true,
+      loadingSftp: false,
+      remoteLoading: false,
+      selectedType: '',
+      localPath: 'C:\\Users\\shellpilot',
+      remotePath: ''
+    },
+    sftp: { isSshFsFallback: true },
+    shouldRenderRemote: () => true,
+    initRemoteAll: async () => { retries += 1 },
+    runSftpBackgroundTask: task => task(),
+    onGoto: () => {},
+    setState: () => {}
+  }
 
-  assert.notEqual(start, -1)
-  assert.notEqual(end, -1)
-  assert.match(body, /const switchedToSftp =/)
-  assert.match(body, /switchedToSftp &&[\s\S]*!this\.state\.inited/)
-  assert.match(body, /!this\.state\.loadingSftp/)
-  assert.match(body, /!this\.state\.remoteLoading/)
-  assert.match(body, /this\.initRemoteAll\(\)/)
+  componentDidUpdate.call(entry, {
+    ...entry.props,
+    pane: 'terminal'
+  }, { ...entry.state })
+
+  assert.equal(retries, 1)
+
+  entry.props.tab.sftpCreated = true
+  componentDidUpdate.call(entry, {
+    ...entry.props,
+    pane: 'terminal'
+  }, { ...entry.state })
+
+  assert.equal(retries, 1)
 })
 
 test('hidden SFTP preload failures are cleaned up without interrupting SSH', () => {
