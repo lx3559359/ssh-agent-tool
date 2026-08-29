@@ -117,7 +117,7 @@ function normalizeMode (value, fallback = 0o600) {
   return mode
 }
 
-export function normalizeLocalTransferUploadMode (value, fallback = 0o600) {
+function normalizeLocalTransferUploadMode (value, fallback = 0o600) {
   if (value === undefined || value === null || typeof value !== 'number') {
     return normalizeMode(value, fallback)
   }

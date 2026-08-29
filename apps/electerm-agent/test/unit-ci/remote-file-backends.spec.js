@@ -74,6 +74,8 @@ function createBackendHarness (options = {}) {
   }]])
   const rootFiles = new Map(Object.entries(options.rootFiles || {}))
   let nextPrivilegedInode = 1000
+  let nextStageInode = 2000
+  let stageRootPath = ''
   const privilegedNodes = new Map(Object.entries(options.privilegedTree || {}).map(
     ([remotePath, node]) => [remotePath, {
       mode: node.type === 'directory' ? 0o750 : 0o640,
@@ -203,6 +205,26 @@ function createBackendHarness (options = {}) {
       events.push(`sftp:create:${remotePath}`)
       return 1
     },
+    async upload ({ remotePath, options: uploadOptions, onData, onEnd }) {
+      const content = Buffer.from(options.transferUploadContent || 'uploaded')
+      nodes.set(remotePath, {
+        type: 'file',
+        mode: uploadOptions.mode,
+        uid: 1000,
+        gid: 1000,
+        device: '2049',
+        inode: String(nextStageInode++),
+        content
+      })
+      events.push(`sftp:upload:${remotePath}`)
+      await onData?.({ transferred: content.length, total: content.length })
+      await onEnd?.({ transferred: content.length, total: content.length })
+      return Object.freeze({
+        cancel: async () => true,
+        interrupt: async () => true,
+        destroy: async () => true
+      })
+    },
     async readFile (remotePath) {
       const node = nodes.get(remotePath)
       if (!node) throw missing(remotePath)
@@ -250,6 +272,7 @@ function createBackendHarness (options = {}) {
     if (injectedFailure) throw injectedFailure
     if (request.operation === 'stage-handshake') {
       if (options.badHandshake) throw new Error('handshake rejected')
+      stageRootPath = args.rootPath
       const response = sha256(`${args.challenge}:root`)
       nodes.set(`${args.rootPath}/${args.responseName}`, {
         type: 'file',
@@ -781,6 +804,37 @@ function createBackendHarness (options = {}) {
       }
     }
     if (['lstat', 'lstat-bound', 'stat'].includes(request.operation)) {
+      const stageNode = stageRootPath &&
+        args.path.startsWith(`${stageRootPath}/`)
+        ? nodes.get(args.path)
+        : null
+      if (stageNode) {
+        if (request.operation === 'lstat-bound' && (
+          args.sourceParentRealPath !== stageRootPath ||
+          args.sourceParentDevice !== '2049' ||
+          args.sourceParentInode !== '777'
+        )) {
+          throw new Error('stage lstat parent binding changed')
+        }
+        return {
+          exitCode: 0,
+          kind: request.operation,
+          metadata: {
+            mode: 0o100000 | stageNode.mode,
+            type: 'file',
+            size: stageNode.content.length,
+            atime: 1,
+            mtime: 2,
+            uid: stageNode.uid,
+            gid: stageNode.gid,
+            device: stageNode.device,
+            inode: stageNode.inode,
+            parentRealPath: stageRootPath,
+            parentDevice: '2049',
+            parentInode: '777'
+          }
+        }
+      }
       if (options.privilegedTree) {
         if (request.operation === 'lstat-bound') {
           const parentPath = args.path.slice(0, args.path.lastIndexOf('/')) || '/'
@@ -863,19 +917,25 @@ function createBackendHarness (options = {}) {
     if (request.operation === 'sha256-bound' ||
       request.operation === 'sha256-range-bound') {
       if (options.digestFailure) throw new Error('bounded digest failed')
-      const node = options.privilegedTree
+      const stageNode = stageRootPath &&
+        args.path.startsWith(`${stageRootPath}/`)
+        ? nodes.get(args.path)
+        : null
+      const node = stageNode || (options.privilegedTree
         ? ensurePrivilegedBinding(privilegedNodes.get(args.path))
-        : null
-      const parent = options.privilegedTree
-        ? ensurePrivilegedBinding(privilegedNodes.get(args.sourceParentRealPath))
-        : null
-      if (options.privilegedTree && (!node || node.type !== 'file' ||
+        : null)
+      const parent = stageNode
+        ? { device: '2049', inode: '777' }
+        : options.privilegedTree
+          ? ensurePrivilegedBinding(privilegedNodes.get(args.sourceParentRealPath))
+          : null
+      if ((stageNode || options.privilegedTree) && (!node || node.type !== 'file' ||
         node.device !== args.sourceDevice || node.inode !== args.sourceInode ||
         parent.device !== args.sourceParentDevice ||
         parent.inode !== args.sourceParentInode)) {
         throw new Error('sha256 source binding changed')
       }
-      const totalSize = options.privilegedTree
+      const totalSize = stageNode || options.privilegedTree
         ? Number(node.size ?? node.content?.length ?? 0)
         : Buffer.from(rootFiles.get(args.path) || '').length
       if (String(totalSize) !== args.expectedSize ||
@@ -883,13 +943,13 @@ function createBackendHarness (options = {}) {
         throw new Error('sha256 source size changed')
       }
       const bytes = request.operation === 'sha256-range-bound'
-        ? options.privilegedTree
+        ? stageNode || options.privilegedTree
           ? privilegedBytes(node, Number(args.offset), Number(args.maxBytes))
           : Buffer.from(rootFiles.get(args.path) || '').subarray(
             Number(args.offset),
             Number(args.offset) + Number(args.maxBytes)
           )
-        : options.privilegedTree
+        : stageNode || options.privilegedTree
           ? privilegedBytes(node, 0, totalSize)
           : Buffer.from(rootFiles.get(args.path) || '')
       return {
@@ -1230,6 +1290,19 @@ async function createRootBackend (harness, options = {}) {
   })
 }
 
+async function runRootUpload (backend, { remotePath, mode }) {
+  let settleTerminal
+  const terminal = new Promise(resolve => { settleTerminal = resolve })
+  const transport = await backend.sftp.upload({
+    localPath: 'C:\\isolated\\upload.txt',
+    remotePath,
+    options: { mode },
+    onEnd: value => settleTerminal({ value }),
+    onError: error => settleTerminal({ error })
+  })
+  return { transport, ...await terminal }
+}
+
 test('native backend preserves the original SFTP object identity', async () => {
   const { createNativeSftpFileBackend } = await importModule(backendsModule)
   const sftp = { marker: true }
@@ -1449,31 +1522,89 @@ test('privileged facade rejects partial octal strings and unsafe numeric modes',
   await backend.release()
 })
 
-test('root transfer upload modes accept permissions or supported local stat type bits only', async () => {
-  const { normalizeLocalTransferUploadMode } = await importModule(backendsModule)
+test('root upload normalizes supported Windows stat type bits before stage-import', async () => {
+  const harness = createBackendHarness({
+    transferUploadContent: 'uploaded on Windows',
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o700, uid: 0, gid: 0 }
+    }
+  })
+  const backend = await createRootBackend(harness)
 
-  assert.equal(normalizeLocalTransferUploadMode(0o640), 0o640)
-  assert.equal(normalizeLocalTransferUploadMode('0750'), 0o750)
-  assert.equal(normalizeLocalTransferUploadMode(0o100666), 0o666)
-  assert.equal(normalizeLocalTransferUploadMode(0o040777), 0o777)
+  for (const [name, sourceMode, targetMode] of [
+    ['permissions', 0o640, 0o640],
+    ['octal-string', '0750', 0o750],
+    ['file', 0o100666, 0o666],
+    ['directory', 0o040777, 0o777]
+  ]) {
+    const targetPath = `/root/windows-${name}-mode.txt`
+    const result = await runRootUpload(backend, {
+      remotePath: targetPath,
+      mode: sourceMode
+    })
 
-  for (const mode of [
-    NaN,
-    -1,
-    1.5,
-    0o200000,
+    assert.equal(result.error, undefined)
+    assert.equal(
+      result.value.transferred,
+      Buffer.byteLength('uploaded on Windows')
+    )
+    const imported = harness.requests.find(request => (
+      request.operation === 'stage-import' &&
+      request.args.targetPath === targetPath
+    ))
+    assert.equal(imported.args.targetMode, targetMode.toString(8))
+    assert.equal(harness.privilegedNodes.get(targetPath).mode, targetMode)
+  }
+  assert.equal(harness.requests.filter(request => (
+    request.operation === 'stage-cleanup' &&
+    request.args.objectName.startsWith('upload-')
+  )).length, 4)
+  assert.equal([...harness.nodes.keys()].some(path => path.includes('/upload-')), false)
+  await backend.release()
+})
+
+test('root upload rejects invalid local modes before import and cleans every stage', async () => {
+  const harness = createBackendHarness({
+    privilegedTree: {
+      '/root': { type: 'directory', mode: 0o700, uid: 0, gid: 0 }
+    }
+  })
+  const backend = await createRootBackend(harness)
+  const invalidModes = [
     0o010666,
     0o060777,
     0o120777,
     0o140777,
+    NaN,
+    -1,
+    1.5,
+    0o200000,
     '100666'
-  ]) {
-    assert.throws(
-      () => normalizeLocalTransferUploadMode(mode),
-      /mode/i,
-      `unexpectedly accepted ${String(mode)}`
-    )
+  ]
+
+  for (const [index, mode] of invalidModes.entries()) {
+    const targetPath = `/root/invalid-upload-${index}`
+    const importsBefore = harness.requests.filter(request => (
+      request.operation === 'stage-import'
+    )).length
+    const cleanupsBefore = harness.requests.filter(request => (
+      request.operation === 'stage-cleanup' &&
+      request.args.objectName.startsWith('upload-')
+    )).length
+    const result = await runRootUpload(backend, { remotePath: targetPath, mode })
+
+    assert.match(result.error?.message || '', /mode/i)
+    assert.equal(harness.requests.filter(request => (
+      request.operation === 'stage-import'
+    )).length, importsBefore)
+    assert.equal(harness.privilegedNodes.has(targetPath), false)
+    assert.equal(harness.requests.filter(request => (
+      request.operation === 'stage-cleanup' &&
+      request.args.objectName.startsWith('upload-')
+    )).length, cleanupsBefore + 1)
+    assert.equal([...harness.nodes.keys()].some(path => path.includes('/upload-')), false)
   }
+  await backend.release()
 })
 
 test('root write requestedMode validation does not accept local stat type bits', async () => {
