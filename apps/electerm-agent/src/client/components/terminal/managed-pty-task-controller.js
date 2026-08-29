@@ -13,8 +13,15 @@ function createNamedError (name, message, cause) {
   return error
 }
 
-function abortError (message = 'PTY 运维任务已取消') {
-  return createNamedError('AbortError', message)
+function abortError (
+  message = 'PTY 运维任务已取消',
+  cancellationOrigin = 'signal'
+) {
+  const error = createNamedError('AbortError', message)
+  error.code = 'PTY_TASK_CANCELLED'
+  error.cancelled = true
+  error.cancellationOrigin = cancellationOrigin
+  return error
 }
 
 function timeoutError () {
@@ -259,9 +266,12 @@ export function createManagedPtyTaskController ({
       ? reason
       : reason === 'timeout'
         ? timeoutError()
-        : abortError(reason === 'user'
-          ? '用户已取消 PTY 运维任务'
-          : 'PTY 运维任务已取消')
+        : abortError(
+          reason === 'user'
+            ? '用户已取消 PTY 运维任务'
+            : 'PTY 运维任务已取消',
+          reason === 'user' ? 'user' : 'signal'
+        )
     clearTimer(execution.timeoutHandle)
     if (!execution.submitted) {
       rejectExecution(execution, execution.cancelError, {

@@ -215,12 +215,17 @@ test('Transfer settles subtransport cleanup before recording successful terminal
     source.indexOf('onEnd = async'),
     source.indexOf('onData =')
   )
-  const cleanup = onEnd.indexOf("await this.stopTransport('completed')")
+  const cleanup = onEnd.indexOf('await this.stopTransport(')
   const safetyComplete = onEnd.indexOf('await this.transferSafety.complete')
-  const history = onEnd.indexOf('window.store.addTransferHistory')
+  const history = onEnd.indexOf('this.recordTransferHistory(update)')
+  const recordHistory = source.slice(
+    source.indexOf('recordTransferHistory ='),
+    source.indexOf('onEnd = async')
+  )
 
   assert.ok(cleanup >= 0)
   assert.ok(cleanup < safetyComplete)
   assert.ok(cleanup < history)
+  assert.match(recordHistory, /window\.store\.addTransferHistory\(history\)/)
   assert.match(onEnd, /status:\s*'exception'[\s\S]*error:\s*error\.message/)
 })

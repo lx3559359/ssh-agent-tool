@@ -1,5 +1,25 @@
 import { preserveTransferCleanupError } from './transfer-cleanup.js'
 
+export function isAuthoritativeTransferCancellation (error) {
+  return error?.name === 'AbortError' &&
+    error?.code === 'PTY_TASK_CANCELLED' &&
+    error?.cancelled === true
+}
+
+export function transferTerminalUpdateForError (error) {
+  if (isAuthoritativeTransferCancellation(error)) {
+    return {
+      status: 'cancelled',
+      error: '',
+      skipSourceVerification: true
+    }
+  }
+  return {
+    status: 'exception',
+    error: String(error?.message || error || 'SFTP transfer failed')
+  }
+}
+
 async function captureCancellationError (primary, work) {
   try {
     await work?.()

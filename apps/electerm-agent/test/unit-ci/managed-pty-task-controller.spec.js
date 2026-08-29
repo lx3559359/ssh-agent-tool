@@ -316,7 +316,13 @@ test('abort sends one Ctrl+C and waits for tracked prompt recovery', async () =>
   harness.emitCommandFinished(130)
   harness.emitPromptStarted()
 
-  await assert.rejects(running, error => error.name === 'AbortError')
+  await assert.rejects(running, error => {
+    assert.equal(error.name, 'AbortError')
+    assert.equal(error.code, 'PTY_TASK_CANCELLED')
+    assert.equal(error.cancelled, true)
+    assert.equal(error.cancellationOrigin, 'signal')
+    return true
+  })
   assert.equal(await lease.release(), true)
 })
 
@@ -388,7 +394,13 @@ test('managed input blocks ordinary keys and routes Ctrl+C through cancellation'
   assert.equal(harness.interrupts, 1)
   harness.emitCommandFinished(130)
   harness.emitPromptStarted()
-  await assert.rejects(running, error => error.name === 'AbortError')
+  await assert.rejects(running, error => {
+    assert.equal(error.name, 'AbortError')
+    assert.equal(error.code, 'PTY_TASK_CANCELLED')
+    assert.equal(error.cancelled, true)
+    assert.equal(error.cancellationOrigin, 'user')
+    return true
+  })
   await lease.release()
 
   assert.deepEqual(

@@ -62,7 +62,8 @@ import {
   settleStaleTransferHandle
 } from './transfer-cleanup.js'
 import {
-  createTransferCancellationCoordinator
+  createTransferCancellationCoordinator,
+  transferTerminalUpdateForError
 } from './transfer-cancellation-lifecycle.js'
 import './transfer.styl'
 
@@ -146,6 +147,10 @@ export default class TransportAction extends Component {
           status: 'cancelled',
           remoteState: 'unknown',
           transferId: this.props.transfer.id
+        })
+        this.recordTransferHistory({
+          status: 'cancelled',
+          error: ''
         })
         this.recordTransferBatchResult(this.props.transfer, {
           status: 'cancelled'
@@ -541,6 +546,51 @@ export default class TransportAction extends Component {
     return summary
   }
 
+  recordTransferHistory = (update = {}) => {
+    const {
+      transfer,
+      config
+    } = this.props
+    if (config.disableTransferHistory || this.transferHistoryRecorded) {
+      return null
+    }
+    const fromFile = transfer.fromFile || this.fromFile || {}
+    const size = update.size ??
+      update.transferred ??
+      (update.status === 'skipped' ? 0 : Number(fromFile.size) || 0)
+    const history = copy(transfer)
+    assign(history, {
+      ...(this.verifiedCrossHostSource
+        ? {
+            verifiedSourceEndpointKey: this.verifiedCrossHostSource.verifiedSourceEndpointKey,
+            verifiedSourceIdentity: this.verifiedCrossHostSource.verifiedSourceIdentity,
+            verifiedSourceContentIdentity: this.verifiedCrossHostSource.verifiedSourceContentIdentity,
+            verifiedSourceDescriptor: this.verifiedCrossHostSource.verifiedSourceDescriptor
+          }
+        : {}),
+      finishTime: Date.now(),
+      startTime: this.startTime,
+      size,
+      next: null,
+      speed: format(size, this?.startTime),
+      status: update.status || 'success',
+      error: update.error || '',
+      runtimeIdentity: this.remoteFileSession?.runtimeIdentity || {
+        channel: 'sftp',
+        effectiveUsername: this.getTransferTaskEndpoint().username
+      },
+      ...(this.folderItemResults.length
+        ? {
+            itemResults: this.folderItemResults.slice(0, 1000),
+            itemResultCount: this.folderItemResults.length
+          }
+        : {})
+    })
+    window.store.addTransferHistory(history)
+    this.transferHistoryRecorded = true
+    return history
+  }
+
   onEnd = async (update = {}, attemptToken) => {
     const protectedAttempt = attemptToken !== undefined
     if (protectedAttempt && !this.transferAttempts.beginCompletion(attemptToken)) {
@@ -556,7 +606,9 @@ export default class TransportAction extends Component {
     }
     this.finishing = true
     update.skipped = update.skipped || this.getLocalSourceSkippedResults()
-    const skipSourceVerification = update.skipSourceVerification === true
+    const cancellationRequested = update.status === 'cancelled'
+    const skipSourceVerification = cancellationRequested ||
+      update.skipSourceVerification === true
     let failed = update.status === 'exception' || Boolean(update.error)
     if (!failed && !skipSourceVerification) {
       try {
@@ -579,7 +631,9 @@ export default class TransportAction extends Component {
       }
     }
     try {
-      await this.stopTransport('completed')
+      await this.stopTransport(
+        cancellationRequested ? 'authoritative-cancelled' : 'completed'
+      )
     } catch (error) {
       failed = true
       update = {
@@ -590,14 +644,20 @@ export default class TransportAction extends Component {
       window.store.onError(error)
     }
     try {
-      const completed = await this.transferSafety.complete({
-        exitCode: failed ? 1 : 0
-      })
-      const completionFailure = getTransferSafetyCompletionFailure(completed)
-      if (completionFailure) {
-        update = {
-          ...update,
-          ...completionFailure
+      if (cancellationRequested) {
+        await this.transferSafety.cancel({
+          externalAlreadyAttempted: true
+        })
+      } else {
+        const completed = await this.transferSafety.complete({
+          exitCode: failed ? 1 : 0
+        })
+        const completionFailure = getTransferSafetyCompletionFailure(completed)
+        if (completionFailure) {
+          update = {
+            ...update,
+            ...completionFailure
+          }
         }
       }
     } catch (error) {
@@ -608,18 +668,25 @@ export default class TransportAction extends Component {
       }
       window.store.onError(error)
     }
+    const taskFailed = update.status === 'exception' || Boolean(update.error)
+    const taskCancelled = cancellationRequested && !taskFailed
     try {
       await this.notifyAgentRiskTerminal({
-        status: update.status === 'exception' || update.error ? 'failed' : 'completed',
+        status: taskFailed
+          ? 'failed'
+          : taskCancelled
+            ? 'cancelled'
+            : 'completed',
         error: update.error || '',
         transferId: this.props.transfer.id
       })
     } catch (error) {
       window.store.onError(error)
     }
-    const taskFailed = update.status === 'exception' || Boolean(update.error)
     if (taskFailed) {
       await this.runTransferTask('onFailed', update.error || 'SFTP transfer failed')
+    } else if (taskCancelled) {
+      await this.runTransferTask('onCancelled')
     } else {
       const size = update.size ??
         update.transferred ??
@@ -631,51 +698,11 @@ export default class TransportAction extends Component {
         etaSeconds: 0
       })
     }
-    const {
-      transfer,
-      config
-    } = this.props
+    const { transfer } = this.props
     const {
       typeTo
     } = transfer
-    const finishTime = Date.now()
-    if (!config.disableTransferHistory) {
-      const fromFile = transfer.fromFile || this.fromFile
-      const size = update.size ??
-        update.transferred ??
-        (update.status === 'skipped' ? 0 : fromFile.size)
-      const r = copy(transfer)
-      assign(r, {
-        ...(this.verifiedCrossHostSource
-          ? {
-              verifiedSourceEndpointKey: this.verifiedCrossHostSource.verifiedSourceEndpointKey,
-              verifiedSourceIdentity: this.verifiedCrossHostSource.verifiedSourceIdentity,
-              verifiedSourceContentIdentity: this.verifiedCrossHostSource.verifiedSourceContentIdentity,
-              verifiedSourceDescriptor: this.verifiedCrossHostSource.verifiedSourceDescriptor
-            }
-          : {}),
-        finishTime,
-        startTime: this.startTime,
-        size,
-        next: null,
-        speed: format(size, this?.startTime),
-        status: update.status || 'success',
-        error: update.error || '',
-        runtimeIdentity: this.remoteFileSession?.runtimeIdentity || {
-          channel: 'sftp',
-          effectiveUsername: this.getTransferTaskEndpoint().username
-        },
-        ...(this.folderItemResults.length
-          ? {
-              itemResults: this.folderItemResults.slice(0, 1000),
-              itemResultCount: this.folderItemResults.length
-            }
-          : {})
-      })
-      window.store.addTransferHistory(
-        r
-      )
-    }
+    this.recordTransferHistory(update)
     this.recordTransferBatchResult(transfer, update)
     const cbs = [
       this[typeTo + 'List']
@@ -685,7 +712,10 @@ export default class TransportAction extends Component {
     }
     if (protectedAttempt) this.transferAttempts.finishCompletion(attemptToken)
     try {
-      await this.finishTransfer(cb)
+      await this.finishTransfer(
+        cb,
+        cancellationRequested ? 'authoritative-cancelled' : 'completed'
+      )
     } finally {
       this.releaseRemoteFileSession().catch(error => window.store.onError(error))
     }
@@ -1676,14 +1706,15 @@ export default class TransportAction extends Component {
     if (this.userCancelling || this.onCancel) return
     if (!this.transferAttempts.isCurrent(attemptToken) ||
       this.transferAttempts.completing) return
+    const terminalUpdate = transferTerminalUpdateForError(e)
+    if (terminalUpdate.status === 'cancelled') {
+      await this.onEnd(terminalUpdate, attemptToken)
+      return
+    }
     if (this.scheduleRetry(e, attemptToken)) {
       return
     }
-    const up = {
-      status: 'exception',
-      error: e.message
-    }
-    await this.onEnd(up, attemptToken)
+    await this.onEnd(terminalUpdate, attemptToken)
     window.store.onError(e)
   }
 
