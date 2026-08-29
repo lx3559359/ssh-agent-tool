@@ -140,7 +140,11 @@ function createWindowHarness () {
   return { calls, listeners, windowHarness }
 }
 
-function createTextEditorHarness ({ refsMap = new Map(), windowHarness } = {}) {
+function createTextEditorHarness ({
+  refsMap = new Map(),
+  windowHarness,
+  generateFn = () => 'generated-id'
+} = {}) {
   const actualWindow = windowHarness || createWindowHarness().windowHarness
   const editor = {
     state: {
@@ -163,7 +167,7 @@ function createTextEditorHarness ({ refsMap = new Map(), windowHarness } = {}) {
     refs: { get: key => refsMap.get(key) },
     refsStatic: { remove: () => {} },
     resolve: (parent, name) => `${parent}/${name}`,
-    generate: () => 'generated-id'
+    generate: generateFn
   }
   const fields = [
     'setStateProxy',
@@ -171,6 +175,7 @@ function createTextEditorHarness ({ refsMap = new Map(), windowHarness } = {}) {
     'captureEditorTransition',
     'isCurrentEditorTransition',
     'isCurrentEditorSession',
+    'waitForExternalEditorOpens',
     'cleanupExternalEditorResource',
     'disposeExternalEditor',
     'closeEditorSession',
@@ -523,13 +528,210 @@ test('cancel during remote temp creation still removes the completed temp file',
 
   const opening = editor.editWith()
   await flushAsync()
-  await editor.cancel()
+  let cancelSettled = false
+  const cancelling = Promise.resolve(editor.cancel())
+    .then(() => { cancelSettled = true })
+  await flushAsync()
+  assert.equal(cancelSettled, false)
   tempWrite.resolve(true)
-  assert.equal(await opening, false)
+  assert.deepEqual(await Promise.all([opening, cancelling]), [false, undefined])
 
   assert.equal(calls.ipcOn.length, 0)
   assert.equal(calls.global.filter(call => call[0] === 'watchFile').length, 0)
   assert.equal(calls.unlinks.length, 1)
+})
+
+test('same-session concurrent external opens clean every unique temporary resource', async () => {
+  const firstWrite = deferred()
+  const secondWrite = deferred()
+  const writes = [firstWrite, secondWrite]
+  const { calls, windowHarness } = createWindowHarness()
+  windowHarness.fs.writeFile = async (...args) => {
+    const index = calls.writes.length
+    calls.writes.push(args)
+    return writes[index].promise
+  }
+  let sequence = 0
+  const session = {
+    readText: async () => 'source',
+    saveText: async () => true,
+    refresh: async () => {}
+  }
+  const editor = createTextEditorHarness({
+    windowHarness,
+    generateFn: () => `unique-${++sequence}`
+  })
+  await editor.openEditor({ id: 'remote', file: remoteFile(), session })
+
+  const first = editor.editWith()
+  await flushAsync()
+  assert.equal(calls.writes.length, 1)
+  const second = editor.editWith()
+  await flushAsync()
+  assert.equal(calls.writes.length, 2)
+  assert.notEqual(calls.writes[0][0], calls.writes[1][0])
+
+  firstWrite.resolve(true)
+  assert.equal(await first, false)
+  secondWrite.resolve(true)
+  assert.equal(await second, true)
+  await editor.cancel()
+
+  assert.equal(calls.ipcOff.length, calls.ipcOn.length)
+  assert.equal(
+    calls.global.filter(call => call[0] === 'unwatchFile').length,
+    calls.global.filter(call => call[0] === 'watchFile').length
+  )
+  assert.deepEqual(
+    [...calls.unlinks].sort(),
+    calls.writes.map(call => call[0]).sort()
+  )
+  assert.equal(editor.externalEditorResource, null)
+})
+
+test('a third same-session open cannot overtake pending watcher cleanup', async () => {
+  const firstWatch = deferred()
+  const { calls, windowHarness } = createWindowHarness()
+  windowHarness.pre.runGlobalAsync = async (...args) => {
+    calls.global.push(args)
+    if (args[0] === 'watchFile' && args[1].includes('unique-1')) {
+      return firstWatch.promise
+    }
+    return true
+  }
+  let sequence = 0
+  const session = {
+    readText: async () => 'source',
+    saveText: async () => true,
+    refresh: async () => {}
+  }
+  const editor = createTextEditorHarness({
+    windowHarness,
+    generateFn: () => `unique-${++sequence}`
+  })
+  await editor.openEditor({ id: 'remote', file: remoteFile(), session })
+
+  const first = editor.editWith()
+  await flushAsync()
+  assert.equal(
+    calls.global.filter(call => call[0] === 'watchFile').length,
+    1
+  )
+  const second = editor.editWith()
+  await flushAsync()
+  const third = editor.editWith()
+  await flushAsync()
+  assert.equal(
+    calls.global.filter(call => call[0] === 'watchFile').length,
+    1
+  )
+
+  firstWatch.resolve(true)
+  assert.deepEqual(await Promise.all([first, second, third]), [false, false, true])
+  const firstUnwatch = calls.global.findIndex(call => (
+    call[0] === 'unwatchFile' && call[1].includes('unique-1')
+  ))
+  const lastWatch = calls.global.findLastIndex(call => call[0] === 'watchFile')
+  assert.ok(firstUnwatch > -1 && firstUnwatch < lastWatch)
+  await editor.cancel()
+})
+
+test('a new session waits for cancelled pending watcher cleanup before reading', async () => {
+  const firstWatch = deferred()
+  const { calls, windowHarness } = createWindowHarness()
+  windowHarness.pre.runGlobalAsync = async (...args) => {
+    calls.global.push(args)
+    if (args[0] === 'watchFile' && args[1].includes('first.conf')) {
+      return firstWatch.promise
+    }
+    return true
+  }
+  let secondReads = 0
+  const sessionA = {
+    readText: async () => 'A',
+    saveText: async () => true,
+    refresh: async () => {}
+  }
+  const sessionB = {
+    readText: async () => {
+      secondReads += 1
+      return 'B'
+    },
+    saveText: async () => true,
+    refresh: async () => {}
+  }
+  const editor = createTextEditorHarness({ windowHarness })
+  await editor.openEditor({
+    id: 'A',
+    file: remoteFile('first.conf'),
+    session: sessionA
+  })
+  const externalA = editor.editWith()
+  await flushAsync()
+  const cancellingA = editor.cancel()
+  const openingB = editor.openEditor({
+    id: 'B',
+    file: remoteFile('second.conf'),
+    session: sessionB
+  })
+  await flushAsync()
+
+  assert.equal(secondReads, 0)
+  firstWatch.resolve(true)
+  await Promise.all([externalA, cancellingA, openingB])
+  assert.equal(secondReads, 1)
+  assert.equal(await editor.editWith(), true)
+  assert.ok(
+    calls.global.findIndex(call => call[0] === 'unwatchFile') <
+    calls.global.findIndex(call => (
+      call[0] === 'watchFile' && call[1].includes('second.conf')
+    ))
+  )
+  await editor.cancel()
+})
+
+for (const failurePoint of ['watch', 'open']) {
+  test(`${failurePoint} failure clears external ownership and cleans exactly once`, async () => {
+    const failure = new Error(`${failurePoint} failed`)
+    const { calls, windowHarness } = createWindowHarness()
+    if (failurePoint === 'watch') {
+      windowHarness.pre.runGlobalAsync = async (...args) => {
+        calls.global.push(args)
+        if (args[0] === 'watchFile') throw failure
+        return true
+      }
+    } else {
+      windowHarness.fs.openFile = async file => {
+        calls.opens.push(file)
+        throw failure
+      }
+    }
+    const session = {
+      readText: async () => 'source',
+      saveText: async () => true,
+      refresh: async () => {}
+    }
+    const editor = createTextEditorHarness({ windowHarness })
+    await editor.openEditor({ id: 'remote', file: remoteFile(), session })
+
+    assert.equal(await editor.editWith(), false)
+    assert.equal(editor.externalEditorResource, null)
+    assert.equal(calls.ipcOff.length, calls.ipcOn.length)
+    assert.equal(
+      calls.global.filter(call => call[0] === 'unwatchFile').length,
+      1
+    )
+    assert.equal(calls.unlinks.length, 1)
+    assert.deepEqual(calls.errors, [failure])
+  })
+}
+
+test('editor form receives loading so repeated UI opens are disabled', () => {
+  const renderSource = textEditorSource.slice(
+    textEditorSource.indexOf('const pops ='),
+    textEditorSource.indexOf('\n    return (', textEditorSource.indexOf('const pops ='))
+  )
+  assert.match(renderSource, /loading[,\s]/)
 })
 
 for (const action of ['cancel', 'unmount']) {

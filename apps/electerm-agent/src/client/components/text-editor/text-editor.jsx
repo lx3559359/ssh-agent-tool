@@ -35,7 +35,10 @@ export default class TextEditor extends PureComponent {
     const session = this.editorSession
     this.beginEditorTransition(null)
     this.editorUnmounted = true
-    return this.disposeExternalEditor(session)
+    return (async () => {
+      await this.waitForExternalEditorOpens()
+      await this.disposeExternalEditor(session)
+    })()
   }
 
   setStateProxy = (state, cb) => {
@@ -46,6 +49,10 @@ export default class TextEditor extends PureComponent {
   }
 
   beginEditorTransition = session => {
+    if (this.externalEditorOpenOperation) {
+      this.externalEditorOpenOperation.cancelled = true
+      this.externalEditorOpenOperation = null
+    }
     const transition = Object.freeze({
       epoch: (this.editorEpoch || 0) + 1,
       session: session || null
@@ -73,6 +80,12 @@ export default class TextEditor extends PureComponent {
     this.editorSession === session &&
     (!transition || this.isCurrentEditorTransition(transition))
   )
+
+  waitForExternalEditorOpens = async () => {
+    while (this.externalEditorOpenTasks?.size) {
+      await Promise.allSettled([...this.externalEditorOpenTasks])
+    }
+  }
 
   cleanupExternalEditorResource = resource => {
     if (!resource) return Promise.resolve()
@@ -121,6 +134,7 @@ export default class TextEditor extends PureComponent {
         loading: false
       })
     }
+    await this.waitForExternalEditorOpens()
     await this.disposeExternalEditor(session)
     if (!this.isCurrentEditorTransition(closing)) return null
     return closing
@@ -147,6 +161,8 @@ export default class TextEditor extends PureComponent {
     } else {
       this.setStateProxy({ ...editorState, loading: false })
     }
+    await this.waitForExternalEditorOpens()
+    if (!this.isCurrentEditorTransition(transition)) return false
     if (previousSession && previousSession !== session) {
       await this.disposeExternalEditor(previousSession)
       if (!this.isCurrentEditorTransition(transition)) return false
@@ -300,110 +316,159 @@ export default class TextEditor extends PureComponent {
     return Boolean(result)
   }
 
-  openExternalEditor = async editorCommand => {
+  openExternalEditor = editorCommand => {
     const session = this.editorSession
     const transition = this.captureEditorTransition()
     const file = this.state.file
-    this.setStateProxy({
-      loading: true
-    })
-    if (!this.isCurrentEditorSession(session, transition) ||
-      !this.editorSessionReady || !file) {
-      this.setStateProxy({ loading: false })
-      return false
+    if (this.externalEditorOpenOperation) {
+      this.externalEditorOpenOperation.cancelled = true
     }
-    const {
-      path,
-      name,
-      type
-    } = file
-    const { text } = this.state
-    await this.disposeExternalEditor(session)
-    if (!this.isCurrentEditorSession(session, transition)) return false
-    let tempPath
-    let temporary = false
-    let resource
-    const removeUntrackedTemp = async () => {
-      if (!temporary || !tempPath) return
-      try {
-        await window.fs.unlink(tempPath)
-      } catch {}
-    }
-    try {
-      if (type === 'local') {
-        tempPath = window.pre.resolve(path, name)
-      } else {
-        temporary = true
-        tempPath = window.pre.resolve(
-          window.pre.tempDir,
-          `electerm-temp-${generate()}-${name}`
-        )
-        await window.fs.writeFile(tempPath, text)
+    const operation = { cancelled: false }
+    this.externalEditorOpenOperation = operation
+    const precedingTasks = [...(this.externalEditorOpenTasks || [])]
+    const ownsOperation = () => (
+      !operation.cancelled &&
+      this.externalEditorOpenOperation === operation
+    )
+    const isCurrentOpen = () => (
+      ownsOperation() &&
+      this.isCurrentEditorSession(session, transition)
+    )
+    const task = (async () => {
+      let opened = false
+      let tempPath
+      let temporary = false
+      let resource
+      const clearResourceOwnership = () => {
+        if (this.externalEditorResource === resource) {
+          this.externalEditorResource = null
+        }
       }
-      if (!this.isCurrentEditorSession(session, transition)) {
-        await removeUntrackedTemp()
+      const removeUntrackedTemp = async () => {
+        if (!temporary || !tempPath) return
+        try {
+          await window.fs.unlink(tempPath)
+        } catch {}
+      }
+      this.setStateProxy({
+        loading: true
+      })
+      if (!isCurrentOpen() || !this.editorSessionReady || !file) {
+        if (ownsOperation() && this.isCurrentEditorTransition(transition)) {
+          this.setStateProxy({ loading: false })
+        }
         return false
       }
-      resource = {
-        session,
-        transition,
-        path: tempPath,
-        temporary,
-        listenerAttached: false,
-        cleanupPromise: null
-      }
-      resource.onFileChange = (event, nextText) => {
-        if (this.externalEditorResource !== resource ||
-          !this.isCurrentEditorSession(session, transition)) return
-        this.editWithSystemEditorDone({
+      const {
+        path,
+        name,
+        type
+      } = file
+      const { text } = this.state
+      await this.disposeExternalEditor(session)
+      if (!isCurrentOpen()) return false
+      try {
+        if (type === 'local') {
+          tempPath = window.pre.resolve(path, name)
+        } else {
+          temporary = true
+          tempPath = window.pre.resolve(
+            window.pre.tempDir,
+            `electerm-temp-${generate()}-${name}`
+          )
+          await window.fs.writeFile(tempPath, text)
+        }
+        if (!isCurrentOpen()) {
+          await removeUntrackedTemp()
+          return false
+        }
+        if (precedingTasks.length) {
+          await Promise.allSettled(precedingTasks)
+        }
+        if (!isCurrentOpen()) {
+          await removeUntrackedTemp()
+          return false
+        }
+        resource = {
           session,
           transition,
-          text: nextText
-        })
-      }
-      this.externalEditorResource = resource
-      resource.watchSetupPromise = Promise.resolve().then(() => (
-        window.pre.runGlobalAsync('watchFile', tempPath)
-      ))
-      await resource.watchSetupPromise
-      if (this.externalEditorResource !== resource ||
-        !this.isCurrentEditorSession(session, transition)) {
-        await this.cleanupExternalEditorResource(resource)
-        return false
-      }
-      window.pre.ipcOnEvent('file-change', resource.onFileChange)
-      resource.listenerAttached = true
-      if (editorCommand) {
-        await window.pre.runGlobalAsync(
-          'openFileWithEditor',
-          tempPath,
-          editorCommand
-        )
-      } else {
-        await window.fs.openFile(tempPath)
-        if (!this.isCurrentEditorTransition(transition)) {
+          operation,
+          path: tempPath,
+          temporary,
+          listenerAttached: false,
+          cleanupPromise: null
+        }
+        resource.onFileChange = (event, nextText) => {
+          if (this.externalEditorResource !== resource ||
+            !isCurrentOpen()) return
+          this.editWithSystemEditorDone({
+            session,
+            transition,
+            text: nextText
+          })
+        }
+        this.externalEditorResource = resource
+        resource.watchSetupPromise = Promise.resolve().then(() => (
+          window.pre.runGlobalAsync('watchFile', tempPath)
+        ))
+        await resource.watchSetupPromise
+        if (this.externalEditorResource !== resource || !isCurrentOpen()) {
+          clearResourceOwnership()
           await this.cleanupExternalEditorResource(resource)
           return false
         }
-        window.pre.showItemInFolder(tempPath)
+        window.pre.ipcOnEvent('file-change', resource.onFileChange)
+        resource.listenerAttached = true
+        if (editorCommand) {
+          await window.pre.runGlobalAsync(
+            'openFileWithEditor',
+            tempPath,
+            editorCommand
+          )
+        } else {
+          await window.fs.openFile(tempPath)
+          if (!isCurrentOpen()) {
+            clearResourceOwnership()
+            await this.cleanupExternalEditorResource(resource)
+            return false
+          }
+          window.pre.showItemInFolder(tempPath)
+        }
+        if (isCurrentOpen()) {
+          opened = true
+          this.setStateProxy({ loading: false })
+          return true
+        }
+        return false
+      } catch (error) {
+        if (resource) {
+          clearResourceOwnership()
+          await this.cleanupExternalEditorResource(resource)
+        } else {
+          await removeUntrackedTemp()
+        }
+        if (isCurrentOpen()) {
+          this.setStateProxy({ loading: false })
+          window.store.onError(error)
+        }
+        return false
+      } finally {
+        if (!opened && this.externalEditorOpenOperation === operation) {
+          this.externalEditorOpenOperation = null
+        }
       }
-      if (this.isCurrentEditorSession(session, transition)) {
-        this.setStateProxy({ loading: false })
-        return true
-      }
-      return false
-    } catch (error) {
-      if (resource) {
-        await this.cleanupExternalEditorResource(resource)
-      } else {
-        await removeUntrackedTemp()
-      }
-      if (this.isCurrentEditorSession(session, transition)) {
-        this.setStateProxy({ loading: false })
-        window.store.onError(error)
-      }
-      return false
+    })()
+    if (!this.externalEditorOpenTasks) {
+      this.externalEditorOpenTasks = new Set()
     }
+    const trackedTask = task.finally(() => {
+      this.externalEditorOpenTasks.delete(task)
+      if (!this.externalEditorOpenTasks.size) {
+        this.externalEditorOpenTasks = null
+      }
+    })
+    this.externalEditorOpenTasks.add(task)
+    return trackedTask
   }
 
   editWith = () => this.openExternalEditor()
@@ -438,6 +503,7 @@ export default class TextEditor extends PureComponent {
     const pops = {
       submit: this.handleSubmit,
       text,
+      loading,
       cancel: this.cancel,
       editWith: this.editWith,
       editWithCustom: this.editWithCustom
