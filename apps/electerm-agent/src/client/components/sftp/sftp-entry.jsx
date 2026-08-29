@@ -169,7 +169,7 @@ function createRemoteFileRootRequiredError () {
 
 function createRemoteFileRecoveryPersistenceError (cause, evidence = {}) {
   const error = createSftpRecoveryUncertainError({
-    message: '远端操作已完成，但本地恢复记录持久化失败；结果需要人工核对。',
+    message: e('shellpilotSftpRecoveryPersistenceUncertain'),
     primaryCause: cause,
     record: evidence.record
   })
@@ -2151,7 +2151,7 @@ export default class Sftp extends Component {
                 failedAt: new Date().toISOString()
               })
               throw createSftpRecoveryUncertainError({
-                message: 'root SFTP 恢复证明已变化，已保留精确证据供核对。',
+                message: e('shellpilotSftpRecoveryProofChanged'),
                 primaryCause: cause,
                 displacedPath: record.displacement?.path,
                 displacedDescriptor: displacedSource,

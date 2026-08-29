@@ -44,6 +44,7 @@ function installSftpEntryClassField (entry, name, dependencies = {}) {
       return (${sftpEntryClassFieldInitializer(name)})
     }).call(__entry)
   `, {
+    e: value => value,
     ...dependencies,
     __entry: entry
   })

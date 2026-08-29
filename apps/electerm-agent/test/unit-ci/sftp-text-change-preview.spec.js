@@ -106,7 +106,11 @@ test('Agent remote text writes surface the preview through the existing single S
   assert.match(source, /confirmationDetails/)
   assert.match(
     source,
-    /confirmPreparedSftpOperation\([\s\S]{0,180}options\.confirmationDetails/
+    /let confirmationDetails = options\.confirmationDetails/
+  )
+  assert.match(
+    source,
+    /confirmPreparedSftpOperation\([\s\S]{0,180}confirmationDetails/
   )
   assert.match(
     source,
