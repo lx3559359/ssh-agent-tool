@@ -51,17 +51,33 @@ test('sftp double click enters directories before opening or transferring files'
   assert.match(body, /this\.transfer\(\)/)
 })
 
-test('sftp double click reads a remote editor file through the entry capability', () => {
-  const source = readClientSource('file-item.jsx')
-  const start = source.indexOf('fetchEditorText = async (path, type) => {')
-  const end = source.indexOf('\n  onSubmitEditFile', start)
-  const body = source.slice(start, end)
+test('sftp double click gives the editor a detached session that reads through the entry capability', () => {
+  const rowSource = readClientSource('file-item.jsx')
+  const sessionStart = rowSource.indexOf('createEditorSession = () => {')
+  const sessionEnd = rowSource.indexOf('\n  editFile =', sessionStart)
+  const sessionBody = rowSource.slice(sessionStart, sessionEnd)
+  const editStart = sessionEnd
+  const editEnd = rowSource.indexOf('\n  askAiAboutFile', editStart)
+  const editBody = rowSource.slice(editStart, editEnd)
+  const editorSource = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/text-editor/text-editor.jsx'
+  ), 'utf8')
+  const fetchStart = editorSource.indexOf('fetchText = async ({')
+  const fetchEnd = editorSource.indexOf('\n  getAutoOpenCustomEditorCommand', fetchStart)
+  const fetchBody = editorSource.slice(fetchStart, fetchEnd)
 
-  assert.notEqual(start, -1)
-  assert.notEqual(end, -1)
-  assert.match(body, /typeMap\.remote === type/)
-  assert.match(body, /this\.props\.readRemoteFile\(path\)/)
-  assert.doesNotMatch(body, /this\.props\.sftp\.readFile/)
+  assert.notEqual(sessionStart, -1)
+  assert.notEqual(sessionEnd, -1)
+  assert.notEqual(editEnd, -1)
+  assert.notEqual(fetchStart, -1)
+  assert.notEqual(fetchEnd, -1)
+  assert.match(sessionBody, /const readRemoteFile = this\.props\.readRemoteFile/)
+  assert.match(sessionBody, /readText: path => type === typeMap\.remote[\s\S]*readRemoteFile\(path\)/)
+  assert.doesNotMatch(sessionBody, /this\.props\.sftp\.readFile/)
+  assert.match(editBody, /const session = this\.createEditorSession\(\)/)
+  assert.match(editBody, /this\.editor\?\.openEditor\(\{[\s\S]*session[\s\S]*\}\)/)
+  assert.match(fetchBody, /text = await session\.readText\(p, type\)/)
 })
 
 test('sftp address bar supports Enter navigation and reload-or-jump button actions', () => {
