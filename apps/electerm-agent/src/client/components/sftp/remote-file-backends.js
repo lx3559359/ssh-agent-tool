@@ -117,6 +117,21 @@ function normalizeMode (value, fallback = 0o600) {
   return mode
 }
 
+export function normalizeLocalTransferUploadMode (value, fallback = 0o600) {
+  if (value === undefined || value === null || typeof value !== 'number') {
+    return normalizeMode(value, fallback)
+  }
+  if (!Number.isSafeInteger(value) || value < 0 || value > 0o177777) {
+    throw new Error('root 文件后端 mode 无效')
+  }
+  if (value <= 0o7777) return value
+  const type = value & 0o170000
+  if (type !== 0o100000 && type !== 0o040000) {
+    throw new Error('root 文件后端 mode 无效')
+  }
+  return value & 0o7777
+}
+
 function normalizeCancellableOptions (value) {
   if (value === undefined) return Object.freeze({ signal: undefined })
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
@@ -2627,7 +2642,10 @@ export async function createPrivilegedFileBackend ({
                   targetPath,
                   sha256: proof.sha256,
                   size: String(proof.size),
-                  targetMode: normalizeMode(options.mode, 0o600).toString(8),
+                  targetMode: normalizeLocalTransferUploadMode(
+                    options.mode,
+                    0o600
+                  ).toString(8),
                   targetUid: '0',
                   targetGid: '0',
                   mustBeAbsent: '1',

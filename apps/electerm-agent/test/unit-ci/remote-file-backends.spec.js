@@ -1449,6 +1449,49 @@ test('privileged facade rejects partial octal strings and unsafe numeric modes',
   await backend.release()
 })
 
+test('root transfer upload modes accept permissions or supported local stat type bits only', async () => {
+  const { normalizeLocalTransferUploadMode } = await importModule(backendsModule)
+
+  assert.equal(normalizeLocalTransferUploadMode(0o640), 0o640)
+  assert.equal(normalizeLocalTransferUploadMode('0750'), 0o750)
+  assert.equal(normalizeLocalTransferUploadMode(0o100666), 0o666)
+  assert.equal(normalizeLocalTransferUploadMode(0o040777), 0o777)
+
+  for (const mode of [
+    NaN,
+    -1,
+    1.5,
+    0o200000,
+    0o010666,
+    0o060777,
+    0o120777,
+    0o140777,
+    '100666'
+  ]) {
+    assert.throws(
+      () => normalizeLocalTransferUploadMode(mode),
+      /mode/i,
+      `unexpectedly accepted ${String(mode)}`
+    )
+  }
+})
+
+test('root write requestedMode validation does not accept local stat type bits', async () => {
+  const harness = createBackendHarness({ missingLstatResult: true })
+  const backend = await createRootBackend(harness)
+
+  for (const mode of [0o100666, 0o040777]) {
+    await assert.rejects(
+      backend.sftp.writeFile('/root/missing-mode', 'safe', mode),
+      /mode/i
+    )
+  }
+  assert.equal(harness.requests.some(request => (
+    request.operation === 'stage-import'
+  )), false)
+  await backend.release()
+})
+
 test('privileged backend serializes every PTY request and release waits for accepted work', async () => {
   const harness = createBackendHarness({
     strictSingleActive: true,
