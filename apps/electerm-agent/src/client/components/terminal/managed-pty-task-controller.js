@@ -121,6 +121,7 @@ export function createManagedPtyTaskController ({
   expectSubmission,
   armSubmission,
   cancelSubmission,
+  prepareSubmissionOutputRecovery = () => true,
   cancelSubmissionOutput = () => true,
   submitCommand,
   interrupt,
@@ -144,6 +145,14 @@ export function createManagedPtyTaskController ({
       cancelSubmission(token)
     } catch {
       // Session cleanup is best effort after a failed or interrupted submission.
+    }
+  }
+
+  function safePrepareSubmissionOutputRecovery () {
+    try {
+      prepareSubmissionOutputRecovery()
+    } catch {
+      // Prompt recovery remains authoritative even if echo retargeting fails.
     }
   }
 
@@ -216,7 +225,7 @@ export function createManagedPtyTaskController ({
   function settleIfCompleteUnsafe (execution) {
     if (execution.settled) return
     if (execution.cancelRequested) {
-      if (execution.commandFinished && execution.promptReturned) {
+      if (execution.promptReturned) {
         rejectExecution(execution, execution.cancelError)
       }
       return
@@ -282,6 +291,7 @@ export function createManagedPtyTaskController ({
             : 'PTY 运维任务已取消',
           reason === 'user' ? 'user' : 'signal'
         )
+    execution.cancelRequestedPromptSequence = promptSequence
     clearTimer(execution.timeoutHandle)
     if (!execution.submitted) {
       rejectExecution(execution, execution.cancelError, {
@@ -291,7 +301,7 @@ export function createManagedPtyTaskController ({
     }
     if (!execution.interruptSent) {
       execution.interruptSent = true
-      safeCancelSubmissionOutput()
+      safePrepareSubmissionOutputRecovery()
       try {
         interrupt()
       } catch {
@@ -343,6 +353,7 @@ export function createManagedPtyTaskController ({
         interruptSent: false,
         cancelRequested: false,
         cancelError: null,
+        cancelRequestedPromptSequence: 0,
         identityValidated: false,
         commandFinished: false,
         commandExitCode: null,
@@ -443,8 +454,13 @@ export function createManagedPtyTaskController ({
   function handlePromptStarted () {
     promptSequence += 1
     const execution = active
-    if (!execution || !execution.commandFinished ||
-      promptSequence <= execution.commandFinishedPromptSequence) return false
+    if (!execution) return false
+    if (execution.cancelRequested) {
+      if (promptSequence <= execution.cancelRequestedPromptSequence) return false
+    } else if (!execution.commandFinished ||
+      promptSequence <= execution.commandFinishedPromptSequence) {
+      return false
+    }
     execution.promptReturned = true
     settleIfComplete(execution)
     return true

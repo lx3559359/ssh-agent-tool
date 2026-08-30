@@ -143,6 +143,10 @@ async function createControllerHarness (options = {}) {
       cancelledSubmissions.push(token)
       return true
     },
+    prepareSubmissionOutputRecovery: () => {
+      lifecycleEvents.push('prepare-output-recovery')
+      return true
+    },
     submitCommand: command => {
       if (options.submitCommand === false) return false
       submissions.at(-1).submittedCommand = command
@@ -322,7 +326,7 @@ test('abort sends one Ctrl+C and waits for tracked prompt recovery', async () =>
   assert.equal(harness.interrupts, 1)
   assert.deepEqual(
     harness.lifecycleEvents.slice(0, 2),
-    ['cancel-output', 'interrupt']
+    ['prepare-output-recovery', 'interrupt']
   )
   harness.emitCommandFinished(130)
   harness.emitPromptStarted()
@@ -335,6 +339,43 @@ test('abort sends one Ctrl+C and waits for tracked prompt recovery', async () =>
     return true
   })
   assert.equal(await lease.release(), true)
+})
+
+test('cancelled command unlocks on a new prompt without command finish', async () => {
+  const harness = await createControllerHarness({ recoveryTimeoutMs: 100 })
+  const signalController = new AbortController()
+  const lease = await harness.controller.acquire('operations-prompt-recovery')
+  const running = lease.execute({
+    taskId: 'prompt-recovery-step',
+    script: 'sleep 60',
+    timeoutMs: 1000,
+    signal: signalController.signal
+  })
+  harness.emitManagedStart()
+
+  signalController.abort()
+  assert.deepEqual(
+    harness.lifecycleEvents.slice(0, 2),
+    ['prepare-output-recovery', 'interrupt']
+  )
+  assert.equal(harness.emitPromptStarted(), true)
+
+  await assert.rejects(running, error => {
+    assert.equal(error.name, 'AbortError')
+    assert.equal(error.code, 'PTY_TASK_CANCELLED')
+    return true
+  })
+  assert.deepEqual(harness.lifecycleEvents.slice(0, 3), [
+    'prepare-output-recovery',
+    'interrupt',
+    'cancel-output'
+  ])
+  assert.equal(await lease.release(), true)
+  assert.equal(harness.controller.isBusy(), false)
+  assert.deepEqual(
+    harness.controller.handleUserInput('x'),
+    { handled: false, send: false }
+  )
 })
 
 test('cancel without prompt recovery keeps the terminal locked until invalidation', async () => {
