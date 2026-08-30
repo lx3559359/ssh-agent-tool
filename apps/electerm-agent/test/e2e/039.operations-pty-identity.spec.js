@@ -649,6 +649,41 @@ test('operations and the complete remote file panel inherit su root then return 
     )).toBe(true)
 
     const ctrlCBefore = sshServer.state.ctrlCCount
+    const cancellationNonce = sshServer.state.shellIntegrationNonce
+    expect(cancellationNonce).toMatch(/^[a-f0-9]{32}$/)
+    const cancellationTerminal = await page.evaluate(() => {
+      const activeTabId = window.store.activeTabId
+      const terminal = window.refs.get('term-' + activeTabId)
+      const controller = terminal?.operationsPtyTaskController
+      if (!terminal || !controller) return null
+      const marker = `shellpilot-cancellation-${Date.now()}`
+      terminal.__shellpilotCancellationMarker = marker
+      window.__shellpilotCancellationTerminal = terminal
+      window.__shellpilotCancellationController = controller
+      return {
+        activeTabId,
+        marker,
+        terminalExists: true,
+        controllerExists: true,
+        sshTerminalPid: terminal.sshTerminalPid ??
+          terminal.getTerminalSafetyEndpoint?.().sshTerminalPid ?? null,
+        sameTerminalReference: terminal === window.__shellpilotCancellationTerminal,
+        sameControllerReference:
+          controller === window.__shellpilotCancellationController
+      }
+    })
+    expect(cancellationTerminal).not.toBeNull()
+    expect(cancellationTerminal).toMatchObject({
+      terminalExists: true,
+      controllerExists: true,
+      sameTerminalReference: true,
+      sameControllerReference: true
+    })
+    const shellSessionBeforeCancellation = {
+      count: sshServer.state.shellSessionIds.length,
+      currentId: sshServer.state.shellSessionIds.at(-1)
+    }
+    expect(shellSessionBeforeCancellation.currentId).toBeTruthy()
     const transferHistoryBeforeCancel = await page.evaluate(() => (
       window.store.transferHistory.length
     ))
@@ -710,6 +745,37 @@ test('operations and the complete remote file panel inherit su root then return 
       requests: sshServer.state.activePrivilegedRequests,
       timers: sshServer.state.activeFixtureTimers
     })).toEqual({ handlers: 0, requests: 0, timers: 0 })
+    await expect.poll(() => sshServer.state.managedPtyCancellationOutputs
+      .find(output => output.nonce === cancellationNonce) || null)
+      .not.toBeNull()
+    const cancellationOutput = sshServer.state.managedPtyCancellationOutputs
+      .find(output => output.nonce === cancellationNonce)
+    expect(cancellationOutput).toBeTruthy()
+    expect(cancellationOutput.nonce).toBe(cancellationNonce)
+    const cancellationRawOutput = cancellationOutput.writes
+      .map(write => write.output)
+      .join('')
+    const promptP = `\u001b]633;P;${cancellationNonce};Cwd=/home/shellpilot\u0007`
+    const promptA = `\u001b]633;A;${cancellationNonce}\u0007`
+    const promptB = `\u001b]633;B;${cancellationNonce}\u0007`
+    expect(cancellationOutput.tail)
+      .toBe('SHELLPILOT_FILE=1 __sp_cancel_tail=hidden')
+    expect(cancellationOutput.end.startsWith('\u001b]698;SHELLPILOT_FILE;'))
+      .toBe(true)
+    expect(cancellationOutput.end.endsWith(';end;130\u0007')).toBe(true)
+    expect(cancellationOutput.prompt).toContain(promptP)
+    expect(cancellationOutput.writes.map(write => write.type))
+      .toEqual(['tail', 'end', 'prompt'])
+    expect(cancellationRawOutput).toContain(cancellationOutput.tail)
+    expect(cancellationRawOutput).toContain(cancellationOutput.end)
+    expect(cancellationRawOutput).toContain(cancellationOutput.prompt)
+    expect(cancellationRawOutput.indexOf(promptP)).toBeGreaterThan(-1)
+    expect(cancellationRawOutput.indexOf(promptA))
+      .toBeGreaterThan(cancellationRawOutput.indexOf(promptP))
+    expect(cancellationRawOutput.indexOf(promptB))
+      .toBeGreaterThan(cancellationRawOutput.indexOf(promptA))
+    expect(cancellationRawOutput)
+      .not.toContain(`\u001b]633;D;${cancellationNonce};`)
     await expect.poll(() => fixture.listStagingFiles()).toEqual([])
     await expect.poll(async () => (await fixture.listLocalFiles())
       .filter(name => /cancel\.bin|partial|\.shellpilot/i.test(name)))
@@ -725,12 +791,53 @@ test('operations and the complete remote file panel inherit su root then return 
     )).toBe(true)
 
     await expectManagedPtyEchoHidden(page)
-    await expect.poll(() => page.evaluate(() => {
+    const recoveredTerminal = await page.evaluate(({ activeTabId, marker }) => {
+      const activeTabMatches = window.store.activeTabId === activeTabId
       const terminal = window.refs.get('term-' + window.store.activeTabId)
-      return terminal?.operationsPtyTaskController?.isBusy?.() === true
-    })).toBe(false)
-    await sendTerminalLine(page, 'echo shellpilot-e2e')
-    await expect.poll(() => terminalBufferText(page)).toContain('shellpilot-e2e')
+      const controller = terminal?.operationsPtyTaskController
+      if (!terminal || !controller) {
+        return {
+          activeTabMatches,
+          terminalExists: Boolean(terminal),
+          controllerExists: Boolean(controller)
+        }
+      }
+      return {
+        activeTabMatches,
+        terminalExists: true,
+        controllerExists: true,
+        sameTerminal: terminal === window.__shellpilotCancellationTerminal,
+        sameController: controller === window.__shellpilotCancellationController,
+        sameMarker: terminal.__shellpilotCancellationMarker === marker,
+        sshTerminalPid: terminal.sshTerminalPid ??
+          terminal.getTerminalSafetyEndpoint?.().sshTerminalPid ?? null,
+        busy: controller.isBusy(),
+        owner: controller.owner()
+      }
+    }, cancellationTerminal)
+    expect(recoveredTerminal).toEqual({
+      activeTabMatches: true,
+      terminalExists: true,
+      controllerExists: true,
+      sameTerminal: true,
+      sameController: true,
+      sameMarker: true,
+      sshTerminalPid: cancellationTerminal.sshTerminalPid,
+      busy: false,
+      owner: ''
+    })
+    expect({
+      count: sshServer.state.shellSessionIds.length,
+      currentId: sshServer.state.shellSessionIds.at(-1)
+    }).toEqual(shellSessionBeforeCancellation)
+    const commandEventsBeforeRecoveryProbe = sshServer.state.commandEvents.length
+    await sendTerminalLine(page, 'shellpilot-recovery-probe')
+    await expect.poll(() => sshServer.state.commandEvents
+      .slice(commandEventsBeforeRecoveryProbe)
+      .filter(event => event.command === 'shellpilot-recovery-probe').length)
+      .toBe(1)
+    await expect.poll(() => terminalBufferText(page))
+      .toContain('SHELLPILOT_RECOVERY_EXECUTED')
     await expectManagedPtyEchoHidden(page)
 
     const terminal = page.locator('.session-current')
