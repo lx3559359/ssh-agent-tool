@@ -268,6 +268,31 @@ test('managed PTY suppression clears after synchronous send failure', async () =
   assert.deepEqual(failedHarness.addon.suppressedData, [])
 })
 
+test('managed PTY suppression dispose clears hidden output and pending input', async () => {
+  const { addon, term } = await createDirectAttachHarness()
+  const writes = []
+  term.write = value => writes.push(value)
+
+  assert.equal(addon.submitManagedPtyCommand(
+    'SHELLPILOT_FILE=1 __sp_secret=hidden',
+    testTrackerNonce
+  ), true)
+  addon.writeToTerminal('SHELLPILOT_FILE=1 __sp_hidden=secret')
+  addon.pendingInput.push('queued input')
+
+  addon.dispose()
+
+  assert.equal(addon.outputSuppressed, false)
+  assert.equal(addon.managedPtyEchoSuppressionActive, false)
+  assert.deepEqual(addon.suppressedData, [])
+  assert.equal(addon.suppressionReleaseMarker, '')
+  assert.equal(addon.suppressionScanText, '')
+  assert.deepEqual(addon.pendingInput, [])
+  assert.equal(addon.term, null)
+  assert.equal(addon.suppressionDecoder instanceof TextDecoder, true)
+  assert.deepEqual(writes, [])
+})
+
 test('AttachAddon exposes password state without publishing suppressed integration output', async () => {
   const { addon, term } = await createDirectAttachHarness()
   const output = []
