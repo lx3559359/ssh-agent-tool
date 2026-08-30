@@ -37,6 +37,9 @@ const { zmodemManager } = require('./zmodem')
 const { trzszManager } = require('./trzsz')
 const { xmodemManager } = require('./xmodem')
 const { parseTerminalControlMessage } = require('./terminal-control-message')
+const {
+  createManagedTerminalInputWriter
+} = require('./managed-terminal-input')
 const { serializeRunCmdError } = require('./session-common')
 const { serializeTunnelError } = require('./ssh-tunnel-runtime')
 const { projectSftpError } = require('../common/sftp-error-contract')
@@ -116,6 +119,7 @@ if (type === 'rdp') {
     markConnected()
     const term = terminals(req.params.pid)
     const { pid } = term
+    const managedInputWriter = createManagedTerminalInputWriter(term)
     log.debug('ws: connected to terminal ->', pid)
 
     const dataBuffer = []
@@ -288,6 +292,7 @@ if (type === 'rdp') {
       trzszManager.destroySession(pid)
       // Clean up xmodem session
       xmodemManager.destroySession(pid)
+      managedInputWriter.dispose()
       term.kill()
       log.debug('Closed terminal ' + pid)
       // Clean things up
@@ -322,6 +327,16 @@ if (type === 'rdp') {
           // A newline wakes bash's read(), resets the TMOUT alarm, and bash
           // simply re-displays the prompt.  The client suppresses that echo.
           term.write('\n\r\x1b[K')
+          return
+        }
+        if (parsed?.action === 'managed-input') {
+          managedInputWriter.submit(parsed).catch(error => {
+            log.error('Managed terminal input failed', error)
+          })
+          return
+        }
+        if (parsed?.action === 'managed-input-interrupt') {
+          managedInputWriter.interrupt()
           return
         }
         term.write(msg)

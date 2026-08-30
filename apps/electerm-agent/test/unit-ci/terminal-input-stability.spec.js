@@ -48,6 +48,14 @@ function deferred () {
   }
 }
 
+function terminalControlMessage (action, fields = {}) {
+  return JSON.stringify({
+    __aigshellTerminalControl: true,
+    action,
+    ...fields
+  })
+}
+
 function createAttachHarness (beforeTerminalEnter) {
   const calls = []
   const sent = []
@@ -139,10 +147,17 @@ test('AttachAddon exposes controller-only managed submit and interrupt methods',
   const { addon, sent } = await createDirectAttachHarness()
 
   assert.equal(addon.submitManagedPtyCommand('printf root', testTrackerNonce), true)
+  assert.equal(addon.submitManagedPtyCommand('printf second', testTrackerNonce), false)
   assert.equal(addon.submitManagedPtyCommand('  ', testTrackerNonce), false)
   assert.equal(addon.submitManagedPtyCommand('printf invalid', 'invalid'), false)
   assert.equal(addon.interruptManagedPtyCommand(), true)
-  assert.deepEqual(sent, ['printf root\r', '\x03'])
+  assert.deepEqual(sent, [
+    terminalControlMessage('managed-input', {
+      requestId: testTrackerNonce,
+      command: 'printf root'
+    }),
+    terminalControlMessage('managed-input-interrupt')
+  ])
   await addon.stopOutputSuppression(true)
 })
 
@@ -153,25 +168,78 @@ test('managed PTY submission hides command echo and republishes the lifecycle re
   term.write = value => writes.push(value)
   addon.onRemoteOutput(chunk => output.push(chunk))
   const command = 'command /usr/bin/env SHELLPILOT_FILE=1 __sp_secret=hidden'
+  const commandRecord =
+    `\u001b]633;E;${testTrackerNonce};${command}\u0007`
   const remainder =
-    `\u001b]633;E;${testTrackerNonce};${command}\u0007` +
     `\u001b]633;C;${testTrackerNonce}\u0007` +
     '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
 
   assert.equal(addon.submitManagedPtyCommand(command, testTrackerNonce), true)
   assert.equal(addon.outputSuppressed, true)
-  assert.deepEqual(sent, [`${command}\r`])
+  assert.deepEqual(sent, [terminalControlMessage('managed-input', {
+    requestId: testTrackerNonce,
+    command
+  })])
 
   addon.writeToTerminal(`${command}\r\n`)
   assert.deepEqual(writes, [])
   assert.deepEqual(output, [])
 
-  addon.writeToTerminal(remainder)
+  addon.writeToTerminal(commandRecord + remainder)
   assert.equal(addon.outputSuppressed, false)
   assert.equal(addon.managedPtySessionNonce, '')
   assert.equal(addon.prepareManagedPtyEchoRecovery(), false)
   assert.deepEqual(writes, [remainder])
   assert.deepEqual(output, [remainder])
+})
+
+test('managed PTY consumes an oversized authenticated E record before xterm', async () => {
+  const { addon, sent, parent, term } = await createDirectAttachHarness()
+  const writes = []
+  const output = []
+  const observed = []
+  term.write = value => writes.push(value)
+  parent.handleManagedPtyCommandObserved = (command, nonce) => {
+    observed.push({ command, nonce })
+    return true
+  }
+  addon.onRemoteOutput(chunk => output.push(chunk))
+  const command = [
+    '__sp_secret=hidden',
+    `__sp_payload=${'x'.repeat(24 * 1024)}`,
+    "printf '\\007'"
+  ].join('; ')
+  const escapedCommand = command
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\x3b')
+  const commandRecord =
+    `\u001b]633;E;${testTrackerNonce};${escapedCommand}\u0007`
+  const visibleRemainder =
+    `\u001b]633;C;${testTrackerNonce}\u0007` +
+    '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+
+  assert.equal(addon.submitManagedPtyCommand(command, testTrackerNonce), true)
+  addon.writeToTerminal(`${command}\r\n${commandRecord.slice(0, 8192)}`)
+  assert.equal(addon.outputSuppressed, true)
+  assert.deepEqual(writes, [])
+  assert.deepEqual(output, [])
+
+  addon.writeToTerminal(commandRecord.slice(8192) + visibleRemainder)
+
+  assert.equal(addon.outputSuppressed, false)
+  assert.deepEqual(observed, [{ command, nonce: testTrackerNonce }])
+  assert.deepEqual(writes, [visibleRemainder])
+  assert.deepEqual(output, [visibleRemainder])
+  assert.equal(writes.join('').includes('__sp_secret'), false)
+  assert.equal(output.join('').includes('__sp_secret'), false)
+  addon.sendToServer('x')
+  assert.deepEqual(sent, [
+    terminalControlMessage('managed-input', {
+      requestId: testTrackerNonce,
+      command
+    }),
+    'x'
+  ])
 })
 
 test('managed PTY suppression ignores a wrong nonce and finds a split authenticated marker', async () => {
@@ -182,8 +250,9 @@ test('managed PTY suppression ignores a wrong nonce and finds a split authentica
   addon.onRemoteOutput(chunk => output.push(chunk))
   const command = 'printf managed'
   const wrongNonce = 'fedcba0987654321fedcba0987654321'
+  const commandRecord =
+    `\u001b]633;E;${testTrackerNonce};${command}\u0007`
   const remainder =
-    `\u001b]633;E;${testTrackerNonce};${command}\u0007` +
     `\u001b]633;C;${testTrackerNonce}\u0007` +
     '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
 
@@ -195,7 +264,9 @@ test('managed PTY suppression ignores a wrong nonce and finds a split authentica
   assert.deepEqual(writes, [])
   assert.deepEqual(output, [])
 
-  addon.writeToTerminal(remainder.slice('\u001b]63'.length))
+  addon.writeToTerminal(
+    (commandRecord + remainder).slice('\u001b]63'.length)
+  )
   assert.equal(addon.outputSuppressed, false)
   assert.equal(addon.managedPtySessionNonce, '')
   assert.equal(addon.prepareManagedPtyEchoRecovery(), false)
@@ -210,11 +281,12 @@ test('managed PTY suppression finds an authenticated marker split across binary 
   term.write = value => writes.push(value)
   addon.onRemoteOutput(chunk => output.push(chunk))
   const command = 'printf binary'
+  const commandRecord =
+    `\u001b]633;E;${testTrackerNonce};${command}\u0007`
   const remainder =
-    `\u001b]633;E;${testTrackerNonce};${command}\u0007` +
     `\u001b]633;C;${testTrackerNonce}\u0007` +
     '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
-  const bytes = new TextEncoder().encode(remainder)
+  const bytes = new TextEncoder().encode(commandRecord + remainder)
 
   assert.equal(addon.submitManagedPtyCommand(command, testTrackerNonce), true)
   addon.writeToTerminal(bytes.slice(0, 4))
@@ -1290,6 +1362,44 @@ test('CommandTrackerAddon binds an external safety submission from an empty prom
   assert.deepEqual(finished, [{ token, command, exitCode: 0 }])
 })
 
+test('CommandTrackerAddon accepts a pre-authenticated managed E without command history', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
+  const histories = []
+  const finished = []
+  const tracker = new CommandTrackerAddon()
+  tracker.onCommandExecuted(command => histories.push(command))
+  tracker.onCommandFinished(event => finished.push(event))
+  tracker.activate(harness.terminal)
+  beginTrackerSession(tracker)
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
+  const command = `__sp_secret=hidden; __sp_payload=${'x'.repeat(24 * 1024)}`
+  const token = tracker.expectExternalSubmission(command)
+  assert.equal(tracker.markExpectedSubmissionReleased(token), true)
+
+  assert.equal(
+    tracker.observeManagedExternalSubmission(
+      command,
+      'fedcba0987654321fedcba0987654321'
+    ),
+    false
+  )
+  assert.equal(
+    tracker.observeManagedExternalSubmission('different command', testTrackerNonce),
+    false
+  )
+  assert.equal(
+    tracker.observeManagedExternalSubmission(command, testTrackerNonce),
+    true
+  )
+  harness.osc(lifecycleOsc('C'))
+  harness.osc(completionOsc(0))
+
+  assert.deepEqual(histories, [])
+  assert.deepEqual(finished, [{ token, command, exitCode: 0 }])
+})
+
 test('CommandTrackerAddon requires exact nonce-bound E then C then D ordering', async () => {
   const { CommandTrackerAddon } = await importCommandTracker()
   const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
@@ -1563,6 +1673,7 @@ test('terminal wires managed PTY tasks through authenticated tracker lifecycle',
   assert.match(source, /cmdAddon\.onPromptStarted\(this\.handleTerminalPromptStarted\)/)
   assert.match(source, /operationsPtyTaskController\.handleCommandFinished\(event\)/)
   assert.match(source, /operationsPtyTaskController\.handlePromptStarted\(\)/)
+  assert.match(source, /cmdAddon\?\.observeManagedExternalSubmission\(command, nonce\)/)
   assert.match(source, /acquireOperationsPtyTask\s*=/)
   assert.match(source, /handleManagedPtyInput\s*=/)
   assert.match(source, /operationsPtyTaskController\.isBusy\(\)/)

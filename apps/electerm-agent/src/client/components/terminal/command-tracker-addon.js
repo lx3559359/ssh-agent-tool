@@ -399,7 +399,24 @@ export class CommandTrackerAddon {
     if (expected) {
       expected.commandObserved = true
       expected.commandObservedAtSequence = this._oscSequence
+      return true
     }
+    return false
+  }
+
+  observeManagedExternalSubmission (command, nonce) {
+    const text = String(command || '')
+    if (!text || nonce !== this._sessionNonce) return false
+    const expected = this._expectedSubmissions.find(
+      submission => submission.armed &&
+        submission.inputGeneration === this._inputGeneration &&
+        submission.command === text
+    )
+    if (!expected) return false
+    this._oscSequence += 1
+    this.shellPhase = 'executing'
+    this._inputAnchor = null
+    return this._markExpectedSubmissionObserved(text)
   }
 
   _markExpectedSubmissionStarted () {

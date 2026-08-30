@@ -116,6 +116,13 @@ async function sessionServerErrorPayload (action, error) {
     ['./terminal-control-message', {
       parseTerminalControlMessage: () => null
     }],
+    ['./managed-terminal-input', {
+      createManagedTerminalInputWriter: () => ({
+        submit: async () => true,
+        interrupt: () => true,
+        dispose: () => {}
+      })
+    }],
     ['./ssh-tunnel-runtime', {
       serializeTunnelError: error => ({
         code: String(error?.code || 'SSH_TUNNEL_ERROR'),

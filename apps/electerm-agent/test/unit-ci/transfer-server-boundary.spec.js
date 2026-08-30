@@ -121,6 +121,13 @@ function createTransferRouteHarness ({
     ['./terminal-control-message', {
       parseTerminalControlMessage: () => null
     }],
+    ['./managed-terminal-input', {
+      createManagedTerminalInputWriter: () => ({
+        submit: async () => true,
+        interrupt: () => true,
+        dispose: () => {}
+      })
+    }],
     ['./session-common', {
       serializeRunCmdError: error => ({ message: error?.message })
     }],

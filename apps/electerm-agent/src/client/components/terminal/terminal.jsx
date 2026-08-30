@@ -1562,6 +1562,10 @@ class Term extends Component {
     return this.commandSafetyEntrypoint.handleCommandFinished(event)
   }
 
+  handleManagedPtyCommandObserved = (command, nonce) => {
+    return this.cmdAddon?.observeManagedExternalSubmission(command, nonce) === true
+  }
+
   handleTerminalPromptStarted = () => {
     const handled = this.operationsPtyTaskController.handlePromptStarted()
     this.shellTransitionCandidate = null
