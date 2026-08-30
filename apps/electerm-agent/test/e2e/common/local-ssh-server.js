@@ -542,13 +542,24 @@ async function writePrivilegedFileResult (
           }
           options.unregisterPrivilegedRequest?.(activeRequest)
           if (!stream.destroyed) {
+            if (options.managedPtyCancellationEchoTail) {
+              stream.write(String(options.managedPtyCancellationEchoTail))
+            }
             stream.write(privilegedFileMarker(request.token, 'end', '130'))
-            finishShellCommand(
-              stream,
-              nonce,
-              130,
-              options.scheduleFixtureTimer
-            )
+            if (options.omitManagedPtyCancellationCommandFinish) {
+              options.scheduleFixtureTimer(() => {
+                if (!stream.destroyed) {
+                  writeTrackedPrompt(stream, nonce, { leadingNewline: true })
+                }
+              }, 20)
+            } else {
+              finishShellCommand(
+                stream,
+                nonce,
+                130,
+                options.scheduleFixtureTimer
+              )
+            }
           }
           cancellationResolve()
         })

@@ -380,7 +380,10 @@ test('operations and the complete remote file panel inherit su root then return 
     managedPtyTasks: true,
     sftpRoot: fixture.root,
     sftpFixture: fixture,
-    rootDownloadDelayMs: 30000
+    rootDownloadDelayMs: 30000,
+    omitManagedPtyCancellationCommandFinish: true,
+    managedPtyCancellationEchoTail:
+      'SHELLPILOT_FILE=1 __sp_cancel_tail=hidden'
   })
   let run
   let primaryError
@@ -721,6 +724,13 @@ test('operations and the complete remote file panel inherit su root then return 
       item => item.cancelled === true
     )).toBe(true)
 
+    await expectManagedPtyEchoHidden(page)
+    await expect.poll(() => page.evaluate(() => {
+      const terminal = window.refs.get('term-' + window.store.activeTabId)
+      return terminal?.operationsPtyTaskController?.isBusy?.() === true
+    })).toBe(false)
+    await sendTerminalLine(page, 'echo shellpilot-e2e')
+    await expect.poll(() => terminalBufferText(page)).toContain('shellpilot-e2e')
     await expectManagedPtyEchoHidden(page)
 
     const terminal = page.locator('.session-current')
