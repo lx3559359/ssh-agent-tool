@@ -109,6 +109,7 @@ async function createControllerHarness (options = {}) {
   const submissions = []
   const cancelledSubmissions = []
   const armedSubmissions = []
+  const lifecycleEvents = []
   const state = {
     alternateBuffer: false,
     passwordPrompt: false,
@@ -147,7 +148,12 @@ async function createControllerHarness (options = {}) {
       submissions.at(-1).submittedCommand = command
       return true
     },
+    cancelSubmissionOutput: () => {
+      lifecycleEvents.push('cancel-output')
+      return true
+    },
     interrupt: () => {
+      lifecycleEvents.push('interrupt')
       interrupts += 1
       return true
     },
@@ -178,6 +184,7 @@ async function createControllerHarness (options = {}) {
     submissions,
     armedSubmissions,
     cancelledSubmissions,
+    lifecycleEvents,
     emit,
     emitManagedStart (identity = { uid: '0', username: 'root' }) {
       emit(taskMarker(
@@ -313,6 +320,10 @@ test('abort sends one Ctrl+C and waits for tracked prompt recovery', async () =>
   signalController.abort()
   signalController.abort()
   assert.equal(harness.interrupts, 1)
+  assert.deepEqual(
+    harness.lifecycleEvents.slice(0, 2),
+    ['cancel-output', 'interrupt']
+  )
   harness.emitCommandFinished(130)
   harness.emitPromptStarted()
 
@@ -500,6 +511,7 @@ test('disconnect rejects the active command and ignores late terminal output', a
   harness.emitManagedStart()
 
   await harness.controller.invalidate('fixture disconnected')
+  assert.equal(harness.lifecycleEvents.includes('cancel-output'), true)
   await assert.rejects(running, error => error.name === 'DisconnectedError')
   assert.equal(harness.controller.isBusy(), false)
   assert.equal(harness.disposedListeners, 1)

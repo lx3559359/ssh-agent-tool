@@ -1460,6 +1460,7 @@ test('terminal wires managed PTY tasks through authenticated tracker lifecycle',
   assert.match(source, /createPtyTaskToken/)
   assert.match(source, /ensureReady:\s*this\.ensureOperationsPtyTrackerReady/)
   assert.match(source, /subscribeOutput:\s*listener\s*=>\s*this\.attachAddon\.onRemoteOutput\(listener\)/)
+  assert.match(source, /cancelSubmissionOutput:\s*\(\)\s*=>\s*this\.attachAddon\?\.cancelManagedPtyEchoSuppression\(\)/)
   assert.match(source, /cmdAddon\.onPromptStarted\(this\.handleTerminalPromptStarted\)/)
   assert.match(source, /operationsPtyTaskController\.handleCommandFinished\(event\)/)
   assert.match(source, /operationsPtyTaskController\.handlePromptStarted\(\)/)
