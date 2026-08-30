@@ -165,6 +165,7 @@ class Term extends Component {
       cancelSubmission: token => (
         this.cmdAddon?.cancelExpectedSubmission(token) === true
       ),
+      prepareSubmissionOutputRecovery: () => this.attachAddon?.prepareManagedPtyEchoRecovery(),
       cancelSubmissionOutput: () => this.attachAddon?.cancelManagedPtyEchoSuppression(),
       submitCommand: command => (
         this.attachAddon?.submitManagedPtyCommand(
