@@ -251,6 +251,42 @@ test('managed PTY command echo stays hidden past the legacy deadline', async () 
   assert.equal(addon.cancelManagedPtyEchoSuppression(), true)
 })
 
+test('managed PTY cancellation hides late echo until the authenticated prompt', async () => {
+  const { addon, term } = await createDirectAttachHarness()
+  const writes = []
+  const output = []
+  term.write = value => writes.push(value)
+  addon.onRemoteOutput(chunk => output.push(chunk))
+  const command = 'SHELLPILOT_FILE=1 __sp_secret=hidden'
+  const wrongNonce = 'fedcba0987654321fedcba0987654321'
+  const prompt =
+    `\u001b]633;A;${testTrackerNonce}\u0007` +
+    'root@fixture:# ' +
+    `\u001b]633;B;${testTrackerNonce}\u0007`
+
+  assert.equal(addon.submitManagedPtyCommand(command, testTrackerNonce), true)
+  addon.writeToTerminal(`${command}\r\n`)
+  assert.equal(addon.prepareManagedPtyEchoRecovery(), true)
+  addon.writeToTerminal('__sp_cancel_tail=hidden')
+  addon.writeToTerminal(`\u001b]633;A;${wrongNonce}\u0007forged prompt`)
+
+  assert.equal(addon.outputSuppressed, true)
+  assert.deepEqual(writes, [])
+  assert.deepEqual(output, [])
+
+  const split = 12
+  addon.writeToTerminal(prompt.slice(0, split))
+  assert.equal(addon.outputSuppressed, true)
+  addon.writeToTerminal(prompt.slice(split))
+
+  assert.equal(addon.outputSuppressed, false)
+  assert.deepEqual(writes, [prompt])
+  assert.deepEqual(output, [prompt])
+  assert.equal(writes.join('').includes('__sp_cancel_tail'), false)
+  assert.equal(output.join('').includes('__sp_cancel_tail'), false)
+  assert.equal(addon.cancelManagedPtyEchoSuppression(), true)
+})
+
 test('managed PTY suppression clears after synchronous send failure', async () => {
   const failedHarness = await createDirectAttachHarness()
   failedHarness.addon._sendData = () => {

@@ -10,6 +10,7 @@ export default class AttachAddonCustom {
     this.isWindowsShell = isWindowsShell
     this.outputSuppressed = false
     this.managedPtyEchoSuppressionActive = false
+    this.managedPtySessionNonce = ''
     this.suppressedData = []
     this.suppressTimeout = null
     this.onSuppressionEndCallback = null
@@ -111,6 +112,7 @@ export default class AttachAddonCustom {
     }
     this.outputSuppressed = false
     this.managedPtyEchoSuppressionActive = false
+    this.managedPtySessionNonce = ''
     this.publishSuppressionRemainder = false
     this.suppressionReleaseMarker = ''
     this.suppressionScanText = ''
@@ -129,6 +131,17 @@ export default class AttachAddonCustom {
       callback()
     }
     return this.flushPendingInput()
+  }
+
+  prepareManagedPtyEchoRecovery = () => {
+    const nonce = this.managedPtySessionNonce
+    if (!this.managedPtyEchoSuppressionActive ||
+      !managedPtySessionNoncePattern.test(nonce)) return false
+    this.suppressionReleaseMarker =
+      `${String.fromCharCode(27)}]633;A;${nonce}${String.fromCharCode(7)}`
+    this.suppressionScanText = ''
+    this.suppressionDecoder = new TextDecoder('utf-8')
+    return true
   }
 
   cancelManagedPtyEchoSuppression = () => {
@@ -418,6 +431,7 @@ export default class AttachAddonCustom {
       `${String.fromCharCode(27)}]633;E;${nonce};`
     )
     this.managedPtyEchoSuppressionActive = true
+    this.managedPtySessionNonce = nonce
     try {
       this._sendToServerDirect(`${command}\r`)
     } catch (error) {
@@ -571,6 +585,7 @@ export default class AttachAddonCustom {
     this.suppressTimeout = null
     this.outputSuppressed = false
     this.managedPtyEchoSuppressionActive = false
+    this.managedPtySessionNonce = ''
     this.suppressedData = []
     this.publishSuppressionRemainder = false
     this.onSuppressionEndCallback = null
