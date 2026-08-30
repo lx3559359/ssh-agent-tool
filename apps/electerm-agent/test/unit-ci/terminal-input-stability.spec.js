@@ -144,6 +144,33 @@ test('AttachAddon exposes controller-only managed submit and interrupt methods',
   assert.deepEqual(sent, ['printf root\r', '\x03'])
 })
 
+test('managed PTY submission hides command echo and republishes the lifecycle remainder', async () => {
+  const { addon, sent, term } = await createDirectAttachHarness()
+  const writes = []
+  const output = []
+  term.write = value => writes.push(value)
+  addon.onRemoteOutput(chunk => output.push(chunk))
+  const command = 'command /usr/bin/env SHELLPILOT_FILE=1 __sp_secret=hidden'
+  const remainder =
+    `\u001b]633;C;${testTrackerNonce}\u0007` +
+    '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+
+  assert.equal(addon.submitManagedPtyCommand(command), true)
+  assert.equal(addon.outputSuppressed, true)
+  assert.deepEqual(sent, [`${command}\r`])
+
+  addon.writeToTerminal(`${command}\r\n`)
+  assert.deepEqual(writes, [])
+  assert.deepEqual(output, [])
+
+  addon.writeToTerminal(remainder)
+  assert.equal(addon.outputSuppressed, false)
+  assert.deepEqual(writes, [remainder])
+  assert.deepEqual(output, [remainder])
+  assert.equal(writes.join('').includes('__sp_secret'), false)
+  assert.equal(output.join('').includes('__sp_secret'), false)
+})
+
 test('AttachAddon exposes password state without publishing suppressed integration output', async () => {
   const { addon, term } = await createDirectAttachHarness()
   const output = []

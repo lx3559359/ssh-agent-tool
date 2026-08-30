@@ -56,6 +56,18 @@ async function activeTerminal (page) {
   })
 }
 
+async function terminalBufferText (page) {
+  return page.evaluate(() => {
+    const terminal = window.refs.get('term-' + window.store.activeTabId)
+    return terminal?.getTerminalBufferText?.() || ''
+  })
+}
+
+async function expectManagedPtyEchoHidden (page) {
+  const text = await terminalBufferText(page)
+  expect(text).not.toMatch(/SHELLPILOT_FILE|__sp_/)
+}
+
 async function sendTerminalLine (page, command) {
   await expect.poll(() => activeTerminal(page), { timeout: 20000 }).toBe(true)
   await page.evaluate(() => {
@@ -384,6 +396,7 @@ test('operations and the complete remote file panel inherit su root then return 
     )).length, { timeout: 20000 }).toBeGreaterThan(1)
     await waitForRemotePanelReady(page)
     await expectRemoteFileWorkSettled(page)
+    await expectManagedPtyEchoHidden(page)
     const terminalSnapshot = await page.evaluate(() => {
       const terminal = window.refs.get('term-' + window.store.activeTabId)
       return {
@@ -703,6 +716,8 @@ test('operations and the complete remote file panel inherit su root then return 
     expect(fixture.stagingCleanups.some(
       item => item.cancelled === true
     )).toBe(true)
+
+    await expectManagedPtyEchoHidden(page)
 
     const terminal = page.locator('.session-current')
     await sendTerminalLine(page, 'exit')

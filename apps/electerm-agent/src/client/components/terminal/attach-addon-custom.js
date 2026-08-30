@@ -1,6 +1,7 @@
 import { loadAttachAddon } from './xterm-loader.js'
 
 const terminalControlFlag = '__aigshellTerminalControl'
+const managedPtyEchoSuppressionTimeout = 5000
 
 export default class AttachAddonCustom {
   constructor (term, socket, isWindowsShell) {
@@ -11,6 +12,7 @@ export default class AttachAddonCustom {
     this.suppressedData = []
     this.suppressTimeout = null
     this.onSuppressionEndCallback = null
+    this.publishSuppressionRemainder = false
     this.pendingInput = []
     this.hasReceivedInitialData = false
     this.onInitialDataCallback = null
@@ -70,10 +72,17 @@ export default class AttachAddonCustom {
     for (const listener of [...this._remoteOutputListeners]) listener(text)
   }
 
-  startOutputSuppression = (timeout = 3000, onEnd = null, discardOnTimeout = false) => {
+  startOutputSuppression = (
+    timeout = 3000,
+    onEnd = null,
+    discardOnTimeout = false,
+    publishRemainder = false
+  ) => {
+    if (this.suppressTimeout) clearTimeout(this.suppressTimeout)
     this.outputSuppressed = true
     this.suppressedData = []
     this.onSuppressionEndCallback = onEnd
+    this.publishSuppressionRemainder = publishRemainder === true
     this.suppressTimeout = setTimeout(() => {
       if (!discardOnTimeout) {
         console.warn('[AttachAddon] Output suppression timeout reached, resuming')
@@ -88,6 +97,7 @@ export default class AttachAddonCustom {
       this.suppressTimeout = null
     }
     this.outputSuppressed = false
+    this.publishSuppressionRemainder = false
 
     if (!discard && this.suppressedData.length > 0) {
       for (const data of this.suppressedData) {
@@ -249,8 +259,10 @@ export default class AttachAddonCustom {
       if (this.checkForShellIntegration(str)) {
         const marker = String.fromCharCode(27) + ']633;'
         const integrationData = str.slice(str.indexOf(marker))
+        const publishRemainder = this.publishSuppressionRemainder
         this.onShellIntegrationDetected()
         if (integrationData) {
+          if (publishRemainder) this._publishRemoteOutput(integrationData)
           this.writeToTerminalDirect(integrationData)
         }
         return
@@ -335,7 +347,18 @@ export default class AttachAddonCustom {
 
   submitManagedPtyCommand = (command) => {
     if (!String(command || '').trim()) return false
-    this._sendToServerDirect(`${command}\r`)
+    this.startOutputSuppression(
+      managedPtyEchoSuppressionTimeout,
+      null,
+      true,
+      true
+    )
+    try {
+      this._sendToServerDirect(`${command}\r`)
+    } catch (error) {
+      this.stopOutputSuppression(true)
+      throw error
+    }
     return true
   }
 
