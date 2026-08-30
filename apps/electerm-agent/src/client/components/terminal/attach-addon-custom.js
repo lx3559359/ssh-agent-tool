@@ -26,6 +26,7 @@ export default class AttachAddonCustom {
     this._disposables = []
     this._socket = socket
     this.decoder = new TextDecoder('utf-8')
+    this.passwordDecoder = new TextDecoder('utf-8')
     this._lastDataTime = Date.now()
     this._lastInputTime = Date.now()
     this._keepaliveTimer = null
@@ -393,8 +394,9 @@ export default class AttachAddonCustom {
     let str = data
     if (typeof data !== 'string') {
       try {
-        str = this.decoder.decode(
-          data instanceof ArrayBuffer ? data : new Uint8Array(data)
+        str = this.passwordDecoder.decode(
+          data instanceof ArrayBuffer ? data : new Uint8Array(data),
+          { stream: true }
         )
       } catch (e) {
         str = ''
@@ -652,6 +654,7 @@ export default class AttachAddonCustom {
     this._terminalPastePending = false
     this._remoteOutputListeners.clear()
     this._remoteOutputDecoder = new TextDecoder('utf-8')
+    this.passwordDecoder = new TextDecoder('utf-8')
     this.term = null
     this._disposables.forEach(d => d.dispose())
     this._disposables.length = 0

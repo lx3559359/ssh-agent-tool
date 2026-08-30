@@ -314,7 +314,25 @@ test('managed PTY recovery preserves binary prompt bytes split across UTF-8 char
   assert.equal(addon.prepareManagedPtyEchoRecovery(), true)
   addon.writeToTerminal('__sp_cancel_tail=hidden')
   addon.writeToTerminal(promptBytes.slice(0, split))
-  addon.onRead({ target: { result: promptBytes.slice(split).buffer } })
+  const originalFileReader = globalThis.FileReader
+  const originalBlob = globalThis.window.Blob
+  globalThis.window.Blob = Blob
+  globalThis.FileReader = class {
+    addEventListener (_type, handler) {
+      this.handler = handler
+    }
+
+    readAsArrayBuffer (blob) {
+      blob.arrayBuffer().then(buffer => this.handler({ target: { result: buffer } }))
+    }
+  }
+  try {
+    addon.writeToTerminal(promptBytes.slice(split))
+    await new Promise(resolve => setTimeout(resolve, 0))
+  } finally {
+    globalThis.FileReader = originalFileReader
+    globalThis.window.Blob = originalBlob
+  }
 
   assert.equal(addon.outputSuppressed, false)
   assert.equal(addon.managedPtySessionNonce, '')
