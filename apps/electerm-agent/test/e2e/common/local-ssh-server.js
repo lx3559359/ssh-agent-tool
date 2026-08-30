@@ -40,14 +40,16 @@ function osc633 (nonce, type, payload = '') {
   return `\u001b]633;${type};${nonce}${payload ? `;${payload}` : ''}\u0007`
 }
 
-function writeTrackedPrompt (stream, nonce, { leadingNewline = false } = {}) {
-  stream.write(
-    (leadingNewline ? '\r\n\u001b[2J\u001b[H' : '') +
+function trackedPromptOutput (nonce, { leadingNewline = false } = {}) {
+  return (leadingNewline ? '\r\n\u001b[2J\u001b[H' : '') +
     osc633(nonce, 'P', 'Cwd=/home/shellpilot') +
     osc633(nonce, 'A') +
     '$ ' +
     osc633(nonce, 'B')
-  )
+}
+
+function writeTrackedPrompt (stream, nonce, options) {
+  stream.write(trackedPromptOutput(nonce, options))
 }
 
 function managedPtyMarker (token, phase, ...fields) {
@@ -542,13 +544,48 @@ async function writePrivilegedFileResult (
           }
           options.unregisterPrivilegedRequest?.(activeRequest)
           if (!stream.destroyed) {
-            stream.write(privilegedFileMarker(request.token, 'end', '130'))
-            finishShellCommand(
-              stream,
-              nonce,
-              130,
-              options.scheduleFixtureTimer
-            )
+            if (options.omitManagedPtyCancellationCommandFinish) {
+              const cancellationOutput = {
+                nonce,
+                token: request.token,
+                writes: []
+              }
+              state.managedPtyCancellationOutputs.push(cancellationOutput)
+              const writeCancellationOutput = (type, output) => {
+                cancellationOutput[type] = output
+                cancellationOutput.writes.push({ type, output })
+                stream.write(output)
+              }
+              if (options.managedPtyCancellationEchoTail) {
+                writeCancellationOutput(
+                  'tail',
+                  String(options.managedPtyCancellationEchoTail)
+                )
+              }
+              writeCancellationOutput(
+                'end',
+                privilegedFileMarker(request.token, 'end', '130')
+              )
+              options.scheduleFixtureTimer(() => {
+                if (!stream.destroyed) {
+                  writeCancellationOutput(
+                    'prompt',
+                    trackedPromptOutput(nonce, { leadingNewline: true })
+                  )
+                }
+              }, 20)
+            } else {
+              if (options.managedPtyCancellationEchoTail) {
+                stream.write(String(options.managedPtyCancellationEchoTail))
+              }
+              stream.write(privilegedFileMarker(request.token, 'end', '130'))
+              finishShellCommand(
+                stream,
+                nonce,
+                130,
+                options.scheduleFixtureTimer
+              )
+            }
           }
           cancellationResolve()
         })
@@ -958,6 +995,8 @@ function runCommand (stream, command, state, sessionId, shellState, options) {
     return
   } else if (command === 'echo shellpilot-e2e') {
     stream.write('shellpilot-e2e\r\n')
+  } else if (command === 'shellpilot-recovery-probe') {
+    stream.write('SHELLPILOT_RECOVERY_EXECUTED\r\n')
   } else if (command === 'pwd') {
     stream.write('/home/shellpilot\r\n')
   } else if (command) {
@@ -1405,6 +1444,7 @@ async function startLocalSshServer (options = {}) {
     commands: [],
     commandEvents: [],
     shellSessionIds: [],
+    managedPtyCancellationOutputs: [],
     privilegedFileRequests: options.sftpFixture?.privilegedFileRequests || [],
     cancelledPrivilegedFileRequests: [],
     stagingReads: options.sftpFixture?.stagingReads || [],

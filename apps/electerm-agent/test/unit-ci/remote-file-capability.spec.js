@@ -434,6 +434,110 @@ test('capability resolver pins root backend only to the exact SSH terminal', asy
   assert.equal(terminal.owner(), '')
 })
 
+test('verified native root SFTP bypasses the managed PTY lease', async () => {
+  let statusReads = 0
+  const { capability, terminal, identities } = await acquireWithHarness({
+    tabOptions: { username: 'root' },
+    terminalOptions: {
+      endpoint: terminalEndpoint({
+        username: 'root',
+        connectionUsername: 'root'
+      })
+    },
+    sftpOptions: {
+      async readFilePreview (remotePath, maxBytes) {
+        statusReads += 1
+        assert.equal(remotePath, '/proc/self/status')
+        assert.equal(maxBytes, 16 * 1024)
+        return {
+          content: [
+            'Name:\tsftp-server',
+            'Uid:\t0\t0\t0\t0',
+            'Gid:\t0\t0\t0\t0'
+          ].join('\n'),
+          truncated: false,
+          binary: false,
+          bytesRead: 52
+        }
+      }
+    }
+  })
+
+  assert.equal(statusReads, 1)
+  assert.equal(capability.channel, 'sftp')
+  assert.equal(capability.runtimeIdentity, null)
+  assert.equal(terminal.acquireCount, 0)
+  assert.equal(terminal.releaseCount, 0)
+  assert.deepEqual(identities, [{
+    loginUsername: 'root',
+    effectiveUid: '0',
+    effectiveUsername: 'root',
+    channel: 'sftp'
+  }])
+  assert.equal(await capability.release(), true)
+})
+
+test('native root shortcut fails closed to the PTY probe without exact proc identity', async t => {
+  for (const [label, preview] of [
+    ['non-root fsuid', {
+      content: 'Uid:\t0\t0\t0\t1000\n',
+      truncated: false,
+      binary: false,
+      bytesRead: 17
+    }],
+    ['truncated status', {
+      content: 'Uid:\t0\t0\t0\t0\n',
+      truncated: true,
+      binary: false,
+      bytesRead: 14
+    }],
+    ['binary status', {
+      content: '',
+      truncated: false,
+      binary: true,
+      bytesRead: 14
+    }]
+  ]) {
+    await t.test(label, async () => {
+      const { capability, terminal } = await acquireWithHarness({
+        tabOptions: { username: 'root' },
+        terminalOptions: {
+          endpoint: terminalEndpoint({
+            username: 'root',
+            connectionUsername: 'root'
+          })
+        },
+        sftpOptions: {
+          async readFilePreview () { return preview }
+        }
+      })
+
+      assert.equal(capability.channel, 'pty-root')
+      assert.equal(terminal.acquireCount, 1)
+      assert.equal(await capability.release(), true)
+    })
+  }
+
+  await t.test('unavailable proc status', async () => {
+    const { capability, terminal } = await acquireWithHarness({
+      tabOptions: { username: 'root' },
+      terminalOptions: {
+        endpoint: terminalEndpoint({
+          username: 'root',
+          connectionUsername: 'root'
+        })
+      },
+      sftpOptions: {
+        async readFilePreview () { throw new Error('proc unavailable') }
+      }
+    })
+
+    assert.equal(capability.channel, 'pty-root')
+    assert.equal(terminal.acquireCount, 1)
+    assert.equal(await capability.release(), true)
+  })
+})
+
 test('capability resolver releases PTY and uses native SFTP after exit root', async () => {
   const { capability, terminal, sftp, identities } = await acquireWithHarness({
     terminalOptions: { identity: { uid: '1000', username: 'hik' } }

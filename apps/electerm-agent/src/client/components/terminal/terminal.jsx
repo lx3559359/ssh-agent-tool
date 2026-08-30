@@ -165,6 +165,7 @@ class Term extends Component {
       cancelSubmission: token => (
         this.cmdAddon?.cancelExpectedSubmission(token) === true
       ),
+      prepareSubmissionOutputRecovery: () => this.attachAddon?.prepareManagedPtyEchoRecovery(),
       cancelSubmissionOutput: () => this.attachAddon?.cancelManagedPtyEchoSuppression(),
       submitCommand: command => (
         this.attachAddon?.submitManagedPtyCommand(
@@ -1559,6 +1560,10 @@ class Term extends Component {
       return true
     }
     return this.commandSafetyEntrypoint.handleCommandFinished(event)
+  }
+
+  handleManagedPtyCommandObserved = (command, nonce) => {
+    return this.cmdAddon?.observeManagedExternalSubmission(command, nonce) === true
   }
 
   handleTerminalPromptStarted = () => {

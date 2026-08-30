@@ -143,6 +143,10 @@ async function createControllerHarness (options = {}) {
       cancelledSubmissions.push(token)
       return true
     },
+    prepareSubmissionOutputRecovery: () => {
+      lifecycleEvents.push('prepare-output-recovery')
+      return true
+    },
     submitCommand: command => {
       if (options.submitCommand === false) return false
       submissions.at(-1).submittedCommand = command
@@ -322,7 +326,7 @@ test('abort sends one Ctrl+C and waits for tracked prompt recovery', async () =>
   assert.equal(harness.interrupts, 1)
   assert.deepEqual(
     harness.lifecycleEvents.slice(0, 2),
-    ['cancel-output', 'interrupt']
+    ['prepare-output-recovery', 'interrupt']
   )
   harness.emitCommandFinished(130)
   harness.emitPromptStarted()
@@ -337,7 +341,44 @@ test('abort sends one Ctrl+C and waits for tracked prompt recovery', async () =>
   assert.equal(await lease.release(), true)
 })
 
-test('cancel without prompt recovery keeps the terminal locked until invalidation', async () => {
+test('cancelled command unlocks on a new prompt without command finish', async () => {
+  const harness = await createControllerHarness({ recoveryTimeoutMs: 100 })
+  const signalController = new AbortController()
+  const lease = await harness.controller.acquire('operations-prompt-recovery')
+  const running = lease.execute({
+    taskId: 'prompt-recovery-step',
+    script: 'sleep 60',
+    timeoutMs: 1000,
+    signal: signalController.signal
+  })
+  harness.emitManagedStart()
+
+  signalController.abort()
+  assert.deepEqual(
+    harness.lifecycleEvents.slice(0, 2),
+    ['prepare-output-recovery', 'interrupt']
+  )
+  assert.equal(harness.emitPromptStarted(), true)
+
+  await assert.rejects(running, error => {
+    assert.equal(error.name, 'AbortError')
+    assert.equal(error.code, 'PTY_TASK_CANCELLED')
+    return true
+  })
+  assert.deepEqual(harness.lifecycleEvents.slice(0, 3), [
+    'prepare-output-recovery',
+    'interrupt',
+    'cancel-output'
+  ])
+  assert.equal(await lease.release(), true)
+  assert.equal(harness.controller.isBusy(), false)
+  assert.deepEqual(
+    harness.controller.handleUserInput('x'),
+    { handled: false, send: false }
+  )
+})
+
+test('late authenticated prompt unlocks after cancellation recovery deadline', async () => {
   const harness = await createControllerHarness({ recoveryTimeoutMs: 20 })
   const signalController = new AbortController()
   const lease = await harness.controller.acquire('operations-unknown')
@@ -359,9 +400,39 @@ test('cancel without prompt recovery keeps the terminal locked until invalidatio
   assert.equal(await lease.release(), false)
   assert.equal(harness.controller.isBusy(), true)
   assert.equal(harness.disposedListeners, 1)
+  assert.equal(harness.lifecycleEvents.includes('cancel-output'), false)
+
+  assert.equal(harness.emitPromptStarted(), true)
+  assert.equal(harness.controller.isBusy(), false)
+  assert.equal(harness.lifecycleEvents.includes('cancel-output'), true)
+  assert.deepEqual(
+    harness.controller.handleUserInput('x'),
+    { handled: false, send: false }
+  )
+  assert.equal(await lease.release(), true)
+  harness.emitManagedEnd(0)
+})
+
+test('cancellation recovery without a prompt remains locked until invalidation', async () => {
+  const harness = await createControllerHarness({ recoveryTimeoutMs: 20 })
+  const signalController = new AbortController()
+  const lease = await harness.controller.acquire('operations-no-prompt')
+  const running = lease.execute({
+    taskId: 'no-prompt-step',
+    script: 'sleep 60',
+    timeoutMs: 1000,
+    signal: signalController.signal
+  })
+  harness.emitManagedStart()
+  signalController.abort()
+
+  await assert.rejects(running, error => error.name === 'CancellationUnknownError')
+  assert.equal(harness.controller.isBusy(), true)
+  assert.equal(harness.lifecycleEvents.includes('cancel-output'), false)
   await harness.controller.invalidate('fixture disconnected')
   assert.equal(harness.controller.isBusy(), false)
-  harness.emitManagedEnd(0)
+  assert.equal(harness.lifecycleEvents.includes('cancel-output'), true)
+  assert.equal(await lease.release(), true)
 })
 
 test('timeout interrupts once and reports TimeoutError after prompt recovery', async () => {

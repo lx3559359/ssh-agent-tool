@@ -121,6 +121,7 @@ export function createManagedPtyTaskController ({
   expectSubmission,
   armSubmission,
   cancelSubmission,
+  prepareSubmissionOutputRecovery = () => true,
   cancelSubmissionOutput = () => true,
   submitCommand,
   interrupt,
@@ -136,6 +137,7 @@ export function createManagedPtyTaskController ({
   let promptSequence = 0
   let firstIdentity = null
   let recoveryLocked = false
+  let lateRecovery = null
   const defaultProtocol = createDefaultProtocol({ createToken })
 
   function safeCancelSubmission (token) {
@@ -147,6 +149,14 @@ export function createManagedPtyTaskController ({
     }
   }
 
+  function safePrepareSubmissionOutputRecovery () {
+    try {
+      prepareSubmissionOutputRecovery()
+    } catch {
+      // Prompt recovery remains authoritative even if echo retargeting fails.
+    }
+  }
+
   function safeCancelSubmissionOutput () {
     try {
       cancelSubmissionOutput()
@@ -155,7 +165,7 @@ export function createManagedPtyTaskController ({
     }
   }
 
-  function cleanupExecution (execution, cancelExpected = false) {
+  function cleanupExecution (execution, options = {}) {
     clearTimer(execution.timeoutHandle)
     clearTimer(execution.recoveryHandle)
     execution.signal?.removeEventListener('abort', execution.abortHandler)
@@ -165,15 +175,19 @@ export function createManagedPtyTaskController ({
       // A broken output listener must not keep the terminal lease unsettled.
     }
     execution.outputSubscription = null
-    if (cancelExpected) safeCancelSubmission(execution.submissionToken)
-    safeCancelSubmissionOutput()
+    if (options.cancelExpected === true) {
+      safeCancelSubmission(execution.submissionToken)
+    }
+    if (options.preserveSubmissionOutput !== true) {
+      safeCancelSubmissionOutput()
+    }
     if (active === execution) active = null
   }
 
   function rejectExecution (execution, error, options = {}) {
     if (execution.settled) return
     execution.settled = true
-    cleanupExecution(execution, options.cancelExpected === true)
+    cleanupExecution(execution, options)
     execution.reject(error)
   }
 
@@ -216,7 +230,7 @@ export function createManagedPtyTaskController ({
   function settleIfCompleteUnsafe (execution) {
     if (execution.settled) return
     if (execution.cancelRequested) {
-      if (execution.commandFinished && execution.promptReturned) {
+      if (execution.promptReturned) {
         rejectExecution(execution, execution.cancelError)
       }
       return
@@ -260,10 +274,17 @@ export function createManagedPtyTaskController ({
     execution.recoveryHandle = setTimer(() => {
       if (active !== execution || execution.settled) return
       recoveryLocked = true
+      lateRecovery = {
+        owner: execution.owner,
+        promptAfterSequence: execution.cancelRequestedPromptSequence
+      }
       rejectExecution(
         execution,
         cancellationUnknownError(execution.cancelError),
-        { cancelExpected: true }
+        {
+          cancelExpected: true,
+          preserveSubmissionOutput: true
+        }
       )
     }, Number(recoveryTimeoutMs))
   }
@@ -282,6 +303,7 @@ export function createManagedPtyTaskController ({
             : 'PTY 运维任务已取消',
           reason === 'user' ? 'user' : 'signal'
         )
+    execution.cancelRequestedPromptSequence = promptSequence
     clearTimer(execution.timeoutHandle)
     if (!execution.submitted) {
       rejectExecution(execution, execution.cancelError, {
@@ -291,7 +313,7 @@ export function createManagedPtyTaskController ({
     }
     if (!execution.interruptSent) {
       execution.interruptSent = true
-      safeCancelSubmissionOutput()
+      safePrepareSubmissionOutputRecovery()
       try {
         interrupt()
       } catch {
@@ -343,6 +365,7 @@ export function createManagedPtyTaskController ({
         interruptSent: false,
         cancelRequested: false,
         cancelError: null,
+        cancelRequestedPromptSequence: 0,
         identityValidated: false,
         commandFinished: false,
         commandExitCode: null,
@@ -399,6 +422,7 @@ export function createManagedPtyTaskController ({
     leaseOwner = owner
     firstIdentity = null
     recoveryLocked = false
+    lateRecovery = null
     try {
       await ensureReady()
       if (generation !== acquireGeneration || leaseOwner !== owner) {
@@ -443,8 +467,23 @@ export function createManagedPtyTaskController ({
   function handlePromptStarted () {
     promptSequence += 1
     const execution = active
-    if (!execution || !execution.commandFinished ||
-      promptSequence <= execution.commandFinishedPromptSequence) return false
+    if (!execution) {
+      if (!recoveryLocked || !lateRecovery ||
+        promptSequence <= lateRecovery.promptAfterSequence) return false
+      const recoveryOwner = lateRecovery.owner
+      lateRecovery = null
+      recoveryLocked = false
+      if (leaseOwner === recoveryOwner) leaseOwner = ''
+      firstIdentity = null
+      safeCancelSubmissionOutput()
+      return true
+    }
+    if (execution.cancelRequested) {
+      if (promptSequence <= execution.cancelRequestedPromptSequence) return false
+    } else if (!execution.commandFinished ||
+      promptSequence <= execution.commandFinishedPromptSequence) {
+      return false
+    }
     execution.promptReturned = true
     settleIfComplete(execution)
     return true
@@ -459,13 +498,17 @@ export function createManagedPtyTaskController ({
   async function invalidate (reason = '终端连接已断开') {
     generation += 1
     const execution = active
+    const needsOutputCleanup = recoveryLocked || Boolean(lateRecovery)
     leaseOwner = ''
     firstIdentity = null
     recoveryLocked = false
+    lateRecovery = null
     if (execution) {
       rejectExecution(execution, disconnectedError(reason), {
         cancelExpected: true
       })
+    } else if (needsOutputCleanup) {
+      safeCancelSubmissionOutput()
     }
   }
 

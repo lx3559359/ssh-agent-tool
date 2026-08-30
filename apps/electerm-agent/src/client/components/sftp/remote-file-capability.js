@@ -44,6 +44,8 @@ const remoteFileTransferControlNames = Object.freeze([
 ])
 
 const guardedCapabilityInternals = new WeakMap()
+const nativeIdentityStatusPath = '/proc/self/status'
+const nativeIdentityStatusMaxBytes = 16 * 1024
 
 function requiredIdentity (value, label) {
   const identity = String(value ?? '').trim()
@@ -143,6 +145,34 @@ function requireProbeResult (probe) {
     '当前有效用户名'
   )
   return Object.freeze({ uid, username })
+}
+
+function hasExactRootUidLine (content) {
+  if (typeof content !== 'string' || !content || content.includes('\u0000')) {
+    return false
+  }
+  const match = content.match(/^Uid:\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s*$/m)
+  return Boolean(match && match.slice(1).every(value => value === '0'))
+}
+
+async function verifyNativeRootSftp (sftp, loginUsername) {
+  if (loginUsername !== 'root' ||
+    typeof sftp?.readFilePreview !== 'function') return false
+  try {
+    const preview = await sftp.readFilePreview(
+      nativeIdentityStatusPath,
+      nativeIdentityStatusMaxBytes
+    )
+    return preview?.truncated === false &&
+      preview?.binary === false &&
+      Number.isSafeInteger(preview?.bytesRead) &&
+      preview.bytesRead > 0 &&
+      preview.bytesRead <= nativeIdentityStatusMaxBytes &&
+      hasExactRootUidLine(preview.content)
+  } catch {
+    // Servers without procfs keep the existing PTY identity probe path.
+    return false
+  }
 }
 
 function createBackendLease (pty) {
@@ -625,6 +655,24 @@ export async function acquireRemoteFileCapability ({
       return currentEndpoint
     }
 
+    const loginUsername = requiredIdentity(
+      tab.username || tab.user,
+      'SSH 登录用户名'
+    )
+    if (await verifyNativeRootSftp(sftp, loginUsername)) {
+      await assertCurrent()
+      capability = createNativeSftpFileBackend(sftp)
+      capability = createGuardedRemoteFileCapability(capability, assertCurrent)
+      await onIdentity?.(Object.freeze({
+        loginUsername,
+        effectiveUid: '0',
+        effectiveUsername: loginUsername,
+        channel: 'sftp'
+      }))
+      await assertCurrent()
+      return capability
+    }
+
     pty = await terminal.acquireRemoteFilePtyTask(ownerId)
     if (!pty || typeof pty.execute !== 'function' ||
       typeof pty.release !== 'function') {
@@ -641,10 +689,6 @@ export async function acquireRemoteFileCapability ({
     const identity = requireProbeResult(probe)
     await assertCurrent()
     const channel = identity.uid === '0' ? 'pty-root' : 'sftp'
-    const loginUsername = requiredIdentity(
-      tab.username || tab.user,
-      'SSH 登录用户名'
-    )
     const identityUpdate = Object.freeze(channel === 'sftp'
       ? {
           loginUsername,

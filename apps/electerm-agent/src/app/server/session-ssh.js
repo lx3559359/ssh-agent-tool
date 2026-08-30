@@ -1237,13 +1237,35 @@ class TerminalSshBase extends TerminalBase {
     if (encode && !utf8Aliases.has(encode.toLowerCase()) && typeof data === 'string') {
       try {
         const buf = iconv.encode(data, encode)
-        this.channel?.write(buf)
-        return
+        return this.channel?.write(buf)
       } catch (e) {
         log.warn('iconv encode failed, falling back to raw write:', e.message)
       }
     }
-    this.channel?.write(data)
+    return this.channel?.write(data)
+  }
+
+  waitForWriteDrain () {
+    const channel = this.channel
+    if (!channel || typeof channel.once !== 'function') {
+      return Promise.resolve()
+    }
+    return new Promise(resolve => {
+      let settled = false
+      const finish = () => {
+        if (settled) return
+        settled = true
+        channel.removeListener('drain', finish)
+        channel.removeListener('close', finish)
+        channel.removeListener('end', finish)
+        channel.removeListener('error', finish)
+        resolve()
+      }
+      channel.once('drain', finish)
+      channel.once('close', finish)
+      channel.once('end', finish)
+      channel.once('error', finish)
+    })
   }
 
   setNoDelay (noDelay = true) {
