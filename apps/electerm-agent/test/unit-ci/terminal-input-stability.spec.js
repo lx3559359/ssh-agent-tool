@@ -168,6 +168,8 @@ test('managed PTY submission hides command echo and republishes the lifecycle re
 
   addon.writeToTerminal(remainder)
   assert.equal(addon.outputSuppressed, false)
+  assert.equal(addon.managedPtySessionNonce, '')
+  assert.equal(addon.prepareManagedPtyEchoRecovery(), false)
   assert.deepEqual(writes, [remainder])
   assert.deepEqual(output, [remainder])
 })
@@ -195,6 +197,8 @@ test('managed PTY suppression ignores a wrong nonce and finds a split authentica
 
   addon.writeToTerminal(remainder.slice('\u001b]63'.length))
   assert.equal(addon.outputSuppressed, false)
+  assert.equal(addon.managedPtySessionNonce, '')
+  assert.equal(addon.prepareManagedPtyEchoRecovery(), false)
   assert.deepEqual(writes, [remainder])
   assert.deepEqual(output, [remainder])
 })
@@ -218,6 +222,8 @@ test('managed PTY suppression finds an authenticated marker split across binary 
   addon.writeToTerminal(bytes.slice(4))
 
   assert.equal(addon.outputSuppressed, false)
+  assert.equal(addon.managedPtySessionNonce, '')
+  assert.equal(addon.prepareManagedPtyEchoRecovery(), false)
   assert.deepEqual(writes, [remainder])
   assert.deepEqual(output, [remainder])
 })
@@ -246,6 +252,8 @@ test('managed PTY command echo stays hidden past the legacy deadline', async () 
   assert.deepEqual(writes, [])
   assert.equal(addon.cancelManagedPtyEchoSuppression(), true)
   assert.equal(addon.outputSuppressed, false)
+  assert.equal(addon.managedPtySessionNonce, '')
+  assert.equal(addon.prepareManagedPtyEchoRecovery(), false)
   addon.writeToTerminal('ordinary output')
   assert.deepEqual(writes, ['ordinary output'])
   assert.equal(addon.cancelManagedPtyEchoSuppression(), true)
@@ -282,9 +290,41 @@ test('managed PTY cancellation hides late echo until the authenticated prompt', 
   assert.equal(addon.outputSuppressed, false)
   assert.deepEqual(writes, [prompt])
   assert.deepEqual(output, [prompt])
+  assert.equal(addon.managedPtySessionNonce, '')
+  assert.equal(addon.prepareManagedPtyEchoRecovery(), false)
   assert.equal(writes.join('').includes('__sp_cancel_tail'), false)
   assert.equal(output.join('').includes('__sp_cancel_tail'), false)
   assert.equal(addon.cancelManagedPtyEchoSuppression(), true)
+})
+
+test('managed PTY recovery preserves binary prompt bytes split across UTF-8 characters', async () => {
+  const { addon, term } = await createDirectAttachHarness()
+  const writes = []
+  const output = []
+  term.write = value => writes.push(value)
+  addon.onRemoteOutput(chunk => output.push(chunk))
+  const command = 'SHELLPILOT_FILE=1 __sp_secret=hidden'
+  const marker = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const prompt = `${marker}中root@fixture:# `
+  const promptBytes = new TextEncoder().encode(prompt)
+  const split = marker.length + 1
+
+  assert.equal(addon.submitManagedPtyCommand(command, testTrackerNonce), true)
+  addon.writeToTerminal(`${command}\r\n`)
+  assert.equal(addon.prepareManagedPtyEchoRecovery(), true)
+  addon.writeToTerminal('__sp_cancel_tail=hidden')
+  addon.writeToTerminal(promptBytes.slice(0, split))
+  addon.onRead({ target: { result: promptBytes.slice(split).buffer } })
+
+  assert.equal(addon.outputSuppressed, false)
+  assert.equal(addon.managedPtySessionNonce, '')
+  assert.equal(addon.prepareManagedPtyEchoRecovery(), false)
+  assert.equal(writes.join(''), prompt)
+  assert.equal(output.join(''), prompt)
+  assert.equal(writes.join('').includes('\ufffd'), false)
+  assert.equal(output.join('').includes('\ufffd'), false)
+  assert.equal(writes.join('').includes('__sp_cancel_tail'), false)
+  assert.equal(output.join('').includes('__sp_cancel_tail'), false)
 })
 
 test('managed PTY suppression clears after synchronous send failure', async () => {
@@ -301,6 +341,8 @@ test('managed PTY suppression clears after synchronous send failure', async () =
   )
   assert.equal(failedHarness.addon.outputSuppressed, false)
   assert.equal(failedHarness.addon.managedPtyEchoSuppressionActive, false)
+  assert.equal(failedHarness.addon.managedPtySessionNonce, '')
+  assert.equal(failedHarness.addon.prepareManagedPtyEchoRecovery(), false)
   assert.deepEqual(failedHarness.addon.suppressedData, [])
 })
 
@@ -320,6 +362,8 @@ test('managed PTY suppression dispose clears hidden output and pending input', a
 
   assert.equal(addon.outputSuppressed, false)
   assert.equal(addon.managedPtyEchoSuppressionActive, false)
+  assert.equal(addon.managedPtySessionNonce, '')
+  assert.equal(addon.prepareManagedPtyEchoRecovery(), false)
   assert.deepEqual(addon.suppressedData, [])
   assert.equal(addon.suppressionReleaseMarker, '')
   assert.equal(addon.suppressionScanText, '')

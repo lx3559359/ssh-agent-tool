@@ -17,6 +17,7 @@ export default class AttachAddonCustom {
     this.publishSuppressionRemainder = false
     this.suppressionReleaseMarker = ''
     this.suppressionScanText = ''
+    this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.pendingInput = []
     this.hasReceivedInitialData = false
@@ -91,6 +92,7 @@ export default class AttachAddonCustom {
     this.publishSuppressionRemainder = publishRemainder === true
     this.suppressionReleaseMarker = String(releaseMarker || '')
     this.suppressionScanText = ''
+    this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     const timeoutNumber = Number(timeout)
     if (Number.isFinite(timeoutNumber) && timeoutNumber > 0) {
@@ -116,6 +118,7 @@ export default class AttachAddonCustom {
     this.publishSuppressionRemainder = false
     this.suppressionReleaseMarker = ''
     this.suppressionScanText = ''
+    this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
 
     if (!discard && this.suppressedData.length > 0) {
@@ -140,6 +143,7 @@ export default class AttachAddonCustom {
     this.suppressionReleaseMarker =
       `${String.fromCharCode(27)}]633;A;${nonce}${String.fromCharCode(7)}`
     this.suppressionScanText = ''
+    this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     return true
   }
@@ -280,6 +284,41 @@ export default class AttachAddonCustom {
     return null
   }
 
+  _findSuppressionReleaseBytes = (data) => {
+    const bytes = data instanceof ArrayBuffer
+      ? new Uint8Array(data)
+      : data instanceof Uint8Array
+        ? data
+        : new Uint8Array(data)
+    const markerBytes = new TextEncoder().encode(this.suppressionReleaseMarker)
+    const scanBytes = new Uint8Array(this.suppressionScanBytes.length + bytes.length)
+    scanBytes.set(this.suppressionScanBytes)
+    scanBytes.set(bytes, this.suppressionScanBytes.length)
+
+    let markerIndex = -1
+    for (let index = 0; index <= scanBytes.length - markerBytes.length; index++) {
+      let matches = true
+      for (let markerOffset = 0; markerOffset < markerBytes.length; markerOffset++) {
+        if (scanBytes[index + markerOffset] !== markerBytes[markerOffset]) {
+          matches = false
+          break
+        }
+      }
+      if (matches) {
+        markerIndex = index
+        break
+      }
+    }
+    if (markerIndex !== -1) {
+      this.suppressionScanBytes = new Uint8Array()
+      return scanBytes.slice(markerIndex)
+    }
+    this.suppressionScanBytes = scanBytes.slice(
+      -(markerBytes.length - 1)
+    )
+    return null
+  }
+
   writeToTerminalDirect = (data) => {
     const { term } = this
     if (term.parent?.onZmodem) {
@@ -308,14 +347,18 @@ export default class AttachAddonCustom {
 
     if (this.outputSuppressed) {
       if (this.suppressionReleaseMarker) {
-        const integrationData = this._findSuppressionReleaseData(
-          this._decodeSuppressionData(data)
-        )
+        const integrationData = typeof data === 'string'
+          ? this._findSuppressionReleaseData(data)
+          : this._findSuppressionReleaseBytes(data)
         if (integrationData !== null) {
           const publishRemainder = this.publishSuppressionRemainder
           this.onShellIntegrationDetected()
-          if (publishRemainder) this._publishRemoteOutput(integrationData)
-          this.writeToTerminalDirect(integrationData)
+          if (integrationData instanceof Uint8Array) {
+            this._writeBinaryOutput(integrationData, publishRemainder)
+          } else {
+            if (publishRemainder) this._publishRemoteOutput(integrationData)
+            this.writeToTerminalDirect(integrationData)
+          }
         }
         return
       }
@@ -379,10 +422,19 @@ export default class AttachAddonCustom {
 
   onRead = (ev) => {
     const data = ev.target.result
+    this._writeBinaryOutput(data)
+  }
+
+  _writeBinaryOutput = (data, publish = true) => {
     const { term } = this
+    const bytes = data instanceof ArrayBuffer
+      ? new Uint8Array(data)
+      : data instanceof Uint8Array
+        ? data
+        : new Uint8Array(data)
     term?.parent?.notifyOnData()
-    this._publishRemoteOutput(data)
-    const str = this.decoder.decode(data)
+    if (publish) this._publishRemoteOutput(bytes)
+    const str = this.decoder.decode(bytes, { stream: true })
     term?.write(str)
   }
 
@@ -591,6 +643,7 @@ export default class AttachAddonCustom {
     this.onSuppressionEndCallback = null
     this.suppressionReleaseMarker = ''
     this.suppressionScanText = ''
+    this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.pendingInput = []
     clearTimeout(this._echoCheckTimer)
