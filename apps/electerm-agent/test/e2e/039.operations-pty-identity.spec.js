@@ -65,7 +65,9 @@ async function terminalBufferText (page) {
 
 async function expectManagedPtyEchoHidden (page) {
   const text = await terminalBufferText(page)
-  expect(text).not.toMatch(/SHELLPILOT_FILE|__sp_/)
+  expect(text).not.toMatch(
+    /SHELLPILOT_FILE|SHELLPILOT_TOKEN|SHELLPILOT_ARG_|__sp_/
+  )
 }
 
 async function sendTerminalLine (page, command) {
@@ -523,6 +525,8 @@ test('operations and the complete remote file panel inherit su root then return 
     await expect(page.locator('.sftp-file-identity')).toContainText(
       '文件操作：root（当前终端）'
     )
+    await expectRemoteFileWorkSettled(page)
+    await expectManagedPtyEchoHidden(page)
     const ordinarySftp = await page.evaluate(async () => {
       const entry = window.refs.get('sftp-' + window.store.activeTabId)
       try {
