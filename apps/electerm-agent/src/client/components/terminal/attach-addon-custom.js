@@ -2,6 +2,7 @@ import { loadAttachAddon } from './xterm-loader.js'
 
 const terminalControlFlag = '__aigshellTerminalControl'
 const managedPtyEchoSuppressionTimeout = 5000
+const managedPtySessionNoncePattern = /^[a-f0-9]{32}$/
 
 export default class AttachAddonCustom {
   constructor (term, socket, isWindowsShell) {
@@ -13,6 +14,9 @@ export default class AttachAddonCustom {
     this.suppressTimeout = null
     this.onSuppressionEndCallback = null
     this.publishSuppressionRemainder = false
+    this.suppressionReleaseMarker = ''
+    this.suppressionScanText = ''
+    this.suppressionDecoder = new TextDecoder('utf-8')
     this.pendingInput = []
     this.hasReceivedInitialData = false
     this.onInitialDataCallback = null
@@ -76,13 +80,17 @@ export default class AttachAddonCustom {
     timeout = 3000,
     onEnd = null,
     discardOnTimeout = false,
-    publishRemainder = false
+    publishRemainder = false,
+    releaseMarker = ''
   ) => {
     if (this.suppressTimeout) clearTimeout(this.suppressTimeout)
     this.outputSuppressed = true
     this.suppressedData = []
     this.onSuppressionEndCallback = onEnd
     this.publishSuppressionRemainder = publishRemainder === true
+    this.suppressionReleaseMarker = String(releaseMarker || '')
+    this.suppressionScanText = ''
+    this.suppressionDecoder = new TextDecoder('utf-8')
     this.suppressTimeout = setTimeout(() => {
       if (!discardOnTimeout) {
         console.warn('[AttachAddon] Output suppression timeout reached, resuming')
@@ -98,6 +106,9 @@ export default class AttachAddonCustom {
     }
     this.outputSuppressed = false
     this.publishSuppressionRemainder = false
+    this.suppressionReleaseMarker = ''
+    this.suppressionScanText = ''
+    this.suppressionDecoder = new TextDecoder('utf-8')
 
     if (!discard && this.suppressedData.length > 0) {
       for (const data of this.suppressedData) {
@@ -219,6 +230,30 @@ export default class AttachAddonCustom {
     return str.includes(ESC + ']633;')
   }
 
+  _decodeSuppressionData = (data) => {
+    if (typeof data === 'string') return data
+    const bytes = data instanceof ArrayBuffer
+      ? new Uint8Array(data)
+      : data instanceof Uint8Array
+        ? data
+        : new Uint8Array(data)
+    return this.suppressionDecoder.decode(bytes, { stream: true })
+  }
+
+  _findSuppressionReleaseData = (str) => {
+    const marker = this.suppressionReleaseMarker
+    if (!marker) return null
+    this.suppressionScanText += str
+    const markerIndex = this.suppressionScanText.indexOf(marker)
+    if (markerIndex !== -1) {
+      return this.suppressionScanText.slice(markerIndex)
+    }
+    this.suppressionScanText = this.suppressionScanText.slice(
+      -(marker.length - 1)
+    )
+    return null
+  }
+
   writeToTerminalDirect = (data) => {
     const { term } = this
     if (term.parent?.onZmodem) {
@@ -246,6 +281,19 @@ export default class AttachAddonCustom {
     }
 
     if (this.outputSuppressed) {
+      if (this.suppressionReleaseMarker) {
+        const integrationData = this._findSuppressionReleaseData(
+          this._decodeSuppressionData(data)
+        )
+        if (integrationData !== null) {
+          const publishRemainder = this.publishSuppressionRemainder
+          this.onShellIntegrationDetected()
+          if (publishRemainder) this._publishRemoteOutput(integrationData)
+          this.writeToTerminalDirect(integrationData)
+        }
+        return
+      }
+
       let str = data
       if (typeof data !== 'string') {
         const decoder = this.decoder || new TextDecoder('utf-8')
@@ -345,13 +393,16 @@ export default class AttachAddonCustom {
     return true
   }
 
-  submitManagedPtyCommand = (command) => {
-    if (!String(command || '').trim()) return false
+  submitManagedPtyCommand = (command, sessionNonce) => {
+    const nonce = String(sessionNonce || '')
+    if (!String(command || '').trim() ||
+      !managedPtySessionNoncePattern.test(nonce)) return false
     this.startOutputSuppression(
       managedPtyEchoSuppressionTimeout,
       null,
       true,
-      true
+      true,
+      `${String.fromCharCode(27)}]633;E;${nonce};`
     )
     try {
       this._sendToServerDirect(`${command}\r`)

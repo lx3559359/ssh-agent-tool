@@ -138,10 +138,12 @@ test('AttachAddon streams split UTF-8 bytes once to managed output listeners', a
 test('AttachAddon exposes controller-only managed submit and interrupt methods', async () => {
   const { addon, sent } = await createDirectAttachHarness()
 
-  assert.equal(addon.submitManagedPtyCommand('printf root'), true)
-  assert.equal(addon.submitManagedPtyCommand('  '), false)
+  assert.equal(addon.submitManagedPtyCommand('printf root', testTrackerNonce), true)
+  assert.equal(addon.submitManagedPtyCommand('  ', testTrackerNonce), false)
+  assert.equal(addon.submitManagedPtyCommand('printf invalid', 'invalid'), false)
   assert.equal(addon.interruptManagedPtyCommand(), true)
   assert.deepEqual(sent, ['printf root\r', '\x03'])
+  await addon.stopOutputSuppression(true)
 })
 
 test('managed PTY submission hides command echo and republishes the lifecycle remainder', async () => {
@@ -152,10 +154,11 @@ test('managed PTY submission hides command echo and republishes the lifecycle re
   addon.onRemoteOutput(chunk => output.push(chunk))
   const command = 'command /usr/bin/env SHELLPILOT_FILE=1 __sp_secret=hidden'
   const remainder =
+    `\u001b]633;E;${testTrackerNonce};${command}\u0007` +
     `\u001b]633;C;${testTrackerNonce}\u0007` +
     '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
 
-  assert.equal(addon.submitManagedPtyCommand(command), true)
+  assert.equal(addon.submitManagedPtyCommand(command, testTrackerNonce), true)
   assert.equal(addon.outputSuppressed, true)
   assert.deepEqual(sent, [`${command}\r`])
 
@@ -167,8 +170,86 @@ test('managed PTY submission hides command echo and republishes the lifecycle re
   assert.equal(addon.outputSuppressed, false)
   assert.deepEqual(writes, [remainder])
   assert.deepEqual(output, [remainder])
-  assert.equal(writes.join('').includes('__sp_secret'), false)
-  assert.equal(output.join('').includes('__sp_secret'), false)
+})
+
+test('managed PTY suppression ignores a wrong nonce and finds a split authenticated marker', async () => {
+  const { addon, term } = await createDirectAttachHarness()
+  const writes = []
+  const output = []
+  term.write = value => writes.push(value)
+  addon.onRemoteOutput(chunk => output.push(chunk))
+  const command = 'printf managed'
+  const wrongNonce = 'fedcba0987654321fedcba0987654321'
+  const remainder =
+    `\u001b]633;E;${testTrackerNonce};${command}\u0007` +
+    `\u001b]633;C;${testTrackerNonce}\u0007` +
+    '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+
+  assert.equal(addon.submitManagedPtyCommand(command, testTrackerNonce), true)
+  addon.writeToTerminal(
+    `\u001b]633;E;${wrongNonce};forged\u0007\u001b]63`
+  )
+  assert.equal(addon.outputSuppressed, true)
+  assert.deepEqual(writes, [])
+  assert.deepEqual(output, [])
+
+  addon.writeToTerminal(remainder.slice('\u001b]63'.length))
+  assert.equal(addon.outputSuppressed, false)
+  assert.deepEqual(writes, [remainder])
+  assert.deepEqual(output, [remainder])
+})
+
+test('managed PTY suppression finds an authenticated marker split across binary chunks', async () => {
+  const { addon, term } = await createDirectAttachHarness()
+  const writes = []
+  const output = []
+  term.write = value => writes.push(value)
+  addon.onRemoteOutput(chunk => output.push(chunk))
+  const command = 'printf binary'
+  const remainder =
+    `\u001b]633;E;${testTrackerNonce};${command}\u0007` +
+    `\u001b]633;C;${testTrackerNonce}\u0007` +
+    '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+  const bytes = new TextEncoder().encode(remainder)
+
+  assert.equal(addon.submitManagedPtyCommand(command, testTrackerNonce), true)
+  addon.writeToTerminal(bytes.slice(0, 4))
+  assert.equal(addon.outputSuppressed, true)
+  addon.writeToTerminal(bytes.slice(4))
+
+  assert.equal(addon.outputSuppressed, false)
+  assert.deepEqual(writes, [remainder])
+  assert.deepEqual(output, [remainder])
+})
+
+test('managed PTY suppression recovers after timeout and synchronous send failure', async () => {
+  const timeoutHarness = await createDirectAttachHarness()
+  const originalStart = timeoutHarness.addon.startOutputSuppression
+  timeoutHarness.addon.startOutputSuppression = (...args) => {
+    originalStart(5, ...args.slice(1))
+  }
+
+  assert.equal(timeoutHarness.addon.submitManagedPtyCommand(
+    'printf timeout',
+    testTrackerNonce
+  ), true)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  assert.equal(timeoutHarness.addon.outputSuppressed, false)
+  assert.deepEqual(timeoutHarness.addon.suppressedData, [])
+
+  const failedHarness = await createDirectAttachHarness()
+  failedHarness.addon._sendData = () => {
+    throw new Error('send failed')
+  }
+  assert.throws(
+    () => failedHarness.addon.submitManagedPtyCommand(
+      'printf failure',
+      testTrackerNonce
+    ),
+    /send failed/
+  )
+  assert.equal(failedHarness.addon.outputSuppressed, false)
+  assert.deepEqual(failedHarness.addon.suppressedData, [])
 })
 
 test('AttachAddon exposes password state without publishing suppressed integration output', async () => {

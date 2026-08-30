@@ -166,7 +166,10 @@ class Term extends Component {
         this.cmdAddon?.cancelExpectedSubmission(token) === true
       ),
       submitCommand: command => (
-        this.attachAddon?.submitManagedPtyCommand(command) === true
+        this.attachAddon?.submitManagedPtyCommand(
+          command,
+          this.cmdAddon?.getSessionNonce()
+        ) === true
       ),
       interrupt: () => (
         this.attachAddon?.interruptManagedPtyCommand() === true

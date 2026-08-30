@@ -4,7 +4,9 @@
 
 **Goal:** Hide ShellPilot-managed PTY command echo without losing authenticated shell lifecycle records or managed protocol output.
 
-**Architecture:** Reuse `AttachAddonCustom` output suppression at the single managed-command submission boundary. Add a release option that republishes only the data beginning with the first OSC 633 lifecycle marker, so xterm command tracking and raw managed-protocol parsing both retain the post-echo stream while the preceding `__sp_*` command text is discarded.
+**Architecture:** Reuse `AttachAddonCustom` output suppression at the single managed-command submission boundary. Release only on the current tracker session's authenticated `OSC 633;E;<nonce>;` prefix, found with a bounded cross-chunk scanner, and republish data beginning at that exact boundary. This preserves xterm command tracking and raw managed-protocol parsing while discarding the preceding `__sp_*` command text.
+
+**Review hardening:** The initial happy-path implementation searched each received chunk for any OSC 633 prefix. Final implementation additionally passes the active tracker nonce into `submitManagedPtyCommand()`, rejects missing or malformed nonces, ignores wrong-nonce records, preserves at most `marker.length - 1` characters across chunks, and covers string/binary splits plus timeout and synchronous-send recovery.
 
 **Tech Stack:** Electron 41, React renderer, xterm.js 6, Node.js test runner, Playwright Electron E2E.
 
