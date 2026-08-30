@@ -8,6 +8,8 @@
 
 **Review hardening:** The initial happy-path implementation searched each received chunk for any OSC 633 prefix. Final implementation additionally passes the active tracker nonce into `submitManagedPtyCommand()`, rejects missing or malformed nonces, ignores wrong-nonce records, preserves at most `marker.length - 1` characters across chunks, and covers string/binary splits plus timeout and synchronous-send recovery.
 
+> **Superseded snippets:** Task 1's initial RED test and Task 2's first-pass implementation snippets below are retained only as execution history. Do not copy them as the final implementation: they omit the nonce argument, use a chunk-local generic OSC lookup, and release on `C`. The final source and tests use the authenticated cross-chunk `OSC 633;E;<nonce>;` boundary described above and in the approved design.
+
 **Tech Stack:** Electron 41, React renderer, xterm.js 6, Node.js test runner, Playwright Electron E2E.
 
 ---
@@ -105,7 +107,7 @@ npx playwright test test/e2e/039.operations-pty-identity.spec.js --workers=1
 
 Expected: FAIL at `expectManagedPtyEchoHidden()` because the local SSH fixture echoes the current `command /usr/bin/env ... SHELLPILOT_FILE ... __sp_*` probe into the xterm buffer.
 
-### Task 2: Suppress only the managed-command echo and preserve the protocol stream
+### Task 2: Suppress only the managed-command echo and preserve the protocol stream (historical first pass; superseded)
 
 **Files:**
 - Modify: `apps/electerm-agent/src/client/components/terminal/attach-addon-custom.js:3`
