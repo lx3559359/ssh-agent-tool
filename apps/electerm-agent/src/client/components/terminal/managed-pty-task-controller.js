@@ -121,6 +121,7 @@ export function createManagedPtyTaskController ({
   expectSubmission,
   armSubmission,
   cancelSubmission,
+  cancelSubmissionOutput = () => true,
   submitCommand,
   interrupt,
   subscribeOutput,
@@ -146,6 +147,14 @@ export function createManagedPtyTaskController ({
     }
   }
 
+  function safeCancelSubmissionOutput () {
+    try {
+      cancelSubmissionOutput()
+    } catch {
+      // Echo cleanup is best effort; controller recovery remains authoritative.
+    }
+  }
+
   function cleanupExecution (execution, cancelExpected = false) {
     clearTimer(execution.timeoutHandle)
     clearTimer(execution.recoveryHandle)
@@ -157,6 +166,7 @@ export function createManagedPtyTaskController ({
     }
     execution.outputSubscription = null
     if (cancelExpected) safeCancelSubmission(execution.submissionToken)
+    safeCancelSubmissionOutput()
     if (active === execution) active = null
   }
 
@@ -281,6 +291,7 @@ export function createManagedPtyTaskController ({
     }
     if (!execution.interruptSent) {
       execution.interruptSent = true
+      safeCancelSubmissionOutput()
       try {
         interrupt()
       } catch {

@@ -1000,9 +1000,6 @@ function attachShell (stream, state, sessionId, options) {
     const input = typeof chunk === 'string'
       ? chunk
       : inputDecoder.write(chunk)
-    if (!line && /^(?:SHELLPILOT_TOKEN=|__sp_token=)/.test(input)) {
-      shellState.suppressLineEcho = true
-    }
     let echoed = ''
     const flushEcho = () => {
       if (!echoed) return
@@ -1044,7 +1041,6 @@ function attachShell (stream, state, sessionId, options) {
           options
         )
         line = ''
-        shellState.suppressLineEcho = false
         continue
       }
       lastWasCarriageReturn = false
@@ -1055,7 +1051,7 @@ function attachShell (stream, state, sessionId, options) {
         continue
       }
       line += char
-      if (!shellState.suppressLineEcho) echoed += char
+      echoed += char
     }
     flushEcho()
   })

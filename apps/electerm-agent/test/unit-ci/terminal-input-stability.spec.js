@@ -222,21 +222,36 @@ test('managed PTY suppression finds an authenticated marker split across binary 
   assert.deepEqual(output, [remainder])
 })
 
-test('managed PTY suppression recovers after timeout and synchronous send failure', async () => {
-  const timeoutHarness = await createDirectAttachHarness()
-  const originalStart = timeoutHarness.addon.startOutputSuppression
-  timeoutHarness.addon.startOutputSuppression = (...args) => {
-    originalStart(5, ...args.slice(1))
+test('managed PTY command echo stays hidden past the legacy deadline', async () => {
+  const { addon, term } = await createDirectAttachHarness()
+  const writes = []
+  term.write = value => writes.push(value)
+  const originalStart = addon.startOutputSuppression
+  let requestedTimeout
+  addon.startOutputSuppression = (timeout, ...args) => {
+    requestedTimeout = timeout
+    return originalStart(timeout === null ? null : 5, ...args)
   }
 
-  assert.equal(timeoutHarness.addon.submitManagedPtyCommand(
-    'printf timeout',
+  assert.equal(addon.submitManagedPtyCommand(
+    'SHELLPILOT_FILE=1 __sp_secret=hidden',
     testTrackerNonce
   ), true)
+  addon.writeToTerminal('SHELLPILOT_FILE=1 __sp_first=hidden')
   await new Promise(resolve => setTimeout(resolve, 20))
-  assert.equal(timeoutHarness.addon.outputSuppressed, false)
-  assert.deepEqual(timeoutHarness.addon.suppressedData, [])
+  addon.writeToTerminal(' __sp_after_legacy_deadline=hidden')
 
+  assert.equal(requestedTimeout, null)
+  assert.equal(addon.outputSuppressed, true)
+  assert.deepEqual(writes, [])
+  assert.equal(addon.cancelManagedPtyEchoSuppression(), true)
+  assert.equal(addon.outputSuppressed, false)
+  addon.writeToTerminal('ordinary output')
+  assert.deepEqual(writes, ['ordinary output'])
+  assert.equal(addon.cancelManagedPtyEchoSuppression(), true)
+})
+
+test('managed PTY suppression clears after synchronous send failure', async () => {
   const failedHarness = await createDirectAttachHarness()
   failedHarness.addon._sendData = () => {
     throw new Error('send failed')
@@ -249,7 +264,33 @@ test('managed PTY suppression recovers after timeout and synchronous send failur
     /send failed/
   )
   assert.equal(failedHarness.addon.outputSuppressed, false)
+  assert.equal(failedHarness.addon.managedPtyEchoSuppressionActive, false)
   assert.deepEqual(failedHarness.addon.suppressedData, [])
+})
+
+test('managed PTY suppression dispose clears hidden output and pending input', async () => {
+  const { addon, term } = await createDirectAttachHarness()
+  const writes = []
+  term.write = value => writes.push(value)
+
+  assert.equal(addon.submitManagedPtyCommand(
+    'SHELLPILOT_FILE=1 __sp_secret=hidden',
+    testTrackerNonce
+  ), true)
+  addon.writeToTerminal('SHELLPILOT_FILE=1 __sp_hidden=secret')
+  addon.pendingInput.push('queued input')
+
+  addon.dispose()
+
+  assert.equal(addon.outputSuppressed, false)
+  assert.equal(addon.managedPtyEchoSuppressionActive, false)
+  assert.deepEqual(addon.suppressedData, [])
+  assert.equal(addon.suppressionReleaseMarker, '')
+  assert.equal(addon.suppressionScanText, '')
+  assert.deepEqual(addon.pendingInput, [])
+  assert.equal(addon.term, null)
+  assert.equal(addon.suppressionDecoder instanceof TextDecoder, true)
+  assert.deepEqual(writes, [])
 })
 
 test('AttachAddon exposes password state without publishing suppressed integration output', async () => {
@@ -1419,6 +1460,7 @@ test('terminal wires managed PTY tasks through authenticated tracker lifecycle',
   assert.match(source, /createPtyTaskToken/)
   assert.match(source, /ensureReady:\s*this\.ensureOperationsPtyTrackerReady/)
   assert.match(source, /subscribeOutput:\s*listener\s*=>\s*this\.attachAddon\.onRemoteOutput\(listener\)/)
+  assert.match(source, /cancelSubmissionOutput:\s*\(\)\s*=>\s*this\.attachAddon\?\.cancelManagedPtyEchoSuppression\(\)/)
   assert.match(source, /cmdAddon\.onPromptStarted\(this\.handleTerminalPromptStarted\)/)
   assert.match(source, /operationsPtyTaskController\.handleCommandFinished\(event\)/)
   assert.match(source, /operationsPtyTaskController\.handlePromptStarted\(\)/)

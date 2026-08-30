@@ -1,7 +1,6 @@
 import { loadAttachAddon } from './xterm-loader.js'
 
 const terminalControlFlag = '__aigshellTerminalControl'
-const managedPtyEchoSuppressionTimeout = 5000
 const managedPtySessionNoncePattern = /^[a-f0-9]{32}$/
 
 export default class AttachAddonCustom {
@@ -10,6 +9,7 @@ export default class AttachAddonCustom {
     this.socket = socket
     this.isWindowsShell = isWindowsShell
     this.outputSuppressed = false
+    this.managedPtyEchoSuppressionActive = false
     this.suppressedData = []
     this.suppressTimeout = null
     this.onSuppressionEndCallback = null
@@ -91,12 +91,17 @@ export default class AttachAddonCustom {
     this.suppressionReleaseMarker = String(releaseMarker || '')
     this.suppressionScanText = ''
     this.suppressionDecoder = new TextDecoder('utf-8')
-    this.suppressTimeout = setTimeout(() => {
-      if (!discardOnTimeout) {
-        console.warn('[AttachAddon] Output suppression timeout reached, resuming')
-      }
-      this.stopOutputSuppression(discardOnTimeout)
-    }, timeout)
+    const timeoutNumber = Number(timeout)
+    if (Number.isFinite(timeoutNumber) && timeoutNumber > 0) {
+      this.suppressTimeout = setTimeout(() => {
+        if (!discardOnTimeout) {
+          console.warn('[AttachAddon] Output suppression timeout reached, resuming')
+        }
+        this.stopOutputSuppression(discardOnTimeout)
+      }, timeoutNumber)
+    } else {
+      this.suppressTimeout = null
+    }
   }
 
   stopOutputSuppression = (discard = true) => {
@@ -105,6 +110,7 @@ export default class AttachAddonCustom {
       this.suppressTimeout = null
     }
     this.outputSuppressed = false
+    this.managedPtyEchoSuppressionActive = false
     this.publishSuppressionRemainder = false
     this.suppressionReleaseMarker = ''
     this.suppressionScanText = ''
@@ -123,6 +129,13 @@ export default class AttachAddonCustom {
       callback()
     }
     return this.flushPendingInput()
+  }
+
+  cancelManagedPtyEchoSuppression = () => {
+    if (this.managedPtyEchoSuppressionActive) {
+      this.stopOutputSuppression(true)
+    }
+    return true
   }
 
   flushPendingInput = async () => {
@@ -398,16 +411,17 @@ export default class AttachAddonCustom {
     if (!String(command || '').trim() ||
       !managedPtySessionNoncePattern.test(nonce)) return false
     this.startOutputSuppression(
-      managedPtyEchoSuppressionTimeout,
+      null,
       null,
       true,
       true,
       `${String.fromCharCode(27)}]633;E;${nonce};`
     )
+    this.managedPtyEchoSuppressionActive = true
     try {
       this._sendToServerDirect(`${command}\r`)
     } catch (error) {
-      this.stopOutputSuppression(true)
+      this.cancelManagedPtyEchoSuppression()
       throw error
     }
     return true
@@ -555,6 +569,14 @@ export default class AttachAddonCustom {
     this._stopKeepalive()
     clearTimeout(this.suppressTimeout)
     this.suppressTimeout = null
+    this.outputSuppressed = false
+    this.managedPtyEchoSuppressionActive = false
+    this.suppressedData = []
+    this.publishSuppressionRemainder = false
+    this.onSuppressionEndCallback = null
+    this.suppressionReleaseMarker = ''
+    this.suppressionScanText = ''
+    this.suppressionDecoder = new TextDecoder('utf-8')
     this.pendingInput = []
     clearTimeout(this._echoCheckTimer)
     this._echoCheckTimer = null
