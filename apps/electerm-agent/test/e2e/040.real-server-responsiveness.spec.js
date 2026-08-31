@@ -16,7 +16,8 @@ const requiredEnvironmentVariables = Object.freeze([
 const performanceBudgets = Object.freeze({
   firstSftpReadyMs: 3000,
   cachedPaintMs: 100,
-  sftpRefreshMs: 3000
+  sftpRefreshMs: 3000,
+  cancelRecoveryMs: 3000
 })
 
 const internalTerminalPattern = /__sp_|SHELLPILOT_(?:FILE|OPS|TOKEN)/
@@ -110,6 +111,7 @@ async function terminalState (page) {
       text,
       busy: terminal?.operationsPtyTaskController?.isBusy?.() === true,
       owner: terminal?.operationsPtyTaskController?.owner?.() || '',
+      trackerReady: terminal?.isCommandSafetyTrackerReady?.() === true,
       expectedSubmissions: terminal?.cmdAddon?._expectedSubmissions?.length || 0,
       sshSessionGeneration: String(
         terminal?.getTerminalSafetyEndpoint?.().sshSessionGeneration || ''
@@ -306,19 +308,44 @@ test('round 1 - terminal and operations recover without internal echo', async ()
     await sendTerminalLine(page, `printf '${marker}\\n'`)
     await expectTerminalMarker(page, marker, before.text.length)
 
-    const tasks = await page.evaluate(async () => {
-      const system = await window.store
+    await page.evaluate(() => {
+      window.__shellpilotResponsivenessSystemTask = window.store
         .runOperationsTool('system.overview')
         .completion
-      const baseline = await window.store
-        .runOperationsTool('runbook.health.baseline')
-        .completion
-      return [system, baseline].map(task => ({
+    })
+    await expect.poll(async () => (await terminalState(page)).busy, {
+      timeout: 5000
+    }).toBe(true)
+    const queuedMarker = 'shellpilot-round-one-queued'
+    const beforeQueuedInput = await terminalState(page)
+    await sendTerminalLine(page, `printf '${queuedMarker}\\n'`)
+    const system = await page.evaluate(async () => {
+      const task = await window.__shellpilotResponsivenessSystemTask
+      return {
         status: task.status,
         outputs: task.steps.map(step => Boolean(step.output)),
         exitCodes: task.steps.map(step => step.exitCode)
-      }))
+      }
     })
+    await expectTerminalMarker(
+      page,
+      queuedMarker,
+      beforeQueuedInput.text.length
+    )
+    await expect.poll(async () => (await terminalState(page)).trackerReady, {
+      timeout: 5000
+    }).toBe(true)
+    const baseline = await page.evaluate(async () => {
+      const task = await window.store
+        .runOperationsTool('runbook.health.baseline')
+        .completion
+      return {
+        status: task.status,
+        outputs: task.steps.map(step => Boolean(step.output)),
+        exitCodes: task.steps.map(step => step.exitCode)
+      }
+    })
+    const tasks = [system, baseline]
     const taskSummary = JSON.stringify(tasks)
     expect(
       tasks.every(task => task.status === 'completed'),
@@ -407,14 +434,30 @@ test('round 3 - cancellation reconnect and cache isolation stay usable', async (
     const beforeReconnect = await page.evaluate(() => {
       const terminal = window.refs.get('term-' + window.store.activeTabId)
       const entry = window.refs.get('sftp-' + window.store.activeTabId)
-      entry.remoteDirectoryCache.set('round-3-old-session-sentinel', [])
+      const generation = terminal
+        .getTerminalSafetyEndpoint().sshSessionGeneration
+      const buildCacheKey = value => [
+        value,
+        entry.props.tab.host,
+        Number(entry.props.tab.port || entry.port || 22),
+        entry.props.tab.username,
+        entry.state.remoteFileIdentity?.channel || 'unknown',
+        entry.state.remoteFileIdentity?.effectiveUsername || '',
+        entry.state.remotePath
+      ].map(part => String(part || '')).join('\u0000')
+      const oldCacheKey = buildCacheKey(generation)
+      window.__shellpilotResponsivenessOldCacheKey = oldCacheKey
       return {
-        generation: terminal.getTerminalSafetyEndpoint().sshSessionGeneration,
-        cacheEntries: entry.remoteDirectoryCache.stats().entries
+        generation,
+        generationAligned: generation === entry.sshSessionGeneration,
+        cacheEntries: entry.remoteDirectoryCache.stats().entries,
+        oldCachePresent: entry.remoteDirectoryCache.get(oldCacheKey) !== null
       }
     })
     expect(beforeReconnect.generation).not.toBe('')
+    expect(beforeReconnect.generationAligned).toBe(true)
     expect(beforeReconnect.cacheEntries).toBeGreaterThan(0)
+    expect(beforeReconnect.oldCachePresent).toBe(true)
 
     await page.locator(
       '.session-current .term-sftp-tabs .type-tab:visible'
@@ -426,15 +469,20 @@ test('round 3 - cancellation reconnect and cache isolation stay usable', async (
       )
       const controller = new AbortController()
       window.__shellpilotResponsivenessAbort = controller
+      window.__shellpilotResponsivenessSleepStarted = false
       window.__shellpilotResponsivenessCancelResult = null
       window.__shellpilotResponsivenessCancelPromise = (async () => {
         let outcome
         try {
           await lease.execute({
             taskId: 'real-vps-cancellable-sleep',
-            script: 'sleep 10',
+            script: "printf 'shellpilot-round-three-sleep-started\\n'; sleep 10",
             timeoutMs: 15000,
-            signal: controller.signal
+            signal: controller.signal,
+            onChunk: chunk => {
+              window.__shellpilotResponsivenessSleepStarted =
+                window.__shellpilotResponsivenessSleepStarted || Boolean(chunk)
+            }
           })
           outcome = { name: 'completed' }
         } catch (error) {
@@ -446,7 +494,10 @@ test('round 3 - cancellation reconnect and cache isolation stay usable', async (
         return outcome
       })()
     })
-    await page.waitForTimeout(200)
+    await expect.poll(() => page.evaluate(() => (
+      window.__shellpilotResponsivenessSleepStarted
+    )), { timeout: 10000 }).toBe(true)
+    const cancelStartedAt = Date.now()
     await page.evaluate(() => window.__shellpilotResponsivenessAbort.abort())
     await expect.poll(() => page.evaluate(() => (
       window.__shellpilotResponsivenessCancelResult
@@ -455,9 +506,15 @@ test('round 3 - cancellation reconnect and cache isolation stay usable', async (
       window.__shellpilotResponsivenessCancelPromise
     ))
     expect(cancellation).toEqual({ name: 'AbortError', released: true })
-    await expect.poll(async () => (await terminalState(page)).busy, {
+    expect(Date.now() - cancelStartedAt).toBeLessThanOrEqual(
+      performanceBudgets.cancelRecoveryMs
+    )
+    await expect.poll(async () => {
+      const state = await terminalState(page)
+      return !state.busy && state.trackerReady
+    }, {
       timeout: 5000
-    }).toBe(false)
+    }).toBe(true)
 
     const recoveryMarker = 'shellpilot-round-three-recovered'
     const beforeMarker = await terminalState(page)
@@ -474,14 +531,37 @@ test('round 3 - cancellation reconnect and cache isolation stay usable', async (
         state.sshSessionGeneration &&
         state.sshSessionGeneration !== beforeReconnect.generation
     }, { timeout: 30000 }).toBe(true)
-    await expect.poll(() => page.evaluate(() => {
-      const entry = window.refs.get('sftp-' + window.store.activeTabId)
-      return entry?.remoteDirectoryCache
-        ?.get('round-3-old-session-sentinel') !== null
-    }), { timeout: 10000 }).toBe(false)
 
     await openSftp(page)
     await gotoRemotePath(page, config.remoteRoot)
+    const cacheIsolation = await page.evaluate(() => {
+      const terminal = window.refs.get('term-' + window.store.activeTabId)
+      const entry = window.refs.get('sftp-' + window.store.activeTabId)
+      const generation = terminal
+        .getTerminalSafetyEndpoint().sshSessionGeneration
+      const newCacheKey = [
+        generation,
+        entry.props.tab.host,
+        Number(entry.props.tab.port || entry.port || 22),
+        entry.props.tab.username,
+        entry.state.remoteFileIdentity?.channel || 'unknown',
+        entry.state.remoteFileIdentity?.effectiveUsername || '',
+        entry.state.remotePath
+      ].map(part => String(part || '')).join('\u0000')
+      const oldCacheKey = window.__shellpilotResponsivenessOldCacheKey
+      return {
+        generationAligned: generation === entry.sshSessionGeneration,
+        keysDiffer: oldCacheKey !== newCacheKey,
+        oldCachePresent: entry.remoteDirectoryCache.get(oldCacheKey) !== null,
+        newCachePresent: entry.remoteDirectoryCache.get(newCacheKey) !== null
+      }
+    })
+    expect(cacheIsolation).toEqual({
+      generationAligned: true,
+      keysDiffer: true,
+      oldCachePresent: false,
+      newCachePresent: true
+    })
     await page.locator(
       '.session-current .term-sftp-tabs .type-tab:visible'
     ).first().click()

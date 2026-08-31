@@ -584,10 +584,11 @@ test('transport rejection cleans tracking without sending Ctrl+C', async () => {
   assert.equal(await lease.release(), true)
 })
 
-test('abort before transport acceptance cleans locally without Ctrl+C', async () => {
+test('abort after transport send waits for confirmed pre-accept interruption', async () => {
   const acceptedGate = deferred()
+  const writtenGate = deferred()
   const signalController = new AbortController()
-  const harness = await createControllerHarness({ acceptedGate })
+  const harness = await createControllerHarness({ acceptedGate, writtenGate })
   const lease = await harness.controller.acquire('transport-pre-accept-abort')
   const running = lease.execute({
     taskId: 'transport-pre-accept-abort-step',
@@ -597,11 +598,58 @@ test('abort before transport acceptance cleans locally without Ctrl+C', async ()
   })
 
   signalController.abort()
+  assert.equal(harness.interrupts, 1)
+  assert.equal(harness.controller.isBusy(), true)
+  await assert.rejects(lease.release(), /仍在执行/)
+  assert.equal(await Promise.race([
+    running.then(() => 'settled', () => 'settled'),
+    delay(10).then(() => 'pending')
+  ]), 'pending')
+
+  const interrupted = Object.assign(
+    new Error('受控输入写入已中断'),
+    { name: 'AbortError' }
+  )
+  acceptedGate.reject(interrupted)
+  writtenGate.reject(interrupted)
   await assert.rejects(running, error => error.name === 'AbortError')
   assert.equal(harness.cancelledSubmissions.length, 1)
-  assert.equal(harness.interrupts, 0)
+  assert.equal(await lease.release(), true)
+})
+
+test('abort racing with transport acceptance waits for prompt recovery', async () => {
+  const acceptedGate = deferred()
+  const writtenGate = deferred()
+  const signalController = new AbortController()
+  const harness = await createControllerHarness({ acceptedGate, writtenGate })
+  const lease = await harness.controller.acquire('transport-accept-race-abort')
+  const running = lease.execute({
+    taskId: 'transport-accept-race-abort-step',
+    script: 'sleep 60',
+    timeoutMs: 1000,
+    signal: signalController.signal
+  })
+
+  signalController.abort()
   acceptedGate.resolve(true)
+  writtenGate.resolve(true)
   await Promise.resolve()
+  await Promise.resolve()
+
+  assert.equal(harness.interrupts, 1)
+  assert.equal(harness.controller.isBusy(), true)
+  await assert.rejects(lease.release(), /仍在执行/)
+  assert.equal(await Promise.race([
+    running.then(() => 'settled', () => 'settled'),
+    delay(10).then(() => 'pending')
+  ]), 'pending')
+
+  harness.emitManagedStart()
+  harness.emitCommandFinished(130)
+  assert.equal(harness.emitPromptStarted(), true)
+  await assert.rejects(running, error => error.name === 'AbortError')
+  // The matching command-finished event already consumed the tracker token.
+  assert.equal(harness.cancelledSubmissions.length, 0)
   assert.equal(await lease.release(), true)
 })
 

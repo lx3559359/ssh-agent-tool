@@ -224,6 +224,10 @@ test('SFTP records cached paint, first authoritative ready and refresh duration 
   const refreshBody = source.slice(refreshStart, refreshEnd)
 
   assert.match(cachedBody, /'sftp_cached_paint_ms'/)
+  assert.match(cachedBody, /let cachedPaintCommitted = false/)
+  assert.match(cachedBody, /cachedPaintCommitted = true/)
+  assert.match(cachedBody, /if \(!cachedPaintCommitted \|\|/)
+  assert.match(cachedBody, /isCurrentSftpEntryRemoteTask\(this, task\)/)
   assert.match(refreshBody, /const refreshStartedAt = performance\.now\(\)/)
   assert.match(refreshBody, /'sftp_refresh_ms'/)
   assert.match(refreshBody, /'first_sftp_ready_ms'/)

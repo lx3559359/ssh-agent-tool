@@ -3121,11 +3121,13 @@ export default class Sftp extends Component {
 
   applyCachedRemoteDirectory = (remote, generation, task) => {
     const startedAt = performance.now()
+    let cachedPaintCommitted = false
     this.setState(prevState => {
       if (!generation.accepting ||
         !isCurrentRemoteFileGeneration(this, generation) ||
         !isCurrentSftpEntryRemoteTask(this, task)) return null
       const nextRemote = preserveSftpDraftItems(prevState.remote, remote)
+      cachedPaintCommitted = true
       const update = {
         remote: nextRemote,
         remoteFileTree: this.buildTree(nextRemote, typeMap.remote),
@@ -3143,11 +3145,17 @@ export default class Sftp extends Component {
             )
           }
         : update
-    }, () => recordPerformanceDuration(
-      'sftp_cached_paint_ms',
-      performance.now() - startedAt,
-      { outcome: 'completed' }
-    ))
+    }, () => {
+      if (!cachedPaintCommitted ||
+        !generation.accepting ||
+        !isCurrentRemoteFileGeneration(this, generation) ||
+        !isCurrentSftpEntryRemoteTask(this, task)) return
+      recordPerformanceDuration(
+        'sftp_cached_paint_ms',
+        performance.now() - startedAt,
+        { outcome: 'completed' }
+      )
+    })
   }
 
   remoteListUncoalesced = async (

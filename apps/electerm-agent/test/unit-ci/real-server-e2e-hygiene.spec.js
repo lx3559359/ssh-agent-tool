@@ -1415,15 +1415,24 @@ test('real VPS responsiveness gate is credential-safe, read-only and fixed to th
     assert.match(source, new RegExp(`test\\('${name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}'`))
   }
   assert.match(source, /remoteRoot !== '\/tmp'/)
-  assert.match(source, /script: 'sleep 10'/)
-  assert.match(source, /await page\.waitForTimeout\(200\)/)
+  assert.match(
+    source,
+    /script: "printf 'shellpilot-round-three-sleep-started\\\\n'; sleep 10"/
+  )
+  assert.match(source, /__shellpilotResponsivenessSleepStarted/)
+  assert.doesNotMatch(source, /await page\.waitForTimeout\(200\)/)
   assert.match(source, /acquireOperationsPtyTask/)
   assert.match(source, /onReconnect\(\)/)
-  assert.match(source, /round-3-old-session-sentinel/)
+  assert.match(source, /__shellpilotResponsivenessOldCacheKey/)
+  assert.match(source, /oldCachePresent: false/)
+  assert.match(source, /newCachePresent: true/)
+  assert.doesNotMatch(source, /round-3-old-session-sentinel/)
+  assert.match(source, /shellpilot-round-one-queued/)
   assert.match(source, /real-vps-sftp-responsiveness\.json/)
   assert.match(source, /firstSftpReadyMs:\s*3000/)
   assert.match(source, /cachedPaintMs:\s*100/)
   assert.match(source, /sftpRefreshMs:\s*3000/)
+  assert.match(source, /cancelRecoveryMs:\s*3000/)
   assert.doesNotMatch(
     source,
     /\b(?:touch|mkdir|rm|unlink|rmdir|mv|cp|chmod|chown|systemctl|service|reboot|shutdown|poweroff|kill|pkill|apt|yum|dnf|apk)\b/

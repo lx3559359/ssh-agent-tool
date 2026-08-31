@@ -317,7 +317,7 @@ export function createManagedPtyTaskController ({
         )
     execution.cancelRequestedPromptSequence = promptSequence
     clearTimer(execution.timeoutHandle)
-    if (!execution.submitted) {
+    if (!execution.transport) {
       rejectExecution(execution, execution.cancelError, {
         cancelExpected: true
       })
@@ -332,6 +332,7 @@ export function createManagedPtyTaskController ({
         // Missing prompt recovery below keeps the terminal locked safely.
       }
     }
+    // The frame has left the renderer, so only server status or a new prompt is safe.
     beginRecoveryDeadline(execution)
     settleIfComplete(execution)
     return true
@@ -419,14 +420,28 @@ export function createManagedPtyTaskController ({
         }
         execution.transport = transport
         Promise.resolve(transport.accepted).then(() => {
-          if (execution.settled || execution.cancelRequested) return
+          if (execution.settled) return
           execution.submitted = true
           execution.transportAccepted = true
+          if (execution.cancelRequested) {
+            beginRecoveryDeadline(execution)
+            settleIfComplete(execution)
+            return
+          }
           execution.timeoutHandle = setTimer(
             () => requestCancellation(execution, 'timeout'),
             timeoutMs
           )
         }).catch(error => {
+          if (execution.settled) return
+          if (execution.cancelRequested) {
+            if (error?.name === 'AbortError') {
+              rejectExecution(execution, execution.cancelError, {
+                cancelExpected: true
+              })
+            }
+            return
+          }
           rejectExecution(execution, error, { cancelExpected: true })
         })
         Promise.resolve(transport.written).catch(error => {
