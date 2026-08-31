@@ -61,7 +61,11 @@ async function acceptHostKeyIfPrompted (page) {
   const modal = page.locator('.custom-modal-wrap')
     .filter({ hasText: 'SHA256:' })
     .last()
-  if (!await modal.isVisible({ timeout: 10000 }).catch(() => false)) return
+  try {
+    await modal.waitFor({ state: 'visible', timeout: 10000 })
+  } catch {
+    return
+  }
   await modal.locator(
     'button.custom-modal-ok-btn, button.ant-btn-primary'
   ).last().click()
@@ -70,14 +74,40 @@ async function acceptHostKeyIfPrompted (page) {
 async function terminalState (page) {
   return page.evaluate(() => {
     const terminal = window.refs.get('term-' + window.store.activeTabId)
+    let text = ''
+    try {
+      if (terminal?.term?.buffer) {
+        text = terminal.getTerminalBufferText?.() || ''
+      }
+    } catch {}
+    const terminalError = String(terminal?.state?.terminalError?.message || '')
+      .toLowerCase()
+    const terminalErrorCategory = !terminalError
+      ? 'none'
+      : /auth|password|permission|denied/.test(terminalError)
+        ? 'authentication'
+        : /timeout|timed out/.test(terminalError)
+          ? 'timeout'
+          : /fingerprint|host key|known_hosts/.test(terminalError)
+            ? 'host-key'
+            : /network|connect|socket|econn/.test(terminalError)
+              ? 'connection'
+              : 'other'
     return {
+      terminalExists: Boolean(terminal),
+      termExists: Boolean(terminal?.term),
+      bufferExists: Boolean(terminal?.term?.buffer),
+      attachAddonExists: Boolean(terminal?.attachAddon),
+      pidExists: Boolean(terminal?.pid),
+      closed: Boolean(terminal?.onClose),
+      terminalErrorCategory,
       ready: Boolean(
         terminal?.term &&
         terminal?.attachAddon &&
         terminal?.pid &&
         !terminal?.onClose
       ),
-      text: terminal?.getTerminalBufferText?.() || '',
+      text,
       busy: terminal?.operationsPtyTaskController?.isBusy?.() === true,
       owner: terminal?.operationsPtyTaskController?.owner?.() || '',
       expectedSubmissions: terminal?.cmdAddon?._expectedSubmissions?.length || 0,
@@ -106,9 +136,31 @@ async function connectRealServer (page, config) {
     '.quick-connect-wizard-footer button.ant-btn-primary'
   ).click()
   await acceptHostKeyIfPrompted(page)
-  await expect.poll(async () => (await terminalState(page)).ready, {
-    timeout: 30000
-  }).toBe(true)
+  let lastReadinessState
+  const readReadinessState = async () => {
+    const { text, sshSessionGeneration, ...state } = await terminalState(page)
+    lastReadinessState = {
+      ...state,
+      wizardVisible: await wizard.isVisible().catch(() => false),
+      hostKeyPromptVisible: await page.locator('.custom-modal-wrap')
+        .filter({ hasText: 'SHA256:' })
+        .last()
+        .isVisible()
+        .catch(() => false)
+    }
+    return lastReadinessState
+  }
+  try {
+    await expect.poll(async () => (await readReadinessState()).ready, {
+      timeout: 30000
+    }).toBe(true)
+  } catch (error) {
+    const diagnostic = new Error(
+      `${error.message}\nreadiness=${JSON.stringify(lastReadinessState)}`
+    )
+    diagnostic.cause = error
+    throw diagnostic
+  }
 }
 
 async function withRealServer (config, action) {
@@ -267,9 +319,19 @@ test('round 1 - terminal and operations recover without internal echo', async ()
         exitCodes: task.steps.map(step => step.exitCode)
       }))
     })
-    expect(tasks.every(task => task.status === 'completed')).toBe(true)
-    expect(tasks.every(task => task.outputs.every(Boolean))).toBe(true)
-    expect(tasks.every(task => task.exitCodes.every(code => code === 0)))
+    const taskSummary = JSON.stringify(tasks)
+    expect(
+      tasks.every(task => task.status === 'completed'),
+      taskSummary
+    ).toBe(true)
+    expect(
+      tasks.every(task => task.outputs.every(Boolean)),
+      taskSummary
+    ).toBe(true)
+    expect(
+      tasks.every(task => task.exitCodes.every(code => code === 0)),
+      taskSummary
+    )
       .toBe(true)
 
     await expect.poll(async () => {
