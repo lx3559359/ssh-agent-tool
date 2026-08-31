@@ -1,4 +1,6 @@
 import { loadAttachAddon } from './xterm-loader.js'
+import { recordPerformanceDuration } from '../../common/quality/quality-events.js'
+import { createManagedTerminalTransport } from './managed-terminal-transport.js'
 
 const terminalControlFlag = '__aigshellTerminalControl'
 const managedPtySessionNoncePattern = /^[a-f0-9]{32}$/
@@ -15,6 +17,7 @@ export default class AttachAddonCustom {
     this.socket = socket
     this.isWindowsShell = isWindowsShell
     this.outputSuppressed = false
+    this.managedPtyTransport = null
     this.managedPtyEchoSuppressionActive = false
     this.managedPtySessionNonce = ''
     this.managedPtyExpectedCommand = ''
@@ -184,6 +187,19 @@ export default class AttachAddonCustom {
     await this._initBase()
     this.addSocketListener(this._socket, 'message', this.onMsg)
 
+    this.managedPtyTransport = createManagedTerminalTransport({
+      send: message => {
+        const { action, ...fields } = message
+        this._sendTerminalControl(action, fields)
+      },
+      recordAck: durationMs => {
+        recordPerformanceDuration('managed_input_ack_ms', durationMs, {
+          outcome: 'accepted'
+        })
+      }
+    })
+    this.managedPtyTransport.requestCapabilities()
+
     if (terminal.textarea?.addEventListener) {
       terminal.textarea.addEventListener('paste', this._onTerminalPaste)
       this._disposables.push({
@@ -207,10 +223,14 @@ export default class AttachAddonCustom {
     this._lastDataTime = Date.now()
     if (typeof ev.data === 'string') {
       try {
-        const msg = JSON.parse(ev.data)
-        if (msg.action === 'zmodem-event' || msg.action === 'trzsz-event' || msg.action === 'xmodem-event') {
+        const control = JSON.parse(ev.data)
+        if (control.action === 'zmodem-event' ||
+          control.action === 'trzsz-event' ||
+          control.action === 'xmodem-event') {
           return
         }
+        if (control[terminalControlFlag] === true &&
+          this.managedPtyTransport?.handleControlMessage(control)) return
       } catch (e) {}
     }
 
@@ -528,20 +548,26 @@ export default class AttachAddonCustom {
     this.managedPtyExpectedCommand = command
     this.consumeManagedPtyCommandRecord = true
     try {
-      this._sendTerminalControl('managed-input', {
-        requestId: nonce,
-        command
-      })
+      if (!this.managedPtyTransport) {
+        throw new Error('受控终端输入通道尚未初始化')
+      }
+      return this.managedPtyTransport.submit(command)
     } catch (error) {
       this.cancelManagedPtyEchoSuppression()
       throw error
     }
-    return true
+  }
+
+  ensureManagedPtyTransportReady = () => {
+    if (!this.managedPtyTransport) {
+      throw new Error('受控终端输入通道尚未初始化')
+    }
+    return this.managedPtyTransport.ready()
   }
 
   interruptManagedPtyCommand = () => {
-    this._sendTerminalControl('managed-input-interrupt')
-    return true
+    if (!this.managedPtyTransport) return false
+    return this.managedPtyTransport.interrupt()
   }
 
   sendToServer = (data) => {
@@ -678,6 +704,8 @@ export default class AttachAddonCustom {
   }
 
   dispose = () => {
+    this.managedPtyTransport?.dispose()
+    this.managedPtyTransport = null
     this._stopKeepalive()
     clearTimeout(this.suppressTimeout)
     this.suppressTimeout = null

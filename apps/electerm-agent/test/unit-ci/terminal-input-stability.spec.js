@@ -99,6 +99,22 @@ function createDirectAttachHarness () {
   return importAttachAddon().then(AttachAddon => {
     const addon = new AttachAddon(term, {}, false)
     addon._sendData = data => sent.push(data)
+    addon.managedPtyTransport = {
+      submit: command => {
+        addon._sendTerminalControl('managed-input', {
+          requestId: testTrackerNonce,
+          command
+        })
+        return true
+      },
+      interrupt: () => {
+        addon._sendTerminalControl('managed-input-interrupt')
+        return true
+      },
+      ready: () => Promise.resolve(true),
+      handleControlMessage: () => false,
+      dispose: () => true
+    }
     return { addon, safetyCalls, sent, parent, term }
   })
 }
