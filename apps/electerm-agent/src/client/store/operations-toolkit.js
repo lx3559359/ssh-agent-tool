@@ -14,6 +14,9 @@ import {
   createOperationsIncidentCandidate,
   createOperationsTimelineEvent
 } from '../components/incidents/incident-capture.js'
+import {
+  createOperationsPerformanceTracker
+} from '../common/quality/quality-events.js'
 
 const historyStorageKey = 'shellpilot-operations-task-history-v1'
 const finalOperationsTaskStatuses = new Set([
@@ -149,6 +152,7 @@ function createRuntime (store) {
   const channel = createPtyTaskChannel({
     getTerminal: tabId => refs.get('term-' + tabId)
   })
+  const performanceTracker = createOperationsPerformanceTracker()
   const runner = createOperationsTaskRunner({
     channel,
     taskStore,
@@ -156,11 +160,12 @@ function createRuntime (store) {
       const current = store.operationsTasks.filter(item => item.id !== task.id)
       store.operationsTasks = [task, ...current]
       captureCompletedOperationsTask(store, task)
+      performanceTracker.observe(task)
     },
     discover: executeOperationsDiscoveryThroughPty
   })
   store.operationsHistory = taskStore.list()
-  return { runner, taskStore }
+  return { runner, taskStore, performanceTracker }
 }
 
 export default Store => {
@@ -191,13 +196,15 @@ export default Store => {
     if (!endpoint) throw new Error('连接 SSH 服务器后才可执行运维工具')
     const tool = getOperationsTool(toolId)
     if (!tool) throw new Error('未找到指定的运维工具')
-    const active = ensureRuntime(store).runner.run({
+    const activeRuntime = ensureRuntime(store)
+    const active = activeRuntime.runner.run({
       tool,
       params,
       endpoint,
       confirmation: options.confirmation
     })
     store.activeOperationsTaskId = active.taskId
+    activeRuntime.performanceTracker.begin(active.taskId)
     const completion = active.completion.then(task => {
       store.operationsHistory = ensureRuntime(store).taskStore.list()
       return task

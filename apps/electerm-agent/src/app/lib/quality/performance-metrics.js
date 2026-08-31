@@ -21,7 +21,13 @@ const DURATION_NAMES = new Set([
   'first_window_interactive_ms',
   'first_terminal_ready_ms',
   'ai_first_token_ms',
-  'ai_total_ms'
+  'ai_total_ms',
+  'managed_input_ack_ms',
+  'operations_first_output_ms',
+  'operations_total_ms',
+  'first_sftp_ready_ms',
+  'sftp_cached_paint_ms',
+  'sftp_refresh_ms'
 ])
 
 const MEMORY_FIELDS = {

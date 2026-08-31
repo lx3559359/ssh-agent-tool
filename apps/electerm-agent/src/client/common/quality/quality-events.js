@@ -39,13 +39,29 @@ const PERFORMANCE_MARK_NAMES = new Set([
 ])
 const PERFORMANCE_DURATION_NAMES = new Set([
   'ai_first_token_ms',
-  'ai_total_ms'
+  'ai_total_ms',
+  'managed_input_ack_ms',
+  'operations_first_output_ms',
+  'operations_total_ms',
+  'first_sftp_ready_ms',
+  'sftp_cached_paint_ms',
+  'sftp_refresh_ms'
 ])
 const PERFORMANCE_DIMENSION_KEYS = new Set([
   'outcome',
   'requestType',
   'terminalType',
   'windowRole'
+])
+
+const OPERATIONS_FINAL_STATUSES = new Set([
+  'completed',
+  'cancelled',
+  'cancellation-unknown',
+  'timed-out',
+  'failed',
+  'disconnected',
+  'partially-completed'
 ])
 
 function normalizeEventString (value, maxLength) {
@@ -163,6 +179,70 @@ export function recordPerformanceDuration (name, durationMs, dimensions = {}) {
     name,
     value: Math.round(durationMs),
     dimensions: normalizedDimensions
+  })
+}
+
+function safelyRecordPerformanceDuration (recordDuration, ...args) {
+  try {
+    Promise.resolve(recordDuration(...args)).catch(() => false)
+  } catch (error) {}
+}
+
+function safePerformanceNow (now) {
+  try {
+    const value = Number(now())
+    return Number.isFinite(value) && value >= 0 ? value : 0
+  } catch (error) {
+    return 0
+  }
+}
+
+export function createOperationsPerformanceTracker ({
+  now = () => globalThis.performance?.now?.() ?? Date.now(),
+  recordDuration = recordPerformanceDuration
+} = {}) {
+  const active = new Map()
+
+  return Object.freeze({
+    begin (taskId) {
+      const id = String(taskId || '')
+      if (!id || active.has(id)) return false
+      active.set(id, {
+        startedAt: safePerformanceNow(now),
+        firstOutputRecorded: false
+      })
+      return true
+    },
+    observe (task = {}) {
+      const state = active.get(String(task.id || ''))
+      if (!state) return false
+      const observedAt = safePerformanceNow(now)
+      let recorded = false
+      if (!state.firstOutputRecorded && Array.isArray(task.steps) &&
+        task.steps.some(step => (
+          typeof step?.output === 'string' && !!step.output.trim()
+        ))) {
+        state.firstOutputRecorded = true
+        safelyRecordPerformanceDuration(
+          recordDuration,
+          'operations_first_output_ms',
+          Math.max(0, observedAt - state.startedAt),
+          { outcome: 'available' }
+        )
+        recorded = true
+      }
+      if (OPERATIONS_FINAL_STATUSES.has(task.status)) {
+        safelyRecordPerformanceDuration(
+          recordDuration,
+          'operations_total_ms',
+          Math.max(0, observedAt - state.startedAt),
+          { outcome: task.status }
+        )
+        active.delete(String(task.id || ''))
+        recorded = true
+      }
+      return recorded
+    }
   })
 }
 

@@ -10,6 +10,9 @@ const specPath = path.join(root, 'test/e2e/030.real-server-regression.spec.js')
 const specExists = fs.existsSync(specPath)
 const agentSpecPath = path.join(root, 'test/e2e/031.agent-readonly-real-server.spec.js')
 const agentSpecExists = fs.existsSync(agentSpecPath)
+const responsivenessSpecPath = path.join(
+  root, 'test/e2e/040.real-server-responsiveness.spec.js'
+)
 const requiredEnvironmentVariables = [
   'SHELLPILOT_E2E_HOST',
   'SHELLPILOT_E2E_PORT',
@@ -1393,5 +1396,49 @@ test('local root file E2E is isolated and models the privileged protocol without
   assert.doesNotMatch(
     sftpFixtureSource + sshFixtureSource + e2eSource,
     /process\.env|SHELLPILOT_E2E_(?:HOST|USER|PASS|PORT)|\.ssh[\\/]|id\s+-u\s+root|sudo\s|runuser\s|127\.0\.0\.1:\d{2,5}/
+  )
+})
+
+test('real VPS responsiveness gate is credential-safe, read-only and fixed to three rounds', () => {
+  assert.ok(fs.existsSync(responsivenessSpecPath))
+  const source = fs.readFileSync(responsivenessSpecPath, 'utf8')
+
+  assert.deepEqual(
+    parseFrozenStringArray(source, 'requiredEnvironmentVariables'),
+    requiredEnvironmentVariables
+  )
+  for (const name of [
+    'round 1 - terminal and operations recover without internal echo',
+    'round 2 - SFTP cache paints immediately and refreshes authoritatively',
+    'round 3 - cancellation reconnect and cache isolation stay usable'
+  ]) {
+    assert.match(source, new RegExp(`test\\('${name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}'`))
+  }
+  assert.match(source, /remoteRoot !== '\/tmp'/)
+  assert.match(source, /script: 'sleep 10'/)
+  assert.match(source, /await page\.waitForTimeout\(200\)/)
+  assert.match(source, /acquireOperationsPtyTask/)
+  assert.match(source, /onReconnect\(\)/)
+  assert.match(source, /round-3-old-session-sentinel/)
+  assert.match(source, /real-vps-sftp-responsiveness\.json/)
+  assert.match(source, /firstSftpReadyMs:\s*3000/)
+  assert.match(source, /cachedPaintMs:\s*100/)
+  assert.match(source, /sftpRefreshMs:\s*3000/)
+  assert.doesNotMatch(
+    source,
+    /\b(?:touch|mkdir|rm|unlink|rmdir|mv|cp|chmod|chown|systemctl|service|reboot|shutdown|poweroff|kill|pkill|apt|yum|dnf|apk)\b/
+  )
+  assert.doesNotMatch(source, /(?:password|username|host)\s*[:=]\s*['"][^'"]+['"]/i)
+  assert.doesNotMatch(source, /\b(?:\d{1,3}\.){3}\d{1,3}\b/)
+  assert.doesNotMatch(source, /\bsk-[A-Za-z0-9_-]{12,}\b/)
+  assert.doesNotMatch(source, /console\.(?:log|info|debug|warn|error)\s*\(/)
+  const attachment = source.slice(
+    source.indexOf("test.info().attach('real-vps-sftp-responsiveness.json'"),
+    source.indexOf("test('round 3")
+  )
+  assert.match(attachment, /JSON\.stringify\(evidence/)
+  assert.doesNotMatch(
+    attachment,
+    /config|remoteRoot|host|port|username|password|command|marker/i
   )
 })

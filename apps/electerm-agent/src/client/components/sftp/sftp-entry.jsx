@@ -262,6 +262,8 @@ export default class Sftp extends Component {
       sftpRecoveryRecords: readSafetyOperationRecords(ls)
     }
     this.retryCount = 0
+    this.sftpReadyStartedAt = 0
+    this.firstSftpReadyRecorded = false
     this.remoteDirectoryCache = createRemoteDirectoryCache()
     this.remoteFileOperationBackends = new Map()
     this.remoteFileOperationBackendPins = new Map()
@@ -3154,6 +3156,10 @@ export default class Sftp extends Component {
     oldPath,
     options = {}
   ) => {
+    const refreshStartedAt = performance.now()
+    if (!this.firstSftpReadyRecorded && !this.sftpReadyStartedAt) {
+      this.sftpReadyStartedAt = refreshStartedAt
+    }
     if (this.remoteFileUnmounted) throw remoteFileOperationUnmounted()
     const generation = initializeRemoteFileGeneration(this)
     const assertCurrentGeneration = () => {
@@ -3459,6 +3465,20 @@ export default class Sftp extends Component {
         if (!generation.accepting ||
           !isCurrentRemoteFileGeneration(this, generation) ||
           !isCurrentSftpEntryRemoteTask(this, task)) return
+        const renderedAt = performance.now()
+        recordPerformanceDuration(
+          'sftp_refresh_ms',
+          renderedAt - refreshStartedAt,
+          { outcome: cachedRemote ? 'cache-refreshed' : 'completed' }
+        )
+        if (!this.firstSftpReadyRecorded) {
+          this.firstSftpReadyRecorded = true
+          recordPerformanceDuration(
+            'first_sftp_ready_ms',
+            renderedAt - this.sftpReadyStartedAt,
+            { outcome: 'completed' }
+          )
+        }
         this.props.editTab(tab.id, {
           sftpCreated: true
         })

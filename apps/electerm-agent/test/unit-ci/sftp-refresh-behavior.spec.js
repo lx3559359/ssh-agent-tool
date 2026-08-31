@@ -214,3 +214,18 @@ test('ordinary remote refresh does not schedule an unconditional second list', (
   assert.notEqual(end, -1)
   assert.doesNotMatch(body, /replaceSftpEntryTimer\(this, 'timer5'/)
 })
+
+test('SFTP records cached paint, first authoritative ready and refresh duration at render boundaries', () => {
+  const source = readSftpSource('sftp-entry.jsx')
+  const cachedStart = source.indexOf('applyCachedRemoteDirectory =')
+  const refreshStart = source.indexOf('remoteListUncoalesced = async')
+  const refreshEnd = source.indexOf('updateRemoteList = async', refreshStart)
+  const cachedBody = source.slice(cachedStart, refreshStart)
+  const refreshBody = source.slice(refreshStart, refreshEnd)
+
+  assert.match(cachedBody, /'sftp_cached_paint_ms'/)
+  assert.match(refreshBody, /const refreshStartedAt = performance\.now\(\)/)
+  assert.match(refreshBody, /'sftp_refresh_ms'/)
+  assert.match(refreshBody, /'first_sftp_ready_ms'/)
+  assert.match(refreshBody, /this\.firstSftpReadyRecorded/)
+})

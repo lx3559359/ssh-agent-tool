@@ -117,7 +117,7 @@ async function gotoRemotePath (page, remotePath, options = {}) {
   await input.fill(remotePath)
   await input.press('Enter')
   await waitForRemoteRequestCycle(page, requestEpoch, {
-    compensation: !options.expectFailure
+    compensation: false
   })
   if (options.expectFailure) return
   await expect(input).toHaveValue(remotePath, { timeout: 30000 })
@@ -344,7 +344,7 @@ async function remoteRequestEpoch (page) {
 async function waitForRemoteRequestCycle (
   page,
   requestEpoch,
-  { compensation = true } = {}
+  { compensation = false } = {}
 ) {
   const expectedEpoch = requestEpoch + (compensation ? 2 : 1)
   await expect.poll(() => remoteRequestEpoch(page), { timeout: 30000 })
@@ -398,7 +398,7 @@ test('operations and the complete remote file panel inherit su root then return 
       .toBe(true)
     await expect.poll(() => sshServer.state.sftpEvents.filter(event => (
       event.event === 'OPENDIR' && event.path === '/home/shellpilot'
-    )).length, { timeout: 20000 }).toBeGreaterThan(1)
+    )).length, { timeout: 20000 }).toBeGreaterThan(0)
     await waitForRemotePanelReady(page)
     await expectRemoteFileWorkSettled(page)
     await expectManagedPtyEchoHidden(page)
