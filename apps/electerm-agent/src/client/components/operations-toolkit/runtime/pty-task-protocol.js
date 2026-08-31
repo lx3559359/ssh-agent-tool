@@ -38,7 +38,7 @@ export function buildPtyTaskCommand ({ token: providedToken, script }) {
   const token = assertPtyTaskToken(providedToken)
   const encodedScript = encodeUtf8Base64(script)
   const marker = `\\033]${markerOsc};${markerName};%s`
-  return [
+  const body = [
     `__sp_token=${shellQuote(token)};`,
     `__sp_script=${shellQuote(encodedScript)};`,
     '__sp_status=125;',
@@ -52,8 +52,9 @@ export function buildPtyTaskCommand ({ token: providedToken, script }) {
     'else',
     '  printf "无法识别当前 Shell 有效身份\\n";',
     'fi;',
-    'sh -c "exit $__sp_status"'
+    'exit "$__sp_status"'
   ].join(' ')
+  return `sh -c ${shellQuote(body)}`
 }
 
 function decodeUtf8Base64 (value) {
