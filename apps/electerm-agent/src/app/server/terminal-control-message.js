@@ -3,14 +3,56 @@ const {
   managedRequestIdPattern,
   maxManagedCommandBytes
 } = require('./managed-terminal-input')
+const managedInputProtocolVersion = 2
+const managedInputStatuses = new Set([
+  'accepted',
+  'written',
+  'rejected',
+  'interrupted'
+])
 const terminalControlActions = new Set([
   'keepalive',
   'zmodem-event',
   'trzsz-event',
   'xmodem-event',
   'managed-input',
-  'managed-input-interrupt'
+  'managed-input-interrupt',
+  'managed-input-capabilities-request'
 ])
+
+function buildTerminalControlMessage (action, fields = {}) {
+  return JSON.stringify({
+    [terminalControlFlag]: true,
+    action,
+    ...fields
+  })
+}
+
+function buildManagedInputCapabilities () {
+  return buildTerminalControlMessage('managed-input-capabilities', {
+    protocolVersion: managedInputProtocolVersion
+  })
+}
+
+function buildManagedInputStatus (requestId, status) {
+  if (!managedRequestIdPattern.test(String(requestId || ''))) {
+    throw new Error('managed input requestId is invalid')
+  }
+  if (!managedInputStatuses.has(status)) {
+    throw new Error('managed input status is invalid')
+  }
+  return buildTerminalControlMessage('managed-input-status', {
+    requestId,
+    status
+  })
+}
+
+function invalidTerminalControlMessage () {
+  return {
+    [terminalControlFlag]: true,
+    action: 'invalid-control'
+  }
+}
 
 function parseTerminalControlMessage (msg) {
   if (Buffer.isBuffer(msg)) {
@@ -31,7 +73,7 @@ function parseTerminalControlMessage (msg) {
     return null
   }
   if (!terminalControlActions.has(parsed.action)) {
-    return null
+    return invalidTerminalControlMessage()
   }
   if (parsed.action === 'managed-input' && (
     !managedRequestIdPattern.test(parsed.requestId) ||
@@ -39,10 +81,13 @@ function parseTerminalControlMessage (msg) {
     !parsed.command.length ||
     Buffer.byteLength(parsed.command) > maxManagedCommandBytes
   )) {
-    return null
+    return invalidTerminalControlMessage()
   }
   return parsed
 }
 
 exports.terminalControlFlag = terminalControlFlag
+exports.managedInputProtocolVersion = managedInputProtocolVersion
+exports.buildManagedInputCapabilities = buildManagedInputCapabilities
+exports.buildManagedInputStatus = buildManagedInputStatus
 exports.parseTerminalControlMessage = parseTerminalControlMessage
