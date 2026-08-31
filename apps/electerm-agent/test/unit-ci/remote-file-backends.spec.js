@@ -2055,6 +2055,37 @@ test('privileged reads use bounded logical streams and never send secrets throug
   }
 })
 
+test('privileged digest returns one bound SHA-256 proof without exporting bytes', async () => {
+  const content = Buffer.alloc(32 * 1024 * 1024, 0x6d)
+  const harness = createBackendHarness({ rootFiles: { '/root/large': content } })
+  const backend = await createRootBackend(harness)
+  const controller = new AbortController()
+
+  const result = await backend.sftp.digestFile('/root/large', {
+    expectedSize: content.length,
+    signal: controller.signal
+  })
+
+  assert.deepEqual(result, {
+    size: content.length,
+    digest: sha256(content),
+    digestAlgorithm: 'SHA-256'
+  })
+  const digestRequests = harness.requests.filter(request => (
+    request.operation === 'sha256-bound' && request.args.path === '/root/large'
+  ))
+  assert.equal(digestRequests.length, 1)
+  assert.equal(digestRequests[0].args.expectedSize, String(content.length))
+  assert.equal(digestRequests[0].args.maxSize, String(content.length))
+  assert.equal(harness.requests.some(request => (
+    request.operation === 'stage-export-range'
+  )), false)
+  assert.equal(harness.sftpReads.some(read => (
+    read.remotePath.includes('/download-')
+  )), false)
+  await backend.release()
+})
+
 test('privileged resume fingerprints a huge declared file with exactly two bounded digest windows', async () => {
   const hugeSize = 1024 * 1024 * 1024 * 1024
   const boundary = 64 * 1024
@@ -2662,7 +2693,7 @@ test('privileged chunk streams re-export after EOF and observe same-size source 
   await backend.release()
 })
 
-test('real transaction adapter re-exports a privileged source and refuses same-size external delete changes', async () => {
+test('real transaction adapter uses remote proofs and refuses same-size external delete changes', async () => {
   const { createSftpTransactionAdapter } = await importModule(
     'src/client/components/sftp/sftp-transaction-adapter.js'
   )
@@ -2704,6 +2735,10 @@ test('real transaction adapter re-exports a privileged source and refuses same-s
   const exportsAfterPrepare = harness.requests.filter(request =>
     request.operation === 'stage-export-range' &&
     request.args.sourcePath === sourcePath).length
+  const digestsAfterPrepare = harness.requests.filter(request =>
+    request.operation === 'sha256-bound' && request.args.path === sourcePath).length
+  assert.equal(exportsAfterPrepare, 0)
+  assert.ok(digestsAfterPrepare > 0)
 
   harness.privilegedNodes.get(sourcePath).content = Buffer.from('BBBB')
   await assert.rejects(
@@ -2711,9 +2746,12 @@ test('real transaction adapter re-exports a privileged source and refuses same-s
     /changed|external|original|变化|未执行/i
   )
   assert.equal(harness.privilegedNodes.get(sourcePath).content.toString(), 'BBBB')
-  assert.ok(harness.requests.filter(request =>
+  assert.equal(harness.requests.filter(request =>
     request.operation === 'stage-export-range' &&
-    request.args.sourcePath === sourcePath).length > exportsAfterPrepare)
+    request.args.sourcePath === sourcePath).length, exportsAfterPrepare)
+  assert.ok(harness.requests.filter(request =>
+    request.operation === 'sha256-bound' &&
+    request.args.path === sourcePath).length > digestsAfterPrepare)
   await backend.release()
 })
 

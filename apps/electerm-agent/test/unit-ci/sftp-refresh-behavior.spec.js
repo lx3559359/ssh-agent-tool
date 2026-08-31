@@ -139,7 +139,7 @@ test('opening SFTP retries a hidden preload failure without repeating an initial
 
 test('hidden SFTP preload failures are cleaned up without interrupting SSH', () => {
   const source = readSftpSource('sftp-entry.jsx')
-  const start = source.indexOf('remoteList = async (')
+  const start = source.indexOf('remoteListUncoalesced = async (')
   const end = source.indexOf('updateRemoteList = async (', start)
   const body = source.slice(start, end)
 
@@ -149,7 +149,8 @@ test('hidden SFTP preload failures are cleaned up without interrupting SSH', () 
   assert.match(body, /await destroyCandidate\(\)/)
   assert.match(body, /sftpCreated: false/)
   assert.match(body, /if \(this\.isSftpVisible\(\)\) \{/)
-  assert.match(body, /this\.onError\(this\.normalizeSftpError\(error\)\)/)
+  assert.match(body, /const normalizedError = this\.normalizeSftpError\(error\)/)
+  assert.match(body, /this\.onError\(normalizedError\)/)
 })
 
 test('SFTP transport supplies a localized fallback for empty backend errors', () => {
@@ -183,8 +184,33 @@ test('background safe delete calibration can surface one actionable warning', ()
 
 test('background safe delete calibration does not block the remote file list', () => {
   const source = readSftpSource('sftp-entry.jsx')
-  const start = source.indexOf('remoteList = async')
+  const start = source.indexOf('remoteListUncoalesced = async')
   const end = source.indexOf('\n  updateRemoteList = async', start)
   const body = source.slice(start, end)
   assert.match(body, /if \(!returnList && !options\.suppressLoading\)/)
+})
+
+test('SFTP cached refresh preserves visible rows and exposes live status', () => {
+  const source = readSftpSource('sftp-entry.jsx')
+  assert.match(source, /remoteDirectoryCache\.get\(cacheKey\)/)
+  assert.match(source, /remoteRefreshState:\s*'cached-refreshing'/)
+  assert.match(source, /shellpilotSftpShowingCachedRefreshing/)
+  assert.doesNotMatch(
+    source.slice(
+      source.indexOf('applyCachedRemoteDirectory'),
+      source.indexOf('remoteListUncoalesced')
+    ),
+    /remote:\s*\[\]/
+  )
+})
+
+test('ordinary remote refresh does not schedule an unconditional second list', () => {
+  const source = readSftpSource('sftp-entry.jsx')
+  const start = source.indexOf('remoteListUncoalesced = async')
+  const end = source.indexOf('updateRemoteList = async', start)
+  const body = source.slice(start, end)
+
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+  assert.doesNotMatch(body, /replaceSftpEntryTimer\(this, 'timer5'/)
 })

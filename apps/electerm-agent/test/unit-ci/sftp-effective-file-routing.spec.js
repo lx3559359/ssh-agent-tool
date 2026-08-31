@@ -260,6 +260,11 @@ function createEntryHarness ({
     remoteFileIdentityEpoch: 0,
     activeRemoteFileLeases: new Set(),
     uncertainRemoteFileLeases: new Set(),
+    remoteDirectoryCache: {
+      get: () => null,
+      set: () => {},
+      clear: () => {}
+    },
     buildTree: remote => new Map(remote.map(file => [file.id, file])),
     updateRemoteList: async remote => remote,
     normalizeSftpError: error => error,
@@ -320,7 +325,7 @@ function createEntryHarness ({
         task,
         { reportError: reportBackgroundError }
       )
-      installClassField(entry, 'remoteList', {
+      installClassField(entry, 'remoteListUncoalesced', {
         Client: client || (async () => {
           throw new Error('unexpected SFTP client construction')
         }),
@@ -337,6 +342,7 @@ function createEntryHarness ({
         destroySftpEntryClientOnce: lifecycle.destroySftpEntryClientOnce,
         deepCopy: value => structuredClone(value),
         normalizeRemotePath: value => value,
+        buildRemoteDirectoryCacheKey: value => JSON.stringify(value),
         typeMap,
         uniq: values => [...new Set(values)],
         preserveSftpDraftItems: (_oldRemote, remote) => remote,
@@ -347,6 +353,7 @@ function createEntryHarness ({
         unexpectedPacketErrorDesc: 'unexpected packet',
         sftpRetryInterval: 1
       })
+      entry.remoteList = entry.remoteListUncoalesced
       return { entry, stateWrites, lifecycle }
     })
 }
@@ -708,7 +715,7 @@ test('unmount waits for an active root AI preview before transport destroy', asy
   assert.deepEqual(calls, ['read', 'release', 'released', 'destroy'])
 })
 
-test('one-second compensation refresh acquires a new backend and never captures a released backend', async () => {
+test('ordinary remote refresh performs one authoritative backend read', async () => {
   const calls = []
   const timers = []
   let capabilityIndex = 0
@@ -742,17 +749,15 @@ test('one-second compensation refresh acquires a new backend and never captures 
   }
 
   await entry.remoteList(false, '/root')
-  assert.equal(timers.length, 1)
-  await timers[0]()
 
-  assert.equal(capabilityIndex, 2)
+  assert.equal(timers.length, 0)
+  assert.equal(capabilityIndex, 1)
   assert.deepEqual(calls.map(call => call[0]), [
-    'list', 'readlink', 'stat', 'release',
     'list', 'readlink', 'stat', 'release'
   ])
 })
 
-test('compensation timer observes aborts and reports non-abort failures once', async () => {
+test('ordinary remote refresh schedules no delayed compensation callback', async () => {
   const timers = []
   const reports = []
   const acquire = async () => ({
@@ -769,19 +774,8 @@ test('compensation timer observes aborts and reports non-abort failures once', a
   })
   entry.updateRemoteList = async remote => remote
   await entry.remoteList(false, '/root')
-  assert.equal(timers.length, 1)
-
-  const abort = new Error('unmounted')
-  abort.name = 'AbortError'
-  abort.code = 'ABORT_ERR'
-  entry.remoteList = () => Promise.reject(abort)
-  assert.equal(await timers[0](), undefined)
+  assert.equal(timers.length, 0)
   assert.deepEqual(reports, [])
-
-  const failure = new Error('refresh transport failed')
-  entry.remoteList = () => Promise.reject(failure)
-  assert.equal(await timers[0](), undefined)
-  assert.deepEqual(reports, [failure])
 })
 
 test('operation acquired after unmount releases once without running work or setting state', async () => {
@@ -860,10 +854,11 @@ test('remote list rejects after unmount without starting lifecycle or setting st
     remoteFileUnmounted: true,
     setState: () => calls.push('set-state')
   }
-  installClassField(entry, 'remoteList', {
+  installClassField(entry, 'remoteListUncoalesced', {
     remoteFileOperationUnmounted,
     beginSftpEntryRemoteTask: () => calls.push('begin-task')
   })
+  entry.remoteList = entry.remoteListUncoalesced
 
   await assert.rejects(entry.remoteList(false, '/root'), error => (
     error.name === 'AbortError' && error.code === 'ABORT_ERR'
@@ -1651,7 +1646,7 @@ test('overlapping lists release both capabilities and only the latest request co
 })
 
 test('routing source exposes only fixed backend operations to file items', () => {
-  const remoteListStart = entrySource.indexOf('remoteList = async')
+  const remoteListStart = entrySource.indexOf('remoteListUncoalesced = async')
   const remoteListEnd = entrySource.indexOf('\n  updateRemoteList = async', remoteListStart)
   const remoteList = entrySource.slice(remoteListStart, remoteListEnd)
   const filePropsStart = entrySource.indexOf('getFileProps = (file, type) =>')
@@ -1668,8 +1663,7 @@ test('routing source exposes only fixed backend operations to file items', () =>
   assert.match(entrySource, /await backend\.list\(\s*remotePath/)
   assert.match(remoteList, /withRemoteFileOperation\(/)
   assert.match(remoteList, /await this\.updateRemoteList\([^)]*backend/)
-  assert.match(remoteList, /remoteList\(\s*true,\s*remotePath/)
-  assert.doesNotMatch(remoteList, /timer5[\s\S]*updateRemoteList\(/)
+  assert.doesNotMatch(remoteList, /replaceSftpEntryTimer\(this, 'timer5'/)
   assert.match(entrySource, /resolveRemoteLink = async \([^)]*backend/)
   assert.match(entrySource, /remoteDel = async \(file, backend\)/)
   assert.match(fileProps, /'readRemoteFile'/)

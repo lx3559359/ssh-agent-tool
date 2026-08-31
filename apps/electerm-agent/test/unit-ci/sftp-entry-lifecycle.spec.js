@@ -526,7 +526,7 @@ test('SFTP entry validates the latest lifecycle before transport and list writes
     __dirname,
     '../../src/client/components/sftp/sftp-entry.jsx'
   ), 'utf8')
-  const start = source.indexOf('remoteList = async')
+  const start = source.indexOf('remoteListUncoalesced = async')
   const end = source.indexOf('\n  updateRemoteList = async', start)
   const method = source.slice(start, end)
 
@@ -546,6 +546,34 @@ test('SFTP entry validates the latest lifecycle before transport and list writes
   )
   assert.doesNotMatch(method, /this\.sftp\s*=\s*sftp/)
   assert.match(method, /updateRemoteList\(remote, remotePath, sftp, task\)/)
+})
+
+test('SFTP entry clears directory cache on unmount rebind and explicit reconnect', () => {
+  const source = fs.readFileSync(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-entry.jsx'
+  ), 'utf8')
+  const unmountStart = source.indexOf('componentWillUnmount ()')
+  const unmountEnd = source.indexOf('\n  initFtpData =', unmountStart)
+  const initStart = source.indexOf('initData = (')
+  const initEnd = source.indexOf('\n  shouldRenderRemote =', initStart)
+  const reloadStart = source.indexOf('handleReloadRemoteSftp = async')
+  const reloadEnd = source.indexOf('\n  handleUploadFromBrowser', reloadStart)
+  const unmount = source.slice(unmountStart, unmountEnd)
+  const init = source.slice(initStart, initEnd)
+  const reload = source.slice(reloadStart, reloadEnd)
+
+  assert.match(unmount, /remoteDirectoryCache\?\.clear\?\.\(\)/)
+  assert.match(
+    init,
+    /String\(this\.sshSessionGeneration \|\| ''\)/
+  )
+  assert.match(
+    init,
+    /String\(sshSessionGeneration \|\| ''\)/
+  )
+  assert.match(init, /remoteDirectoryCache\?\.clear\?\.\(\)/)
+  assert.match(reload, /remoteDirectoryCache\?\.clear\?\.\(\)/)
 })
 
 test('SFTP client disposal detaches first and absorbs destroy rejection', async () => {

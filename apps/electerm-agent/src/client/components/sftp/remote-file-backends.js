@@ -150,6 +150,23 @@ function normalizeCancellableOptions (value) {
   return Object.freeze({ signal })
 }
 
+function normalizeDigestOptions (value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value)) ||
+    Object.keys(value).some(key => !['expectedSize', 'signal'].includes(key))) {
+    throw new Error('root 文件后端 digest options 无效')
+  }
+  const expectedSize = Number(value.expectedSize)
+  if (!Number.isSafeInteger(expectedSize) || expectedSize < 0 ||
+    expectedSize > copyLimits.maxTotalBytes) {
+    throw new Error('root 文件后端 digest expectedSize 超出安全预算')
+  }
+  const { signal } = normalizeCancellableOptions(
+    Object.hasOwn(value, 'signal') ? { signal: value.signal } : undefined
+  )
+  return Object.freeze({ expectedSize, signal })
+}
+
 function normalizeRecoveryDescribeOptions (value) {
   if (value === undefined) {
     return Object.freeze({ signal: undefined, allowAbsent: false })
@@ -2484,6 +2501,36 @@ export async function createPrivilegedFileBackend ({
         hasMore = chunk.hasMore
       } while (hasMore)
       return new TextDecoder().decode(concatBytes(parts, length))
+    },
+    async digestFile (path, options) {
+      const remotePath = canonicalFilePath(path)
+      const { expectedSize, signal } = normalizeDigestOptions(options)
+      throwIfAborted(signal)
+      const metadata = requireBoundMetadata(
+        await rawFacade.lstat(remotePath, { signal }),
+        remotePath,
+        'digest source'
+      )
+      if (metadata.type !== 'file') {
+        throw new Error('root 文件后端 digest source 必须为普通文件')
+      }
+      if (metadata.size !== expectedSize) {
+        throw new Error('root 文件后端 digest source 大小发生变化')
+      }
+      const proof = await boundDigest({
+        path: remotePath,
+        metadata,
+        maxSize: expectedSize
+      }, 'sha256-bound', 0, readChunkBytes, signal)
+      throwIfAborted(signal)
+      if (proof.size !== expectedSize) {
+        throw new Error('root 文件后端 digest proof 大小发生变化')
+      }
+      return Object.freeze({
+        size: proof.size,
+        digest: proof.sha256,
+        digestAlgorithm: 'SHA-256'
+      })
     },
     async readFileChunk (path, options = {}) {
       const remotePath = canonicalFilePath(path)

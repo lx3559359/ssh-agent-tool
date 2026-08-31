@@ -348,6 +348,7 @@ export function disposeSftpEntryClient (entry) {
 }
 
 export async function reconnectSftpEntryRemote (entry) {
+  entry.remoteDirectoryCache?.clear?.()
   const drain = drainRemoteFileGeneration(entry)
   await drain.promise
   if (!activateRemoteFileGeneration(entry, drain.generation)) return undefined
@@ -365,6 +366,9 @@ export async function bindSftpEntryRemoteSession (entry, binding = {}) {
   const terminalSessionChanged =
     String(entry.sshSessionGeneration || '').trim() !== nextGeneration ||
     String(entry.sshTerminalPid || '').trim() !== nextTerminalPid
+  if (terminalSessionChanged) {
+    entry.remoteDirectoryCache?.clear?.()
+  }
   const drain = drainRemoteFileGeneration(entry)
   await drain.promise
   if (!isCurrentRemoteFileGeneration(entry, drain.generation) ||

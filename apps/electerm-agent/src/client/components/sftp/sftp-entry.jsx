@@ -9,7 +9,6 @@ import clone from '../../common/to-simple-obj'
 import { isEqual, some, isArray, pick, uniq, debounce } from 'lodash-es'
 import FileSection from './file-item'
 import resolve from '../../common/resolve'
-import wait from '../../common/wait'
 import isAbsPath from '../../common/is-absolute-path'
 import classnames from 'classnames'
 import { handleErr } from '../../common/fetch'
@@ -126,6 +125,11 @@ import {
   readRemoteFileBase64Preview,
   REMOTE_ATTACHMENT_MAX_BYTES
 } from './remote-file-context-reader.js'
+import {
+  buildRemoteDirectoryCacheKey,
+  createRemoteDirectoryCache
+} from './remote-directory-cache.js'
+import { recordPerformanceDuration } from '../../common/quality/quality-events.js'
 import './sftp.styl'
 
 const e = window.translate
@@ -137,6 +141,18 @@ const transferSafetyTerminalStates = new Set([
   'failed',
   'cancelled'
 ])
+
+const waitForSafeDeleteDialogPaint = () => new Promise(resolve => {
+  if (typeof globalThis.requestAnimationFrame !== 'function') {
+    setTimeout(resolve, 0)
+    return
+  }
+  globalThis.requestAnimationFrame(() => {
+    // A timer queued from requestAnimationFrame runs after the browser has
+    // had an opportunity to paint the already-mounted confirmation dialog.
+    setTimeout(resolve, 0)
+  })
+})
 
 function abortRemoteFileOperation (signal) {
   if (!signal?.aborted) return
@@ -241,9 +257,12 @@ export default class Sftp extends Component {
         channel: 'unknown'
       },
       remoteFileStatus: 'idle',
+      remoteRefreshState: 'idle',
+      remoteRefreshError: '',
       sftpRecoveryRecords: readSafetyOperationRecords(ls)
     }
     this.retryCount = 0
+    this.remoteDirectoryCache = createRemoteDirectoryCache()
     this.remoteFileOperationBackends = new Map()
     this.remoteFileOperationBackendPins = new Map()
     this.transferSafetySessionPins = new Map()
@@ -338,6 +357,7 @@ export default class Sftp extends Component {
   componentWillUnmount () {
     if (this.remoteFileUnmounted) return this.remoteFileDisposalPromise
     this.remoteFileUnmounted = true
+    this.remoteDirectoryCache?.clear?.()
     this.resetRemoteFileLeaseOutcome?.({ publish: false })
     const transferSettlement = this.quiesceActiveTransfers?.()
     const preparedDrain = transferSettlement
@@ -1569,7 +1589,7 @@ export default class Sftp extends Component {
         externalSignal: options.signal,
         translate: e
       })
-      await wait(0)
+      await waitForSafeDeleteDialogPaint()
       if (dialog.signal.aborted) return false
       const operationIds = targets.map(() => (
         `sftp-delete-${Date.now()}-${generate()}`
@@ -2407,6 +2427,11 @@ export default class Sftp extends Component {
   }
 
   initData = (terminalId, port, sshSessionGeneration, sshTerminalPid) => {
+    const previousGeneration = String(this.sshSessionGeneration || '')
+    const nextGeneration = String(sshSessionGeneration || '')
+    if (previousGeneration !== nextGeneration) {
+      this.remoteDirectoryCache?.clear?.()
+    }
     return bindSftpEntryRemoteSession(this, {
       terminalId,
       port,
@@ -3058,7 +3083,72 @@ export default class Sftp extends Component {
     })
   }
 
-  remoteList = async (
+  buildRemoteListRequestKey = ({
+    returnList,
+    remotePath,
+    commitList
+  }) => [
+    String(this.sshSessionGeneration || ''),
+    normalizeRemotePath(remotePath || ''),
+    returnList ? 'return' : 'paint',
+    commitList ? 'commit' : 'no-commit'
+  ].join('\u0000')
+
+  remoteList = (...args) => {
+    const [
+      returnList = false,
+      remotePathReal,
+      oldPath,
+      options = {}
+    ] = args
+    const requestKey = this.buildRemoteListRequestKey({
+      returnList,
+      remotePath: remotePathReal || this.state.remotePath || '',
+      commitList: options.commitList === true
+    })
+    return this.remoteDirectoryCache.runRequest(
+      requestKey,
+      () => this.remoteListUncoalesced(
+        returnList,
+        remotePathReal,
+        oldPath,
+        options
+      )
+    )
+  }
+
+  applyCachedRemoteDirectory = (remote, generation, task) => {
+    const startedAt = performance.now()
+    this.setState(prevState => {
+      if (!generation.accepting ||
+        !isCurrentRemoteFileGeneration(this, generation) ||
+        !isCurrentSftpEntryRemoteTask(this, task)) return null
+      const nextRemote = preserveSftpDraftItems(prevState.remote, remote)
+      const update = {
+        remote: nextRemote,
+        remoteFileTree: this.buildTree(nextRemote, typeMap.remote),
+        remoteLoading: false,
+        remoteRefreshState: 'cached-refreshing',
+        remoteRefreshError: ''
+      }
+      return prevState.selectedType === typeMap.remote
+        ? {
+            ...update,
+            selectedFiles: reconcileSelectedFileIds(
+              prevState.remote,
+              nextRemote,
+              prevState.selectedFiles
+            )
+          }
+        : update
+    }, () => recordPerformanceDuration(
+      'sftp_cached_paint_ms',
+      performance.now() - startedAt,
+      { outcome: 'completed' }
+    ))
+  }
+
+  remoteListUncoalesced = async (
     returnList = false,
     remotePathReal,
     oldPath,
@@ -3091,7 +3181,11 @@ export default class Sftp extends Component {
         if (!generation.accepting ||
           !isCurrentRemoteFileGeneration(this, generation) ||
           !isCurrentSftpEntryRemoteTask(this, task)) return null
-        return { remoteLoading: true }
+        return {
+          remoteLoading: true,
+          remoteRefreshState: 'refreshing',
+          remoteRefreshError: ''
+        }
       })
     }
     const oldRemote = deepCopy(
@@ -3100,6 +3194,26 @@ export default class Sftp extends Component {
     let sftp = this.sftp
     let candidateSftp = null
     let candidateCommitted = false
+    let cacheKey = ''
+    let cachedRemote = null
+    const applyCachedDirectory = runtimeIdentity => {
+      cacheKey = buildRemoteDirectoryCacheKey({
+        sshSessionGeneration: String(this.sshSessionGeneration || ''),
+        host: tab.host,
+        port: tab.port || this.port || 22,
+        username,
+        channel: runtimeIdentity?.channel ||
+          this.state.remoteFileIdentity?.channel || 'unknown',
+        effectiveUsername: runtimeIdentity?.effectiveUsername ||
+          this.state.remoteFileIdentity?.effectiveUsername || '',
+        path: normalizeRemotePath(remotePath)
+      })
+      const cached = this.remoteDirectoryCache.get(cacheKey)
+      if (cached && !returnList) {
+        cachedRemote = cached.value
+        this.applyCachedRemoteDirectory(cachedRemote, generation, task)
+      }
+    }
     const destroyCandidate = async () => {
       if (!candidateSftp || candidateCommitted) return false
       return destroySftpEntryClientOnce(this, candidateSftp)
@@ -3246,6 +3360,10 @@ export default class Sftp extends Component {
       let remote
       if (this.type === 'ftp') {
         assertCurrentGeneration()
+        applyCachedDirectory({
+          channel: 'ftp',
+          effectiveUsername: username
+        })
         remote = await this.sftpList(sftp, remotePath)
         assertCurrentGeneration()
         if (!isCurrentSftpEntryRemoteTask(this, task)) return
@@ -3263,7 +3381,8 @@ export default class Sftp extends Component {
           id: `list:${remotePath}`,
           signal: options.signal,
           lifecycleTask: task
-        }, async backend => {
+        }, async (backend, capability) => {
+          applyCachedDirectory(capability.runtimeIdentity)
           const listed = await this.sftpList(backend, remotePath, {
             signal: options.signal
           })
@@ -3287,11 +3406,16 @@ export default class Sftp extends Component {
       }
       assertCurrentGeneration()
       if (!isCurrentSftpEntryRemoteTask(this, task)) return
+      if (cacheKey) {
+        this.remoteDirectoryCache.set(cacheKey, remote)
+      }
       const update = {
         remote,
         remoteFileTree: this.buildTree(remote, typeMap.remote),
         inited: true,
-        remoteLoading: false
+        remoteLoading: false,
+        remoteRefreshState: 'idle',
+        remoteRefreshError: ''
       }
       if (!noPathInit) {
         update.remotePath = remotePath
@@ -3339,24 +3463,6 @@ export default class Sftp extends Component {
           sftpCreated: true
         })
       })
-      if (!returnList && !options.skipCompensation) {
-        replaceSftpEntryTimer(this, 'timer5', () => {
-          if (!generation.accepting ||
-            !isCurrentRemoteFileGeneration(this, generation) ||
-            !isCurrentSftpEntryRemoteTask(this, task)) return
-          return this.runSftpBackgroundTask(() => this.remoteList(
-            true,
-            remotePath,
-            undefined,
-            {
-              commitList: true,
-              skipCompensation: true,
-              suppressLoading: true,
-              suppressVisibleError: true
-            }
-          ))
-        }, 1000)
-      }
     } catch (error) {
       if (!generation.accepting ||
         !isCurrentRemoteFileGeneration(this, generation) ||
@@ -3376,12 +3482,17 @@ export default class Sftp extends Component {
           sftpCreated: false
         })
       }
+      const normalizedError = this.normalizeSftpError(error)
+      const fallbackRemote = cachedRemote || oldRemote
       const update = {
         remoteLoading: false,
-        remote: oldRemote,
-        loadingSftp: false
+        remote: fallbackRemote,
+        remoteFileTree: this.buildTree(fallbackRemote, typeMap.remote),
+        loadingSftp: false,
+        remoteRefreshState: cachedRemote ? 'stale-error' : 'idle',
+        remoteRefreshError: normalizedError.message
       }
-      if (oldPath) {
+      if (oldPath && !cachedRemote) {
         update.remotePath = oldPath
         update.remotePathTemp = oldPath
       }
@@ -3393,7 +3504,7 @@ export default class Sftp extends Component {
       })
       if (!options.suppressVisibleError) {
         if (this.isSftpVisible()) {
-          this.onError(this.normalizeSftpError(error))
+          this.onError(normalizedError)
         }
       }
       if (options.rethrow) throw error
@@ -3584,6 +3695,7 @@ export default class Sftp extends Component {
   }
 
   handleReloadRemoteSftp = async () => {
+    this.remoteDirectoryCache?.clear?.()
     this.invalidateRemoteFileIdentity()
     this.sftpSafetyProgressHandlers.clear()
     this.sftpSafetyAdapter.discardAllPreparedProofs()
@@ -3867,7 +3979,11 @@ export default class Sftp extends Component {
   renderSftpPanelTitle (type, username, host) {
     if (type === typeMap.remote) {
       const selectedCount = this.getRemoteSafetyTargets().length
-      const { remoteFileIdentity, remoteFileStatus } = this.state
+      const {
+        remoteFileIdentity,
+        remoteFileStatus,
+        remoteRefreshState
+      } = this.state
       const effectiveChannel = remoteFileIdentity?.channel || 'unknown'
       const showSshFileIdentity = shouldRenderSshFileIdentity(
         this.props,
@@ -3933,6 +4049,21 @@ export default class Sftp extends Component {
                       </span>
                       )
                     : null}
+                </span>
+                )
+              : null}
+            {remoteRefreshState !== 'idle'
+              ? (
+                <span
+                  className={`sftp-refresh-status is-${remoteRefreshState}`}
+                  role='status'
+                  aria-live='polite'
+                >
+                  {e(remoteRefreshState === 'cached-refreshing'
+                    ? 'shellpilotSftpShowingCachedRefreshing'
+                    : remoteRefreshState === 'stale-error'
+                      ? 'shellpilotSftpShowingCachedRefreshFailed'
+                      : 'shellpilotSftpRefreshing')}
                 </span>
                 )
               : null}
