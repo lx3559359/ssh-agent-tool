@@ -176,6 +176,9 @@ class Term extends Component {
       interrupt: () => (
         this.attachAddon?.interruptManagedPtyCommand() === true
       ),
+      onIdle: () => (
+        this.attachAddon?.flushPendingInput?.()
+      ),
       subscribeOutput: listener => this.attachAddon.onRemoteOutput(listener),
       createToken: createPtyTaskToken
     })

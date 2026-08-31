@@ -125,6 +125,7 @@ export function createManagedPtyTaskController ({
   cancelSubmissionOutput = () => true,
   submitCommand,
   interrupt,
+  onIdle = () => {},
   subscribeOutput,
   createToken,
   recoveryTimeoutMs = defaultRecoveryTimeoutMs,
@@ -162,6 +163,17 @@ export function createManagedPtyTaskController ({
       cancelSubmissionOutput()
     } catch {
       // Echo cleanup is best effort; controller recovery remains authoritative.
+    }
+  }
+
+  function safeNotifyIdle () {
+    try {
+      const result = onIdle()
+      if (result && typeof result.catch === 'function') {
+        result.catch(() => {})
+      }
+    } catch {
+      // Releasing the PTY lease must not fail because queued input replay did.
     }
   }
 
@@ -446,6 +458,7 @@ export function createManagedPtyTaskController ({
     } catch (error) {
       if (generation === acquireGeneration && leaseOwner === owner) {
         leaseOwner = ''
+        safeNotifyIdle()
       }
       throw error
     }
@@ -460,6 +473,7 @@ export function createManagedPtyTaskController ({
         if (active) throw new Error('PTY 运维命令仍在执行，无法释放终端')
         leaseOwner = ''
         firstIdentity = null
+        safeNotifyIdle()
         return true
       }
     })
@@ -487,7 +501,10 @@ export function createManagedPtyTaskController ({
       const recoveryOwner = lateRecovery.owner
       lateRecovery = null
       recoveryLocked = false
-      if (leaseOwner === recoveryOwner) leaseOwner = ''
+      if (leaseOwner === recoveryOwner) {
+        leaseOwner = ''
+        safeNotifyIdle()
+      }
       firstIdentity = null
       safeCancelSubmissionOutput()
       return true
@@ -505,8 +522,9 @@ export function createManagedPtyTaskController ({
 
   function handleUserInput (data) {
     if (!leaseOwner) return { handled: false, send: false }
-    if (data === '\x03') requestCancellation(active, 'user')
-    return { handled: true, send: false }
+    const isInterrupt = data === '\x03'
+    if (isInterrupt) requestCancellation(active, 'user')
+    return { handled: true, send: false, queue: !isInterrupt }
   }
 
   async function invalidate (reason = '终端连接已断开') {

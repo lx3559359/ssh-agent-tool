@@ -574,6 +574,9 @@ export default class AttachAddonCustom {
     this._lastInputTime = Date.now()
     const managed = this.term?.parent?.handleManagedPtyInput?.(data)
     if (managed?.handled === true) {
+      if (managed.queue === true) {
+        this.pendingInput.push(data)
+      }
       return managed.send === true
         ? this._sendToServerDirect(data)
         : undefined

@@ -175,6 +175,10 @@ async function createControllerHarness (options = {}) {
         }
       }
     },
+    onIdle: () => {
+      lifecycleEvents.push('idle')
+      return options.onIdle?.()
+    },
     createToken: () => (++tokenSequence).toString(16).padStart(32, '0'),
     recoveryTimeoutMs: options.recoveryTimeoutMs || 30
   })
@@ -465,7 +469,7 @@ test('timeout interrupts once and reports TimeoutError after prompt recovery', a
   assert.equal(await lease.release(), true)
 })
 
-test('managed input blocks ordinary keys and routes Ctrl+C through cancellation', async () => {
+test('managed input queues ordinary keys and routes Ctrl+C through cancellation', async () => {
   const harness = await createControllerHarness()
   const lease = await harness.controller.acquire('operations-input')
   const signalController = new AbortController()
@@ -480,11 +484,11 @@ test('managed input blocks ordinary keys and routes Ctrl+C through cancellation'
 
   assert.deepEqual(
     harness.controller.handleUserInput('x'),
-    { handled: true, send: false }
+    { handled: true, send: false, queue: true }
   )
   assert.deepEqual(
     harness.controller.handleUserInput('\x03'),
-    { handled: true, send: false }
+    { handled: true, send: false, queue: false }
   )
   assert.equal(harness.interrupts, 1)
   harness.emitCommandFinished(130)
@@ -497,6 +501,7 @@ test('managed input blocks ordinary keys and routes Ctrl+C through cancellation'
     return true
   })
   await lease.release()
+  assert.equal(harness.lifecycleEvents.at(-1), 'idle')
 
   assert.deepEqual(
     harness.controller.handleUserInput('x'),

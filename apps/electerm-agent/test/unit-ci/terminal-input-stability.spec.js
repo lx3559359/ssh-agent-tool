@@ -570,6 +570,30 @@ test('AttachAddon queues user input while shell integration output is suppressed
   assert.deepEqual(sent, ['echo ', 'shellpilot-e2e', '\r'])
 })
 
+test('AttachAddon preserves ordinary input while a managed PTY lease is active', async () => {
+  const { addon, parent, sent } = await createDirectAttachHarness()
+  let managedActive = true
+  parent.handleManagedPtyInput = data => managedActive
+    ? {
+        handled: true,
+        send: false,
+        queue: data !== '\x03'
+      }
+    : { handled: false, send: false }
+
+  addon.sendToServer('echo ')
+  addon.sendToServer('shellpilot-e2e')
+  addon.sendToServer('\r')
+  addon.sendToServer('\x03')
+
+  assert.deepEqual(sent, [])
+  assert.deepEqual(addon.pendingInput, ['echo ', 'shellpilot-e2e', '\r'])
+  managedActive = false
+  await addon.flushPendingInput()
+  assert.deepEqual(sent, ['echo ', 'shellpilot-e2e', '\r'])
+  assert.deepEqual(addon.pendingInput, [])
+})
+
 function createTrackerTerminal (options = {}) {
   const cols = options.cols || 40
   let oscHandler
