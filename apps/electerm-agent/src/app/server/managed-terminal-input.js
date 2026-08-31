@@ -53,11 +53,11 @@ function createManagedTerminalInputWriter (term, options = {}) {
     await Promise.race([Promise.resolve(promise), operation.cancellation.promise])
   }
 
-  async function submit ({ requestId, command } = {}) {
+  function submit ({ requestId, command } = {}) {
     if (disposed || active || !managedRequestIdPattern.test(requestId) ||
       typeof command !== 'string' || !command.length ||
       Buffer.byteLength(command) > maxManagedCommandBytes) {
-      return false
+      return null
     }
     const operation = {
       requestId,
@@ -65,23 +65,30 @@ function createManagedTerminalInputWriter (term, options = {}) {
       cancellation: createCancellationSignal()
     }
     active = operation
-    try {
-      const chunks = splitUtf8Chunks(command, chunkBytes)
-      for (const chunk of chunks) {
-        if (operation.cancelled || disposed) return false
-        const accepted = term.write(chunk)
-        if (accepted === false && typeof term.waitForWriteDrain === 'function') {
-          await waitUnlessCancelled(term.waitForWriteDrain(), operation)
-          if (operation.cancelled || disposed) return false
+    const completion = (async () => {
+      try {
+        const chunks = splitUtf8Chunks(command, chunkBytes)
+        for (const chunk of chunks) {
+          if (operation.cancelled || disposed) break
+          const accepted = term.write(chunk)
+          if (accepted === false &&
+            typeof term.waitForWriteDrain === 'function') {
+            await waitUnlessCancelled(term.waitForWriteDrain(), operation)
+          }
+          if (!operation.cancelled && !disposed) {
+            await waitUnlessCancelled(pause(pacingMs), operation)
+          }
         }
-        await waitUnlessCancelled(pause(pacingMs), operation)
+        if (!operation.cancelled && !disposed) {
+          term.write('\r')
+          return { requestId, status: 'written' }
+        }
+        return { requestId, status: 'interrupted' }
+      } finally {
+        if (active === operation) active = null
       }
-      if (operation.cancelled || disposed) return false
-      term.write('\r')
-      return true
-    } finally {
-      if (active === operation) active = null
-    }
+    })()
+    return Object.freeze({ requestId, completion })
   }
 
   function interrupt () {

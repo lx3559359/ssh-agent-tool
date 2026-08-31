@@ -40,6 +40,9 @@ const { parseTerminalControlMessage } = require('./terminal-control-message')
 const {
   createManagedTerminalInputWriter
 } = require('./managed-terminal-input')
+const {
+  createManagedTerminalChannel
+} = require('./managed-terminal-channel')
 const { serializeRunCmdError } = require('./session-common')
 const { serializeTunnelError } = require('./ssh-tunnel-runtime')
 const { projectSftpError } = require('../common/sftp-error-contract')
@@ -120,6 +123,10 @@ if (type === 'rdp') {
     const term = terminals(req.params.pid)
     const { pid } = term
     const managedInputWriter = createManagedTerminalInputWriter(term)
+    const managedInputChannel = createManagedTerminalChannel({
+      writer: managedInputWriter,
+      send: message => ws.send(message)
+    })
     log.debug('ws: connected to terminal ->', pid)
 
     const dataBuffer = []
@@ -292,7 +299,7 @@ if (type === 'rdp') {
       trzszManager.destroySession(pid)
       // Clean up xmodem session
       xmodemManager.destroySession(pid)
-      managedInputWriter.dispose()
+      managedInputChannel.dispose()
       term.kill()
       log.debug('Closed terminal ' + pid)
       // Clean things up
@@ -329,16 +336,7 @@ if (type === 'rdp') {
           term.write('\n\r\x1b[K')
           return
         }
-        if (parsed?.action === 'managed-input') {
-          managedInputWriter.submit(parsed).catch(error => {
-            log.error('Managed terminal input failed', error)
-          })
-          return
-        }
-        if (parsed?.action === 'managed-input-interrupt') {
-          managedInputWriter.interrupt()
-          return
-        }
+        if (managedInputChannel.handle(parsed)) return
         term.write(msg)
       } catch (ex) {
         log.error(ex)
