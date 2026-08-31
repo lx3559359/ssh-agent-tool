@@ -171,7 +171,7 @@ class Term extends Component {
         this.attachAddon?.submitManagedPtyCommand(
           command,
           this.cmdAddon?.getSessionNonce()
-        ) === true
+        )
       ),
       interrupt: () => (
         this.attachAddon?.interruptManagedPtyCommand() === true
@@ -1454,13 +1454,14 @@ class Term extends Component {
   }
 
   ensureOperationsPtyTrackerReady = async () => {
+    if (!this.term || !this.attachAddon || !this.pid || this.onClose) {
+      throw new Error('当前终端未连接，运维任务尚未开始。')
+    }
+    await this.attachAddon.ensureManagedPtyTransportReady()
     if (this.commandSafetyEntrypoint.hasPending()) {
       throw new Error('当前终端已有安全命令正在处理，请等待完成。')
     }
     if (this.isCommandSafetyTrackerReady()) return true
-    if (!this.term || !this.attachAddon || !this.pid || this.onClose) {
-      throw new Error('当前终端未连接，运维任务尚未开始。')
-    }
     if (this.term.buffer?.active?.type === 'alternate') {
       throw new Error('当前交互程序无法执行受控 PTY 运维任务。')
     }

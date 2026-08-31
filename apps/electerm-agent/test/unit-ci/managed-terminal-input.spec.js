@@ -57,6 +57,31 @@ test('managed terminal input writes bounded chunks and waits for SSH drain', asy
   )
 })
 
+test('managed terminal input yields without adding a default timer delay', async () => {
+  const pacing = []
+  const writes = []
+  const writer = createManagedTerminalInputWriter({
+    write: value => {
+      writes.push(value)
+      return true
+    }
+  }, {
+    chunkBytes: 4,
+    pause: milliseconds => {
+      pacing.push(milliseconds)
+      return Promise.resolve()
+    }
+  })
+
+  await writer.submit({
+    requestId: 'e'.repeat(32),
+    command: 'eight123'
+  }).completion
+
+  assert.deepEqual(pacing, [0, 0])
+  assert.deepEqual(writes, ['eigh', 't123', '\r'])
+})
+
 test('managed terminal interrupt drops the unsent tail and never appends Enter', async () => {
   const pacing = deferred()
   const writes = []

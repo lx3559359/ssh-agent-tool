@@ -123,6 +123,8 @@ async function createControllerHarness (options = {}) {
   let interrupts = 0
   let disposedListeners = 0
   const ensureGate = options.ensureGate || null
+  const acceptedGate = options.acceptedGate || null
+  const writtenGate = options.writtenGate || null
   const controller = createManagedPtyTaskController({
     ensureReady: async () => {
       if (ensureGate) await ensureGate.promise
@@ -150,7 +152,11 @@ async function createControllerHarness (options = {}) {
     submitCommand: command => {
       if (options.submitCommand === false) return false
       submissions.at(-1).submittedCommand = command
-      return true
+      return Object.freeze({
+        requestId: 'f'.repeat(32),
+        accepted: acceptedGate?.promise || Promise.resolve(true),
+        written: writtenGate?.promise || Promise.resolve(true)
+      })
     },
     cancelSubmissionOutput: () => {
       lifecycleEvents.push('cancel-output')
@@ -269,6 +275,7 @@ test('one lease rejects an effective identity change between steps', async () =>
     script: 'id',
     timeoutMs: 1000
   })
+  await Promise.resolve()
   harness.emitManagedStart({ uid: '0', username: 'root' })
   harness.emitManagedEnd(0)
   harness.emitCommandFinished(0)
@@ -280,6 +287,7 @@ test('one lease rejects an effective identity change between steps', async () =>
     script: 'id',
     timeoutMs: 1000
   })
+  await Promise.resolve()
   harness.emitManagedStart({ uid: '1000', username: 'hik' })
   assert.equal(harness.interrupts, 1)
   harness.emitCommandFinished(130)
@@ -320,6 +328,7 @@ test('abort sends one Ctrl+C and waits for tracked prompt recovery', async () =>
     timeoutMs: 1000,
     signal: signalController.signal
   })
+  await Promise.resolve()
   harness.emitManagedStart()
   signalController.abort()
   signalController.abort()
@@ -351,6 +360,7 @@ test('cancelled command unlocks on a new prompt without command finish', async (
     timeoutMs: 1000,
     signal: signalController.signal
   })
+  await Promise.resolve()
   harness.emitManagedStart()
 
   signalController.abort()
@@ -388,6 +398,7 @@ test('late authenticated prompt unlocks after cancellation recovery deadline', a
     timeoutMs: 1000,
     signal: signalController.signal
   })
+  await Promise.resolve()
   harness.emitManagedStart()
   signalController.abort()
 
@@ -423,6 +434,7 @@ test('cancellation recovery without a prompt remains locked until invalidation',
     timeoutMs: 1000,
     signal: signalController.signal
   })
+  await Promise.resolve()
   harness.emitManagedStart()
   signalController.abort()
 
@@ -463,6 +475,7 @@ test('managed input blocks ordinary keys and routes Ctrl+C through cancellation'
     timeoutMs: 1000,
     signal: signalController.signal
   })
+  await Promise.resolve()
   harness.emitManagedStart()
 
   assert.deepEqual(
@@ -541,6 +554,73 @@ test('abort during tracker arming never submits the managed command', async () =
   }), error => error.name === 'AbortError')
   assert.equal(harness.submissions.at(-1).submittedCommand, undefined)
   assert.equal(harness.interrupts, 0)
+  assert.equal(await lease.release(), true)
+})
+
+test('transport rejection cleans tracking without sending Ctrl+C', async () => {
+  const acceptedGate = deferred()
+  const harness = await createControllerHarness({ acceptedGate })
+  const lease = await harness.controller.acquire('transport-reject')
+  const running = lease.execute({
+    taskId: 'transport-reject-step',
+    script: 'id',
+    timeoutMs: 1000
+  })
+
+  acceptedGate.reject(Object.assign(
+    new Error('受控输入确认超时'),
+    { name: 'ManagedInputTransportError' }
+  ))
+  await assert.rejects(running, /确认超时/)
+  assert.equal(harness.cancelledSubmissions.length, 1)
+  assert.equal(harness.disposedListeners, 1)
+  assert.equal(harness.interrupts, 0)
+  assert.equal(harness.lifecycleEvents.includes('cancel-output'), true)
+  assert.equal(await lease.release(), true)
+})
+
+test('abort before transport acceptance cleans locally without Ctrl+C', async () => {
+  const acceptedGate = deferred()
+  const signalController = new AbortController()
+  const harness = await createControllerHarness({ acceptedGate })
+  const lease = await harness.controller.acquire('transport-pre-accept-abort')
+  const running = lease.execute({
+    taskId: 'transport-pre-accept-abort-step',
+    script: 'sleep 60',
+    timeoutMs: 1000,
+    signal: signalController.signal
+  })
+
+  signalController.abort()
+  await assert.rejects(running, error => error.name === 'AbortError')
+  assert.equal(harness.cancelledSubmissions.length, 1)
+  assert.equal(harness.interrupts, 0)
+  acceptedGate.resolve(true)
+  await Promise.resolve()
+  assert.equal(await lease.release(), true)
+})
+
+test('task timeout starts only after transport acceptance', async () => {
+  const acceptedGate = deferred()
+  const harness = await createControllerHarness({
+    acceptedGate,
+    recoveryTimeoutMs: 100
+  })
+  const lease = await harness.controller.acquire('transport-delayed-accept')
+  const running = lease.execute({
+    taskId: 'transport-delayed-accept-step',
+    script: 'sleep 60',
+    timeoutMs: 15
+  })
+
+  await delay(25)
+  assert.equal(harness.interrupts, 0)
+  acceptedGate.resolve(true)
+  await Promise.resolve()
+  await delay(25)
+  assert.equal(harness.interrupts, 1)
+  assert.equal(harness.emitPromptStarted(), true)
+  await assert.rejects(running, error => error.name === 'TimeoutError')
   assert.equal(await lease.release(), true)
 })
 
@@ -709,6 +789,7 @@ test('running protocol output failures cancel once and retain the lease through 
         ? () => { throw new Error('custom protocol onChunk failed') }
         : undefined
     })
+    await Promise.resolve()
 
     harness.emit(`file:${token}:start:0:root\n`)
     if (field === 'onChunk') {

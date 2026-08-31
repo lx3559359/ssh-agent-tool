@@ -359,6 +359,8 @@ export function createManagedPtyTaskController ({
         signal: options.signal,
         abortHandler: null,
         outputSubscription: null,
+        transport: null,
+        transportAccepted: false,
         timeoutHandle: null,
         recoveryHandle: null,
         submitted: false,
@@ -398,16 +400,28 @@ export function createManagedPtyTaskController ({
           throw new Error('无法锁定 PTY 运维命令追踪，命令尚未发送')
         }
         if (execution.settled) return
-        execution.submitted = true
-        if (submitCommand(command) !== true) {
-          execution.submitted = false
+        const transport = submitCommand(command)
+        if (!transport || typeof transport.accepted?.then !== 'function' ||
+          typeof transport.written?.then !== 'function') {
           throw new Error('PTY 运维命令未能发送')
         }
-        if (execution.settled) return
-        execution.timeoutHandle = setTimer(
-          () => requestCancellation(execution, 'timeout'),
-          timeoutMs
-        )
+        execution.transport = transport
+        Promise.resolve(transport.accepted).then(() => {
+          if (execution.settled || execution.cancelRequested) return
+          execution.submitted = true
+          execution.transportAccepted = true
+          execution.timeoutHandle = setTimer(
+            () => requestCancellation(execution, 'timeout'),
+            timeoutMs
+          )
+        }).catch(error => {
+          rejectExecution(execution, error, { cancelExpected: true })
+        })
+        Promise.resolve(transport.written).catch(error => {
+          if (!execution.settled && !execution.cancelRequested) {
+            requestCancellation(execution, error)
+          }
+        })
       } catch (error) {
         rejectExecution(execution, error, { cancelExpected: true })
       }

@@ -1,10 +1,13 @@
 const defaultChunkBytes = 512
-const defaultPacingMs = 2
+const defaultPacingMs = 0
 const maxManagedCommandBytes = 4 * 1024 * 1024
 const managedRequestIdPattern = /^[a-f0-9]{32}$/
 
 function delay (milliseconds) {
-  return new Promise(resolve => setTimeout(resolve, milliseconds))
+  return new Promise(resolve => {
+    if (milliseconds > 0) return setTimeout(resolve, milliseconds)
+    setImmediate(resolve)
+  })
 }
 
 function splitUtf8Chunks (value, maximumBytes) {
@@ -40,8 +43,11 @@ function createManagedTerminalInputWriter (term, options = {}) {
   const chunkBytes = Math.max(1, Math.floor(
     Number(options.chunkBytes) || defaultChunkBytes
   ))
+  const requestedPacingMs = Number(options.pacingMs)
   const pacingMs = Math.max(0, Math.floor(
-    Number(options.pacingMs) || defaultPacingMs
+    Number.isFinite(requestedPacingMs)
+      ? requestedPacingMs
+      : defaultPacingMs
   ))
   const pause = typeof options.pause === 'function'
     ? options.pause
