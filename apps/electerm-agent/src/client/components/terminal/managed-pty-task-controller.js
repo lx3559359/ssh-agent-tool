@@ -372,10 +372,14 @@ export function createManagedPtyTaskController ({
       execution.cancelRequested = true
       execution.cancelError = error
       execution.cancelRequestedPromptSequence = promptSequence
-      execution.cancellationRecoveryArmed = true
+      execution.cancellationRecoveryArmed = false
       clearTimer(execution.timeoutHandle)
       clearTimer(execution.recoveryHandle)
       execution.timeoutHandle = null
+      if (!execution.planCleanupInputReady) {
+        beginRecoveryDeadline(execution)
+        return
+      }
       safeCancelSubmission(execution.submissionToken)
       beginPlanCleanup(execution)
       return
@@ -435,7 +439,7 @@ export function createManagedPtyTaskController ({
         return
       }
       if (execution.plan.cleanup && execution.planStateMayExist) {
-        if (!execution.commandInputReady) return
+        if (!execution.planCleanupInputReady) return
         beginPlanCleanup(execution)
         return
       }
@@ -675,7 +679,7 @@ export function createManagedPtyTaskController ({
     execution.frameError = null
     execution.preAcceptInterruptSent = false
     execution.recoveryInterruptSent = false
-    execution.cancellationRecoveryArmed = options.cleanup === true
+    execution.cancellationRecoveryArmed = false
     if (armSubmission(submissionToken) !== true) {
       throw new Error('无法锁定 PTY 运维命令追踪，命令尚未发送')
     }
@@ -701,8 +705,15 @@ export function createManagedPtyTaskController ({
       if (active !== execution || execution.settled) return
       execution.submitted = true
       execution.transportAccepted = true
+      if (execution.planCleanupStarted) {
+        execution.cancelRequestedPromptSequence = promptSequence
+        execution.cancellationRecoveryArmed = true
+        beginRecoveryDeadline(execution)
+        return
+      }
+      execution.planCleanupInputReady = false
       if (execution.plan.frames.length > 1 &&
-        options.cleanup !== true && frame.executesOperation !== true) {
+        frame.executesOperation !== true) {
         execution.planStateMayExist = true
       }
       if (execution.cancelRequested && !execution.planCleanupStarted) {
@@ -746,7 +757,8 @@ export function createManagedPtyTaskController ({
       }
       if (execution.cancelRequested) {
         if (isDefinitivePreAcceptRejection(error)) {
-          if (execution.plan.cleanup && execution.planStateMayExist) {
+          if (execution.plan.cleanup && execution.planStateMayExist &&
+            execution.planCleanupInputReady) {
             safeCancelSubmission(execution.submissionToken)
             beginPlanCleanup(execution)
             return
@@ -781,6 +793,7 @@ export function createManagedPtyTaskController ({
     clearTimer(execution.timeoutHandle)
     execution.timeoutHandle = null
     execution.planCleanupStarted = true
+    execution.planCleanupInputReady = false
     execution.cancelRequestedPromptSequence = promptSequence
     try {
       submitExecutionFrame(execution, execution.plan.cleanup, { cleanup: true })
@@ -828,6 +841,7 @@ export function createManagedPtyTaskController ({
         frameError: null,
         planCleanupStarted: false,
         planStateMayExist: false,
+        planCleanupInputReady: true,
         submissionToken: '',
         timeoutMs,
         onChunk: options.onChunk,
@@ -975,6 +989,7 @@ export function createManagedPtyTaskController ({
     const execution = active
     if (!execution || !execution.promptReturned) return false
     execution.commandInputReady = true
+    execution.planCleanupInputReady = true
     settleIfComplete(execution)
     return true
   }

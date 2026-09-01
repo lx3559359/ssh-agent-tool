@@ -461,6 +461,46 @@ test('runtime acknowledgement failures clean a staged plan before rejecting', as
   }
 })
 
+test('staged acknowledgement failure without B times out sticky', async () => {
+  const token = 'da'.repeat(24)
+  const protocol = createFramedProbeProtocol({ token })
+  const harness = await createControllerHarness({ recoveryTimeoutMs: 10 })
+  const lease = await harness.controller.acquire('ack-failure-missing-input')
+  const running = lease.execute({
+    request: { operation: 'probe' },
+    protocol,
+    timeoutMs: 1000
+  })
+  const observed = running.catch(error => error)
+  await Promise.resolve()
+  harness.emit(fileFrameAcknowledgement(token, 0))
+  harness.emitCommandFinished(0)
+  harness.emitPromptStarted()
+  await Promise.resolve()
+  assert.equal(harness.submissions.at(-1).command, 'frame-chunk')
+
+  harness.emit(fileFrameAcknowledgement(
+    token,
+    1,
+    3,
+    'b'.repeat(64)
+  ))
+  harness.emitCommandFinished(0)
+  assert.equal(harness.emitPromptBoundary(), true)
+  const error = await observed
+  assert.equal(error.name, 'CancellationUnknownError')
+  assert.match(error.cause?.message || '', /命令帧确认顺序或认证无效/)
+  assert.deepEqual(harness.submissions.map(entry => entry.command), [
+    'frame-init',
+    'frame-chunk'
+  ])
+  assert.equal(await lease.release(), false)
+  await assert.rejects(
+    harness.controller.acquire('ack-failure-sticky-successor'),
+    /已有运维任务|重连恢复/
+  )
+})
+
 test('unterminated frame acknowledgement enforces its UTF-8 byte cap', async () => {
   const token = 'de'.repeat(24)
   const protocol = createFramedProbeProtocol({ token })
@@ -579,6 +619,7 @@ test('pre-accept rejection after a staged frame still runs plan cleanup', async 
     submission => submission.command === 'frame-final'
   ), false)
 
+  await Promise.resolve()
   harness.emit(fileFrameAcknowledgement(token, 3))
   harness.emitCommandFinished(0)
   harness.emitPromptStarted()
@@ -628,6 +669,7 @@ test('non-cancellation rejection after staged state runs cleanup first', async (
     submission => submission.command === 'frame-final'
   ), false)
 
+  await Promise.resolve()
   harness.emit(fileFrameAcknowledgement(token, 3))
   harness.emitCommandFinished(0)
   harness.emitPromptStarted()

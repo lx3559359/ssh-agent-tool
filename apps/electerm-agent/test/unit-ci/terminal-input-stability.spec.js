@@ -320,6 +320,7 @@ test('real tracker attach and controller advance a held command plan only after 
   const submissions = []
   let rejectNextChunk = false
   let blockedChunk = null
+  let cleanupAcceptance = null
   const planToken = 'd'.repeat(48)
   const planDigest = 'a'.repeat(64)
   const commands = ['frame-init', 'frame-chunk', 'frame-final']
@@ -345,12 +346,14 @@ test('real tracker attach and controller advance a held command plan only after 
   addon.managedPtyTransport = {
     submit: command => {
       submissions.push(command)
-      const accepted = rejectNextChunk && command === 'frame-chunk'
-        ? (() => {
-            blockedChunk = deferred()
-            return blockedChunk.promise
-          })()
-        : Promise.resolve(true)
+      const accepted = cleanupAcceptance && command === 'frame-cleanup'
+        ? cleanupAcceptance.promise
+        : rejectNextChunk && command === 'frame-chunk'
+          ? (() => {
+              blockedChunk = deferred()
+              return blockedChunk.promise
+            })()
+          : Promise.resolve(true)
       return Object.freeze({
         accepted,
         written: Promise.resolve(true)
@@ -495,6 +498,7 @@ test('real tracker attach and controller advance a held command plan only after 
   await Promise.resolve()
   assert.equal(submissions.at(-1), 'frame-cleanup')
   assert.equal(submissions.filter(command => command === 'frame-final').length, 1)
+  await Promise.resolve()
   addon.writeToTerminal([
     `\u001b]633;E;${testTrackerNonce};frame-cleanup\u0007`,
     `\u001b]633;C;${testTrackerNonce}\u0007`,
@@ -507,6 +511,59 @@ test('real tracker attach and controller advance a held command plan only after 
   )
   assert.equal((await cancelled).name, 'AbortError')
   assert.equal(await cleanupLease.release(), true)
+
+  rejectNextChunk = false
+  cleanupAcceptance = deferred()
+  const boundaryLease = await controller.acquire('real-framed-boundary-cleanup')
+  const boundaryRunning = boundaryLease.execute({
+    request: { operation: 'probe' },
+    protocol,
+    timeoutMs: 1000
+  })
+  const boundaryObserved = boundaryRunning.catch(error => error)
+  let boundarySettled = false
+  boundaryObserved.then(() => {
+    boundarySettled = true
+  })
+  await Promise.resolve()
+  const initialSubmissionCount = submissions.length
+  addon.writeToTerminal([
+    `\u001b]633;E;${testTrackerNonce};frame-init\u0007`,
+    `\u001b]633;C;${testTrackerNonce}\u0007`,
+    `\u001b]698;SHELLPILOT_FILE_FRAME;${planToken};0;3;${'b'.repeat(64)};ok\u0007`,
+    `\u001b]633;D;${testTrackerNonce};0\u0007`
+  ].join(''))
+  addon.writeToTerminal(
+    `\u001b]633;A;${testTrackerNonce}\u0007boundary:# `
+  )
+  await Promise.resolve()
+  assert.equal(boundarySettled, false)
+  assert.equal(submissions.length, initialSubmissionCount)
+
+  addon.writeToTerminal(`\u001b]633;B;${testTrackerNonce}\u0007`)
+  await Promise.resolve()
+  assert.equal(submissions.at(-1), 'frame-cleanup')
+
+  controller.handlePromptStarted()
+  controller.handleCommandInputStarted()
+  cleanupAcceptance.resolve(true)
+  await Promise.resolve()
+  addon.writeToTerminal([
+    `\u001b]633;E;${testTrackerNonce};frame-cleanup\u0007`,
+    `\u001b]633;C;${testTrackerNonce}\u0007`,
+    `\u001b]698;SHELLPILOT_FILE_FRAME;${planToken};3;3;${planDigest};ok\u0007`,
+    `\u001b]633;D;${testTrackerNonce};0\u0007`
+  ].join(''))
+  await Promise.resolve()
+  assert.equal(boundarySettled, false)
+
+  addon.writeToTerminal(
+    `\u001b]633;A;${testTrackerNonce}\u0007cleanup-boundary:# ` +
+    `\u001b]633;B;${testTrackerNonce}\u0007`
+  )
+  const boundaryError = await boundaryObserved
+  assert.match(boundaryError.message, /顺序或认证无效/)
+  assert.equal(await boundaryLease.release(), true)
 })
 
 test('managed PTY bounds unterminated lifecycle bytes and recovers at a prompt', async () => {
@@ -603,6 +660,54 @@ test('managed PTY recovers from pre-E overflow and same-chunk A B', async () => 
   assert.equal(writes.join('').includes('recovered-pre-E:#'), true)
   assert.equal(writes.join('').includes('深'), false)
   assert.equal(output.join('').includes('深'), false)
+})
+
+test('managed PTY publishes safe data around split lifecycle frames once', async () => {
+  const { addon, term } = await createDirectAttachHarness()
+  const writes = []
+  const output = []
+  term.write = value => writes.push(value)
+  addon.onRemoteOutput(chunk => output.push(chunk))
+  const command = 'frame-with-split-lifecycle-output'
+  assert.ok(addon.submitManagedPtyCommand(
+    command,
+    testTrackerNonce,
+    { holdSuppression: true }
+  ))
+  addon.writeToTerminal(
+    `\u001b]633;E;${testTrackerNonce};${command}\u0007`
+  )
+
+  const acknowledgement =
+    `\u001b]698;SHELLPILOT_FILE_FRAME;token;0;1;${'a'.repeat(64)};ok\u0007`
+  const firstLifecycle =
+    `\u001b]633;D;${testTrackerNonce};0\u0007`
+  const fileMarker =
+    '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+  const secondLifecycle =
+    `\u001b]633;A;${testTrackerNonce}\u0007`
+
+  addon.writeToTerminal(
+    acknowledgement + firstLifecycle.slice(0, -1)
+  )
+  assert.equal(output.join(''), acknowledgement)
+  addon.writeToTerminal(
+    firstLifecycle.slice(-1) + fileMarker + '\u001b]63'
+  )
+  assert.equal(
+    output.join(''),
+    acknowledgement + firstLifecycle + fileMarker
+  )
+  addon.writeToTerminal(secondLifecycle.slice('\u001b]63'.length))
+  assert.equal(
+    output.join(''),
+    acknowledgement + firstLifecycle + fileMarker + secondLifecycle
+  )
+  assert.equal(output.join('').split(acknowledgement).length - 1, 1)
+  assert.equal(output.join('').split(fileMarker).length - 1, 1)
+  assert.equal(writes.join('').includes(acknowledgement), false)
+  assert.equal(writes.join('').includes(fileMarker), false)
+  addon.cancelManagedPtyEchoSuppression()
 })
 
 test('managed PTY keeps privileged probe output hidden until authenticated prompt', async () => {

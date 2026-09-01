@@ -35,6 +35,7 @@ export default class AttachAddonCustom {
     this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
+    this.managedPtyListenerBytes = new Uint8Array()
     this.managedPtyLifecycleOverflowed = false
     this.managedPtyLifecyclePending = false
     this.managedPtyLifecycleDiscarding = false
@@ -116,6 +117,7 @@ export default class AttachAddonCustom {
     this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
+    this.managedPtyListenerBytes = new Uint8Array()
     this.managedPtyLifecycleDiscarding = false
     const timeoutNumber = Number(timeout)
     if (Number.isFinite(timeoutNumber) && timeoutNumber > 0) {
@@ -148,6 +150,7 @@ export default class AttachAddonCustom {
     this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
+    this.managedPtyListenerBytes = new Uint8Array()
     this.managedPtyLifecycleDiscarding = false
 
     if (!discard && this.suppressedData.length > 0) {
@@ -177,6 +180,7 @@ export default class AttachAddonCustom {
     this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
+    this.managedPtyListenerBytes = new Uint8Array()
     return true
   }
 
@@ -368,6 +372,103 @@ export default class AttachAddonCustom {
     return null
   }
 
+  _extractManagedPtyListenerData = data => {
+    const incoming = typeof data === 'string'
+      ? new TextEncoder().encode(data)
+      : data instanceof ArrayBuffer
+        ? new Uint8Array(data)
+        : data instanceof Uint8Array
+          ? data
+          : new Uint8Array(data)
+    const scan = new Uint8Array(
+      this.managedPtyListenerBytes.length + incoming.length
+    )
+    scan.set(this.managedPtyListenerBytes)
+    scan.set(incoming, this.managedPtyListenerBytes.length)
+    this.managedPtyListenerBytes = new Uint8Array()
+    const prefix = new TextEncoder().encode(
+      `${String.fromCharCode(27)}]633;`
+    )
+    const publishChunks = []
+    let overflowed = false
+    let cursor = 0
+    const appendChunk = (start, end) => {
+      if (end > start) publishChunks.push(scan.slice(start, end))
+    }
+    while (cursor < scan.length) {
+      let start = -1
+      for (let index = cursor; index <= scan.length - prefix.length; index++) {
+        let matches = true
+        for (let offset = 0; offset < prefix.length; offset++) {
+          if (scan[index + offset] !== prefix[offset]) {
+            matches = false
+            break
+          }
+        }
+        if (matches) {
+          start = index
+          break
+        }
+      }
+      if (start === -1) {
+        let keep = 0
+        const maximum = Math.min(prefix.length - 1, scan.length - cursor)
+        for (let length = maximum; length > 0; length--) {
+          let matches = true
+          for (let offset = 0; offset < length; offset++) {
+            if (scan[scan.length - length + offset] !== prefix[offset]) {
+              matches = false
+              break
+            }
+          }
+          if (matches) {
+            keep = length
+            break
+          }
+        }
+        appendChunk(cursor, scan.length - keep)
+        if (keep > 0) {
+          this.managedPtyListenerBytes = scan.slice(scan.length - keep)
+        }
+        break
+      }
+      appendChunk(cursor, start)
+      let end = -1
+      for (let index = start + prefix.length; index < scan.length; index++) {
+        if (scan[index] === 7) {
+          end = index
+          break
+        }
+      }
+      if (end === -1) {
+        const pending = scan.slice(start)
+        if (pending.byteLength > managedPtyLifecycleByteLimit) {
+          overflowed = true
+        } else {
+          this.managedPtyListenerBytes = pending
+        }
+        break
+      }
+      if (end + 1 - start > managedPtyLifecycleByteLimit) {
+        overflowed = true
+      } else {
+        appendChunk(start, end + 1)
+      }
+      cursor = end + 1
+    }
+    const byteLength = publishChunks.reduce(
+      (total, chunk) => total + chunk.byteLength,
+      0
+    )
+    const publishData = new Uint8Array(byteLength)
+    let offset = 0
+    for (const chunk of publishChunks) {
+      publishData.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    return { publishData, overflowed }
+  }
+
   _extractManagedPtyLifecycleFrames = data => {
     this.managedPtyLifecycleOverflowed = false
     this.managedPtyLifecyclePending = false
@@ -451,11 +552,14 @@ export default class AttachAddonCustom {
 
   _writeManagedPtyHiddenOutput = data => {
     if (!data || data.length === 0) return
+    const wasDiscarding = this.managedPtyLifecycleDiscarding
     let releaseData = typeof data === 'string'
       ? this._findSuppressionReleaseData(data)
       : this._findSuppressionReleaseBytes(data)
+    const listenerData = this._extractManagedPtyListenerData(data)
     const lifecycleFrames = this._extractManagedPtyLifecycleFrames(data)
-    const lifecycleOverflowed = this.managedPtyLifecycleOverflowed
+    const lifecycleOverflowed = this.managedPtyLifecycleOverflowed ||
+      listenerData.overflowed
     if (lifecycleOverflowed) {
       this.managedPtyLifecycleOverflowed = false
       this.managedPtyLifecycleDiscarding = true
@@ -469,11 +573,19 @@ export default class AttachAddonCustom {
       this.managedPtyLifecycleDiscarding = false
     }
     if (this.managedPtyLifecyclePending) {
+      if (this.publishSuppressionRemainder &&
+        this.managedPtyOutputStreamingActive &&
+        listenerData.publishData.length > 0) {
+        this._publishRemoteOutput(listenerData.publishData)
+      }
       return
     }
     if (this.publishSuppressionRemainder &&
       this.managedPtyOutputStreamingActive && !lifecycleOverflowed) {
-      this._publishRemoteOutput(data)
+      const publishData = wasDiscarding
+        ? releaseData
+        : listenerData.publishData
+      if (publishData?.length > 0) this._publishRemoteOutput(publishData)
     }
     for (const frame of lifecycleFrames) {
       if (!this._isAuthenticatedManagedLifecycleFrame(frame)) continue
@@ -496,6 +608,7 @@ export default class AttachAddonCustom {
       this.suppressionScanBytes = new Uint8Array()
       this.suppressionDecoder = new TextDecoder('utf-8')
       this.managedPtyLifecycleBytes = new Uint8Array()
+      this.managedPtyListenerBytes = new Uint8Array()
       this.managedPtyOutputStreamingActive = false
       this.consumeManagedPtyCommandRecord = false
       return
@@ -583,6 +696,7 @@ export default class AttachAddonCustom {
             this.suppressionScanBytes = new Uint8Array()
             this.suppressionDecoder = new TextDecoder('utf-8')
             this.managedPtyLifecycleBytes = new Uint8Array()
+            this.managedPtyListenerBytes = new Uint8Array()
             if (releasedData.length > 0) {
               this._writeManagedPtyHiddenOutput(releasedData)
             }
@@ -740,6 +854,7 @@ export default class AttachAddonCustom {
       this.suppressionScanBytes = new Uint8Array()
       this.suppressionDecoder = new TextDecoder('utf-8')
       this.managedPtyLifecycleBytes = new Uint8Array()
+      this.managedPtyListenerBytes = new Uint8Array()
       this.managedPtyOutputStreamingActive = false
     } else {
       this.startOutputSuppression(null, null, true, true, commandMarker)
@@ -929,6 +1044,7 @@ export default class AttachAddonCustom {
     this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
+    this.managedPtyListenerBytes = new Uint8Array()
     this.pendingInput = []
     clearTimeout(this._echoCheckTimer)
     this._echoCheckTimer = null
