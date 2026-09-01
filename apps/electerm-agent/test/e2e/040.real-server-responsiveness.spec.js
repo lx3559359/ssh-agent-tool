@@ -17,7 +17,8 @@ const performanceBudgets = Object.freeze({
   firstSftpReadyMs: 3000,
   cachedPaintMs: 100,
   sftpRefreshMs: 3000,
-  cancelRecoveryMs: 3000
+  cancelRecoveryMs: 3000,
+  postRecoveryInputMs: 1500
 })
 
 const internalTerminalPattern = /__sp_|SHELLPILOT_(?:FILE|OPS|TOKEN)/
@@ -112,6 +113,8 @@ async function terminalState (page) {
       busy: terminal?.operationsPtyTaskController?.isBusy?.() === true,
       owner: terminal?.operationsPtyTaskController?.owner?.() || '',
       trackerReady: terminal?.isCommandSafetyTrackerReady?.() === true,
+      commandInputActive: terminal?.cmdAddon?.isCommandInputActive?.() === true,
+      currentInput: terminal?.getCurrentInput?.() || '',
       expectedSubmissions: terminal?.cmdAddon?._expectedSubmissions?.length || 0,
       sshSessionGeneration: String(
         terminal?.getTerminalSafetyEndpoint?.().sshSessionGeneration || ''
@@ -193,7 +196,7 @@ async function withRealServer (config, action) {
   return result
 }
 
-async function sendTerminalLine (page, command) {
+async function sendTerminalLine (page, command, keyDelayMs = 5) {
   await expect.poll(async () => (await terminalState(page)).ready, {
     timeout: 20000
   }).toBe(true)
@@ -202,15 +205,17 @@ async function sendTerminalLine (page, command) {
   })
   const input = page.locator('.session-current .xterm-helper-textarea').last()
   await expect(input).toBeFocused()
-  await input.pressSequentially(command, { delay: 5 })
+  await input.pressSequentially(command, { delay: keyDelayMs })
+  const sentAt = Date.now()
   await page.keyboard.press('Enter')
+  return sentAt
 }
 
 async function expectTerminalMarker (page, marker, startLength = 0) {
   await expect.poll(async () => {
     const state = await terminalState(page)
-    return state.text.slice(startLength)
-  }, { timeout: 20000 }).toContain(marker)
+    return state.text.slice(startLength).includes(marker)
+  }, { timeout: 20000 }).toBe(true)
 }
 
 async function performanceSummary (page) {
@@ -292,7 +297,26 @@ function assertTerminalRecovered (state) {
   expect(state.busy).toBe(false)
   expect(state.owner).toBe('')
   expect(state.expectedSubmissions).toBe(0)
-  expect(state.text).not.toMatch(internalTerminalPattern)
+  expect(internalTerminalPattern.test(state.text)).toBe(false)
+}
+
+async function expectStableTerminalIdle (page, stableMs = 250) {
+  await expect.poll(async () => {
+    const before = await terminalState(page)
+    if (!before.ready || !before.trackerReady || before.busy ||
+      before.expectedSubmissions !== 0) return false
+    await page.waitForTimeout(stableMs)
+    const after = await terminalState(page)
+    return Boolean(
+      after.ready &&
+      after.trackerReady &&
+      !after.busy &&
+      after.expectedSubmissions === 0 &&
+      after.text.length >= before.text.length
+    )
+  }, {
+    timeout: 10000
+  }).toBe(true)
 }
 
 test('round 1 - terminal and operations recover without internal echo', async () => {
@@ -307,6 +331,7 @@ test('round 1 - terminal and operations recover without internal echo', async ()
     const before = await terminalState(page)
     await sendTerminalLine(page, `printf '${marker}\\n'`)
     await expectTerminalMarker(page, marker, before.text.length)
+    await expectStableTerminalIdle(page)
 
     await page.evaluate(() => {
       window.__shellpilotResponsivenessSystemTask = window.store
@@ -322,6 +347,7 @@ test('round 1 - terminal and operations recover without internal echo', async ()
     const system = await page.evaluate(async () => {
       const task = await window.__shellpilotResponsivenessSystemTask
       return {
+        error: task.error || '',
         status: task.status,
         outputs: task.steps.map(step => Boolean(step.output)),
         exitCodes: task.steps.map(step => step.exitCode)
@@ -332,14 +358,13 @@ test('round 1 - terminal and operations recover without internal echo', async ()
       queuedMarker,
       beforeQueuedInput.text.length
     )
-    await expect.poll(async () => (await terminalState(page)).trackerReady, {
-      timeout: 5000
-    }).toBe(true)
+    await expectStableTerminalIdle(page)
     const baseline = await page.evaluate(async () => {
       const task = await window.store
         .runOperationsTool('runbook.health.baseline')
         .completion
       return {
+        error: task.error || '',
         status: task.status,
         outputs: task.steps.map(step => Boolean(step.output)),
         exitCodes: task.steps.map(step => step.exitCode)
@@ -462,26 +487,37 @@ test('round 3 - cancellation reconnect and cache isolation stay usable', async (
     await page.locator(
       '.session-current .term-sftp-tabs .type-tab:visible'
     ).first().click()
-    await page.evaluate(async () => {
+    const beforeCancellationSummary = await performanceSummary(page)
+    const beforeCancellationAckSamples = metricSampleCount(
+      beforeCancellationSummary,
+      'managed_input_ack_ms'
+    )
+    const cancellationTargetMarker =
+      'SHELLPILOT-ROUND-THREE-CANCELLATION-TARGET-STARTED'
+    await page.evaluate(async ({ startedMarker }) => {
       const terminal = window.refs.get('term-' + window.store.activeTabId)
       const lease = await terminal.acquireOperationsPtyTask(
         'real-vps-responsiveness-cancel'
       )
       const controller = new AbortController()
       window.__shellpilotResponsivenessAbort = controller
-      window.__shellpilotResponsivenessSleepStarted = false
+      window.__shellpilotResponsivenessTargetOutput = ''
+      window.__shellpilotResponsivenessTargetStarted = false
       window.__shellpilotResponsivenessCancelResult = null
       window.__shellpilotResponsivenessCancelPromise = (async () => {
         let outcome
         try {
           await lease.execute({
             taskId: 'real-vps-cancellable-sleep',
-            script: "printf 'shellpilot-round-three-sleep-started\\n'; sleep 10",
+            script: "printf '%s\\n' " +
+              "'shellpilot-round-three-cancellation-target-started' | " +
+              "tr '[:lower:]' '[:upper:]'; sleep 10",
             timeoutMs: 15000,
             signal: controller.signal,
             onChunk: chunk => {
-              window.__shellpilotResponsivenessSleepStarted =
-                window.__shellpilotResponsivenessSleepStarted || Boolean(chunk)
+              window.__shellpilotResponsivenessTargetOutput += String(chunk || '')
+              window.__shellpilotResponsivenessTargetStarted =
+                window.__shellpilotResponsivenessTargetOutput.includes(startedMarker)
             }
           })
           outcome = { name: 'completed' }
@@ -493,10 +529,34 @@ test('round 3 - cancellation reconnect and cache isolation stay usable', async (
         window.__shellpilotResponsivenessCancelResult = outcome
         return outcome
       })()
-    })
+    }, { startedMarker: cancellationTargetMarker })
     await expect.poll(() => page.evaluate(() => (
-      window.__shellpilotResponsivenessSleepStarted
+      window.__shellpilotResponsivenessTargetStarted
     )), { timeout: 10000 }).toBe(true)
+    await expect.poll(async () => metricSampleCount(
+      await performanceSummary(page),
+      'managed_input_ack_ms'
+    ), { timeout: 5000 }).toBeGreaterThan(beforeCancellationAckSamples)
+    const acceptedAckDelta = metricSampleCount(
+      await performanceSummary(page),
+      'managed_input_ack_ms'
+    ) - beforeCancellationAckSamples
+    expect(acceptedAckDelta).toBeGreaterThan(0)
+    const runningCancellationTarget = await terminalState(page)
+    expect({
+      busy: runningCancellationTarget.busy,
+      ownerMatches: runningCancellationTarget.owner ===
+        'real-vps-responsiveness-cancel',
+      trackerReady: runningCancellationTarget.trackerReady,
+      started: await page.evaluate(() => (
+        window.__shellpilotResponsivenessTargetStarted === true
+      ))
+    }).toEqual({
+      busy: true,
+      ownerMatches: true,
+      trackerReady: true,
+      started: true
+    })
     const cancelStartedAt = Date.now()
     await page.evaluate(() => window.__shellpilotResponsivenessAbort.abort())
     await expect.poll(() => page.evaluate(() => (
@@ -506,20 +566,60 @@ test('round 3 - cancellation reconnect and cache isolation stay usable', async (
       window.__shellpilotResponsivenessCancelPromise
     ))
     expect(cancellation).toEqual({ name: 'AbortError', released: true })
-    expect(Date.now() - cancelStartedAt).toBeLessThanOrEqual(
+    const cancelRecoveryMs = Date.now() - cancelStartedAt
+    expect(cancelRecoveryMs).toBeLessThanOrEqual(
       performanceBudgets.cancelRecoveryMs
     )
     await expect.poll(async () => {
       const state = await terminalState(page)
-      return !state.busy && state.trackerReady
+      return Boolean(
+        !state.busy &&
+        state.trackerReady &&
+        state.expectedSubmissions === 0 &&
+        !internalTerminalPattern.test(state.text)
+      )
     }, {
       timeout: 5000
     }).toBe(true)
+    assertTerminalRecovered(await terminalState(page))
 
-    const recoveryMarker = 'shellpilot-round-three-recovered'
+    const recoveryMarker = 'SHELLPILOT-ROUND-THREE-RECOVERED'
     const beforeMarker = await terminalState(page)
-    await sendTerminalLine(page, `printf '${recoveryMarker}\\n'`)
-    await expectTerminalMarker(page, recoveryMarker, beforeMarker.text.length)
+    const recoverySentAt = await sendTerminalLine(
+      page,
+      "printf '%s\\n' 'shellpilot-round-three-recovered' | " +
+        "tr '[:lower:]' '[:upper:]'",
+      0
+    )
+    await expect.poll(async () => {
+      const state = await terminalState(page)
+      return Boolean(
+        state.text.slice(beforeMarker.text.length).includes(recoveryMarker) &&
+        state.commandInputActive &&
+        state.currentInput === '' &&
+        state.trackerReady &&
+        !state.busy &&
+        state.expectedSubmissions === 0 &&
+        !internalTerminalPattern.test(state.text)
+      )
+    }, {
+      timeout: performanceBudgets.postRecoveryInputMs,
+      intervals: [25, 50, 100, 150]
+    }).toBe(true)
+    const postRecoveryInputMs = Date.now() - recoverySentAt
+    expect(postRecoveryInputMs).toBeLessThanOrEqual(
+      performanceBudgets.postRecoveryInputMs
+    )
+    assertTerminalRecovered(await terminalState(page))
+    await test.info().attach('cancellation-responsiveness.json', {
+      body: Buffer.from(JSON.stringify({
+        acceptedAckDelta,
+        targetStarted: true,
+        cancelRecoveryMs,
+        postRecoveryInputMs
+      }, null, 2)),
+      contentType: 'application/json'
+    })
 
     await page.evaluate(() => {
       window.refs.get('term-' + window.store.activeTabId)?.onReconnect()

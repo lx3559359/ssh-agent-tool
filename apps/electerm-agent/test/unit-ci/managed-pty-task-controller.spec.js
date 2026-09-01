@@ -23,6 +23,25 @@ function delay (milliseconds) {
   return new Promise(resolve => setTimeout(resolve, milliseconds))
 }
 
+function createManualTimers () {
+  let sequence = 0
+  const callbacks = new Map()
+  return {
+    setTimer: callback => {
+      const id = ++sequence
+      callbacks.set(id, callback)
+      return id
+    },
+    clearTimer: id => callbacks.delete(id),
+    runAll: () => {
+      const pending = [...callbacks.values()]
+      callbacks.clear()
+      for (const callback of pending) callback()
+    },
+    size: () => callbacks.size
+  }
+}
+
 function encodeMarkerField (value) {
   return Buffer.from(String(value), 'utf8').toString('base64')
 }
@@ -180,7 +199,9 @@ async function createControllerHarness (options = {}) {
       return options.onIdle?.()
     },
     createToken: () => (++tokenSequence).toString(16).padStart(32, '0'),
-    recoveryTimeoutMs: options.recoveryTimeoutMs || 30
+    recoveryTimeoutMs: options.recoveryTimeoutMs || 30,
+    setTimer: options.setTimer || setTimeout,
+    clearTimer: options.clearTimer || clearTimeout
   })
 
   function emit (value) {
@@ -509,18 +530,47 @@ test('managed input queues ordinary keys and routes Ctrl+C through cancellation'
   )
 })
 
-test('acquire reserves the terminal while readiness is still pending', async () => {
+test('ordinary input preempts a running read-only managed task', async () => {
+  const harness = await createControllerHarness()
+  const lease = await harness.controller.acquire('root-file:list:home')
+  const running = lease.execute({
+    protocol: createBoundedProbeProtocol(),
+    request: { operation: 'probe' },
+    timeoutMs: 1000
+  })
+  await Promise.resolve()
+
+  assert.deepEqual(
+    harness.controller.handleUserInput('s'),
+    { handled: true, send: false, queue: true }
+  )
+  assert.equal(harness.interrupts, 1)
+  harness.emitPromptStarted()
+  await assert.rejects(running, error => {
+    assert.equal(error.name, 'AbortError')
+    assert.equal(error.cancellationOrigin, 'user')
+    return true
+  })
+  assert.equal(await lease.release(), true)
+})
+
+test('pending readiness reserves concurrency without capturing user input', async () => {
   const ensureGate = deferred()
   const harness = await createControllerHarness({ ensureGate })
   const acquiring = harness.controller.acquire('operations-first')
 
+  assert.equal(harness.controller.isBusy(), true)
+  assert.deepEqual(
+    harness.controller.handleUserInput('x'),
+    { handled: false, send: false }
+  )
   await assert.rejects(
     harness.controller.acquire('operations-second'),
     /当前终端已有运维任务/
   )
   ensureGate.resolve()
-  const lease = await acquiring
-  assert.equal(await lease.release(), true)
+  await assert.rejects(acquiring, /用户已开始终端输入/)
+  assert.equal(harness.controller.isBusy(), false)
 })
 
 test('unrunnable terminal state and tracker arm failure send no command', async () => {
@@ -617,6 +667,209 @@ test('abort after transport send waits for confirmed pre-accept interruption', a
   assert.equal(await lease.release(), true)
 })
 
+test('pre-accept prompt cannot unlock cancellation before transport decides', async () => {
+  const acceptedGate = deferred()
+  const writtenGate = deferred()
+  const signalController = new AbortController()
+  const harness = await createControllerHarness({
+    acceptedGate,
+    writtenGate,
+    recoveryTimeoutMs: 100
+  })
+  const lease = await harness.controller.acquire('transport-pending-prompt')
+  const running = lease.execute({
+    taskId: 'transport-pending-prompt-step',
+    script: 'sleep 60',
+    timeoutMs: 1000,
+    signal: signalController.signal
+  })
+  let settled = false
+  running.then(
+    () => { settled = true },
+    () => { settled = true }
+  )
+
+  signalController.abort()
+  assert.equal(harness.interrupts, 1)
+  assert.equal(harness.emitPromptStarted(), false)
+  await Promise.resolve()
+
+  assert.equal(settled, false)
+  assert.equal(harness.controller.isBusy(), true)
+  assert.equal(harness.lifecycleEvents.includes('cancel-output'), false)
+  assert.equal(harness.lifecycleEvents.includes('idle'), false)
+  await assert.rejects(lease.release(), /仍在执行/)
+
+  const interrupted = Object.assign(
+    new Error('受控输入写入已中断'),
+    { name: 'AbortError' }
+  )
+  acceptedGate.reject(interrupted)
+  writtenGate.reject(interrupted)
+  await assert.rejects(running, error => error.name === 'AbortError')
+  assert.equal(await lease.release(), true)
+})
+
+test('pre-accept recovery deadline stays locked until late acceptance recovers', async () => {
+  const timers = createManualTimers()
+  const acceptedGate = deferred()
+  const writtenGate = deferred()
+  const signalController = new AbortController()
+  const harness = await createControllerHarness({
+    acceptedGate,
+    writtenGate,
+    recoveryTimeoutMs: 100,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer
+  })
+  const lease = await harness.controller.acquire('transport-late-after-deadline')
+  const running = lease.execute({
+    taskId: 'transport-late-after-deadline-step',
+    script: 'sleep 60',
+    timeoutMs: 1000,
+    signal: signalController.signal
+  })
+
+  signalController.abort()
+  assert.equal(harness.emitPromptStarted(), false)
+  assert.equal(timers.size(), 1)
+  timers.runAll()
+  await assert.rejects(
+    running,
+    error => error.name === 'CancellationUnknownError'
+  )
+  assert.equal(await lease.release(), false)
+  assert.equal(harness.controller.isBusy(), true)
+  assert.equal(harness.emitPromptStarted(), false)
+  assert.equal(harness.controller.isBusy(), true)
+  assert.equal(harness.lifecycleEvents.includes('cancel-output'), false)
+  assert.equal(harness.lifecycleEvents.includes('idle'), false)
+
+  acceptedGate.resolve(true)
+  writtenGate.resolve(true)
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(harness.interrupts, 2)
+  assert.equal(harness.controller.isBusy(), true)
+  assert.equal(harness.emitPromptStarted(), true)
+  assert.equal(harness.controller.isBusy(), false)
+  assert.equal(harness.lifecycleEvents.includes('cancel-output'), true)
+  assert.equal(harness.lifecycleEvents.includes('idle'), true)
+  assert.equal(await lease.release(), true)
+})
+
+test('late explicit transport rejection releases an unknown pre-accept lock', async () => {
+  const timers = createManualTimers()
+  const acceptedGate = deferred()
+  const writtenGate = deferred()
+  const signalController = new AbortController()
+  const harness = await createControllerHarness({
+    acceptedGate,
+    writtenGate,
+    recoveryTimeoutMs: 100,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer
+  })
+  const lease = await harness.controller.acquire('transport-reject-after-deadline')
+  const running = lease.execute({
+    taskId: 'transport-reject-after-deadline-step',
+    script: 'id',
+    timeoutMs: 1000,
+    signal: signalController.signal
+  })
+
+  signalController.abort()
+  timers.runAll()
+  await assert.rejects(
+    running,
+    error => error.name === 'CancellationUnknownError'
+  )
+  assert.equal(await lease.release(), false)
+  const rejected = Object.assign(
+    new Error('受控输入请求被拒绝'),
+    { name: 'ManagedInputTransportError' }
+  )
+  acceptedGate.reject(rejected)
+  writtenGate.reject(rejected)
+  await Promise.resolve()
+  await Promise.resolve()
+
+  assert.equal(harness.controller.isBusy(), false)
+  assert.equal(harness.lifecycleEvents.includes('cancel-output'), true)
+  assert.equal(harness.lifecycleEvents.includes('idle'), true)
+  assert.equal(await lease.release(), true)
+})
+
+test('late transport acceptance requires a new interrupt and prompt recovery', async () => {
+  const acceptedGate = deferred()
+  const writtenGate = deferred()
+  const signalController = new AbortController()
+  const harness = await createControllerHarness({
+    acceptedGate,
+    writtenGate,
+    recoveryTimeoutMs: 100
+  })
+  const lease = await harness.controller.acquire('transport-late-accept')
+  const running = lease.execute({
+    taskId: 'transport-late-accept-step',
+    script: 'sleep 60',
+    timeoutMs: 1000,
+    signal: signalController.signal
+  })
+  let settled = false
+  running.then(
+    () => { settled = true },
+    () => { settled = true }
+  )
+
+  signalController.abort()
+  assert.equal(harness.emitPromptStarted(), false)
+  acceptedGate.resolve(true)
+  writtenGate.resolve(true)
+  await Promise.resolve()
+  await Promise.resolve()
+
+  assert.equal(harness.interrupts, 2)
+  assert.equal(settled, false)
+  assert.equal(harness.controller.isBusy(), true)
+  assert.equal(harness.lifecycleEvents.includes('cancel-output'), false)
+  assert.equal(harness.lifecycleEvents.includes('idle'), false)
+  assert.equal(harness.emitPromptStarted(), true)
+  await assert.rejects(running, error => error.name === 'AbortError')
+  assert.equal(await lease.release(), true)
+})
+
+test('explicit pre-accept transport rejection completes cancellation safely', async () => {
+  const acceptedGate = deferred()
+  const writtenGate = deferred()
+  const signalController = new AbortController()
+  const harness = await createControllerHarness({
+    acceptedGate,
+    writtenGate,
+    recoveryTimeoutMs: 20
+  })
+  const lease = await harness.controller.acquire('transport-explicit-reject')
+  const running = lease.execute({
+    taskId: 'transport-explicit-reject-step',
+    script: 'id',
+    timeoutMs: 1000,
+    signal: signalController.signal
+  })
+
+  signalController.abort()
+  const rejected = Object.assign(
+    new Error('受控输入请求被拒绝'),
+    { name: 'ManagedInputTransportError' }
+  )
+  acceptedGate.reject(rejected)
+  writtenGate.reject(rejected)
+
+  await assert.rejects(running, error => error.name === 'AbortError')
+  assert.equal(harness.interrupts, 1)
+  assert.equal(harness.controller.isBusy(), true)
+  assert.equal(await lease.release(), true)
+})
+
 test('abort racing with transport acceptance waits for prompt recovery', async () => {
   const acceptedGate = deferred()
   const writtenGate = deferred()
@@ -636,7 +889,7 @@ test('abort racing with transport acceptance waits for prompt recovery', async (
   await Promise.resolve()
   await Promise.resolve()
 
-  assert.equal(harness.interrupts, 1)
+  assert.equal(harness.interrupts, 2)
   assert.equal(harness.controller.isBusy(), true)
   await assert.rejects(lease.release(), /仍在执行/)
   assert.equal(await Promise.race([

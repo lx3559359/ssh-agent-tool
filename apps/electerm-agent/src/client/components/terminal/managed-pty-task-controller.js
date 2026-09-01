@@ -43,6 +43,12 @@ function disconnectedError (reason) {
   )
 }
 
+function isDefinitivePreAcceptRejection (error) {
+  if (error?.name === 'AbortError') return true
+  return error?.name === 'ManagedInputTransportError' &&
+    error?.message === '受控输入请求被拒绝'
+}
+
 function assertRunnableTerminalState (state = {}) {
   if (state.alternateBuffer) {
     throw new Error('当前交互程序无法执行受控 PTY 运维任务')
@@ -133,6 +139,8 @@ export function createManagedPtyTaskController ({
   clearTimer = clearTimeout
 }) {
   let leaseOwner = ''
+  let pendingAcquireOwner = ''
+  let userInputGeneration = 0
   let active = null
   let generation = 0
   let promptSequence = 0
@@ -288,7 +296,8 @@ export function createManagedPtyTaskController ({
       recoveryLocked = true
       lateRecovery = {
         owner: execution.owner,
-        promptAfterSequence: execution.cancelRequestedPromptSequence
+        promptAfterSequence: execution.cancelRequestedPromptSequence,
+        recoveryArmed: execution.cancellationRecoveryArmed
       }
       rejectExecution(
         execution,
@@ -299,6 +308,35 @@ export function createManagedPtyTaskController ({
         }
       )
     }, Number(recoveryTimeoutMs))
+  }
+
+  function sendCancellationInterrupt (execution, phase) {
+    const sentField = phase === 'accepted'
+      ? 'recoveryInterruptSent'
+      : 'preAcceptInterruptSent'
+    if (execution[sentField]) return
+    execution[sentField] = true
+    if (!execution.outputRecoveryPrepared) {
+      execution.outputRecoveryPrepared = true
+      safePrepareSubmissionOutputRecovery()
+    }
+    try {
+      interrupt()
+    } catch {
+      // Missing prompt recovery below keeps the terminal locked safely.
+    }
+  }
+
+  function armAcceptedCancellationRecovery (execution) {
+    if (execution.cancellationRecoveryArmed) return
+    execution.cancellationRecoveryArmed = true
+    execution.cancelRequestedPromptSequence = promptSequence
+    if (execution.settled && lateRecovery?.owner === execution.owner) {
+      lateRecovery.promptAfterSequence = promptSequence
+      lateRecovery.recoveryArmed = true
+    }
+    sendCancellationInterrupt(execution, 'accepted')
+    if (!execution.settled) beginRecoveryDeadline(execution)
   }
 
   function requestCancellation (execution, reason = 'signal') {
@@ -323,17 +361,12 @@ export function createManagedPtyTaskController ({
       })
       return true
     }
-    if (!execution.interruptSent) {
-      execution.interruptSent = true
-      safePrepareSubmissionOutputRecovery()
-      try {
-        interrupt()
-      } catch {
-        // Missing prompt recovery below keeps the terminal locked safely.
-      }
+    if (!execution.transportAccepted) {
+      sendCancellationInterrupt(execution, 'pending')
+      beginRecoveryDeadline(execution)
+      return true
     }
-    // The frame has left the renderer, so only server status or a new prompt is safe.
-    beginRecoveryDeadline(execution)
+    armAcceptedCancellationRecovery(execution)
     settleIfComplete(execution)
     return true
   }
@@ -377,7 +410,10 @@ export function createManagedPtyTaskController ({
         timeoutHandle: null,
         recoveryHandle: null,
         submitted: false,
-        interruptSent: false,
+        outputRecoveryPrepared: false,
+        preAcceptInterruptSent: false,
+        recoveryInterruptSent: false,
+        cancellationRecoveryArmed: false,
         cancelRequested: false,
         cancelError: null,
         cancelRequestedPromptSequence: 0,
@@ -420,22 +456,37 @@ export function createManagedPtyTaskController ({
         }
         execution.transport = transport
         Promise.resolve(transport.accepted).then(() => {
-          if (execution.settled) return
           execution.submitted = true
           execution.transportAccepted = true
           if (execution.cancelRequested) {
-            beginRecoveryDeadline(execution)
-            settleIfComplete(execution)
+            armAcceptedCancellationRecovery(execution)
+            if (!execution.settled) settleIfComplete(execution)
             return
           }
+          if (execution.settled) return
           execution.timeoutHandle = setTimer(
             () => requestCancellation(execution, 'timeout'),
             timeoutMs
           )
         }).catch(error => {
-          if (execution.settled) return
+          if (execution.settled) {
+            if (execution.cancelRequested &&
+              isDefinitivePreAcceptRejection(error) &&
+              recoveryLocked && lateRecovery?.owner === execution.owner) {
+              const recoveryOwner = lateRecovery.owner
+              lateRecovery = null
+              recoveryLocked = false
+              if (leaseOwner === recoveryOwner) {
+                leaseOwner = ''
+                safeNotifyIdle()
+              }
+              firstIdentity = null
+              safeCancelSubmissionOutput()
+            }
+            return
+          }
           if (execution.cancelRequested) {
-            if (error?.name === 'AbortError') {
+            if (isDefinitivePreAcceptRejection(error)) {
               rejectExecution(execution, execution.cancelError, {
                 cancelExpected: true
               })
@@ -458,21 +509,30 @@ export function createManagedPtyTaskController ({
   async function acquire (ownerId) {
     const owner = String(ownerId || '')
     if (!owner) throw new Error('PTY 运维任务缺少租约标识')
-    if (leaseOwner) throw new Error('当前终端已有运维任务正在执行')
+    if (leaseOwner || pendingAcquireOwner) {
+      throw new Error('当前终端已有运维任务正在执行')
+    }
     const acquireGeneration = generation
-    leaseOwner = owner
-    firstIdentity = null
-    recoveryLocked = false
-    lateRecovery = null
+    const acquireInputGeneration = userInputGeneration
+    pendingAcquireOwner = owner
     try {
       await ensureReady()
-      if (generation !== acquireGeneration || leaseOwner !== owner) {
+      if (generation !== acquireGeneration || pendingAcquireOwner !== owner) {
         throw disconnectedError('终端连接已断开，PTY 运维任务尚未开始')
       }
+      if (userInputGeneration !== acquireInputGeneration) {
+        throw new Error('用户已开始终端输入，后台运维任务已让行')
+      }
       assertRunnableTerminalState(getTerminalState())
+      pendingAcquireOwner = ''
+      leaseOwner = owner
+      firstIdentity = null
+      recoveryLocked = false
+      lateRecovery = null
     } catch (error) {
-      if (generation === acquireGeneration && leaseOwner === owner) {
-        leaseOwner = ''
+      if (pendingAcquireOwner === owner) pendingAcquireOwner = ''
+      if (leaseOwner === owner) leaseOwner = ''
+      if (generation === acquireGeneration) {
         safeNotifyIdle()
       }
       throw error
@@ -512,6 +572,7 @@ export function createManagedPtyTaskController ({
     const execution = active
     if (!execution) {
       if (!recoveryLocked || !lateRecovery ||
+        lateRecovery.recoveryArmed !== true ||
         promptSequence <= lateRecovery.promptAfterSequence) return false
       const recoveryOwner = lateRecovery.owner
       lateRecovery = null
@@ -525,6 +586,7 @@ export function createManagedPtyTaskController ({
       return true
     }
     if (execution.cancelRequested) {
+      if (!execution.cancellationRecoveryArmed) return false
       if (promptSequence <= execution.cancelRequestedPromptSequence) return false
     } else if (!execution.commandFinished ||
       promptSequence <= execution.commandFinishedPromptSequence) {
@@ -536,9 +598,18 @@ export function createManagedPtyTaskController ({
   }
 
   function handleUserInput (data) {
+    if (pendingAcquireOwner && !leaseOwner) {
+      userInputGeneration += 1
+      return { handled: false, send: false }
+    }
     if (!leaseOwner) return { handled: false, send: false }
     const isInterrupt = data === '\x03'
-    if (isInterrupt) requestCancellation(active, 'user')
+    const preemptReadOnlyFileTask = !isInterrupt &&
+      /^root-file:list(?::|$)/.test(leaseOwner) &&
+      ['probe', 'list', 'list-bound'].includes(active?.request?.operation)
+    if (isInterrupt || preemptReadOnlyFileTask) {
+      requestCancellation(active, 'user')
+    }
     return { handled: true, send: false, queue: !isInterrupt }
   }
 
@@ -546,6 +617,7 @@ export function createManagedPtyTaskController ({
     generation += 1
     const execution = active
     const needsOutputCleanup = recoveryLocked || Boolean(lateRecovery)
+    pendingAcquireOwner = ''
     leaseOwner = ''
     firstIdentity = null
     recoveryLocked = false
@@ -565,7 +637,7 @@ export function createManagedPtyTaskController ({
     handlePromptStarted,
     handleUserInput,
     invalidate,
-    isBusy: () => Boolean(leaseOwner),
-    owner: () => leaseOwner
+    isBusy: () => Boolean(leaseOwner || pendingAcquireOwner),
+    owner: () => leaseOwner || pendingAcquireOwner
   })
 }
