@@ -89,29 +89,58 @@ test('generation drain invalidates displayed identity before cleanup can settle'
   assert.deepEqual(calls, ['invalidate-identity', 'release', 'destroy'])
 })
 
-test('generation drain rejection still destroys once and latest drain wins', async () => {
+test('generation drain settles every release then destroys once and rejects observably', async () => {
   const {
     activateRemoteFileGeneration,
     drainRemoteFileGeneration
   } = await loadModule()
-  const releaseGate = deferred()
+  const rejectedRelease = deferred()
+  const pendingRelease = deferred()
+  const rejectedSettlement = deferred()
+  const releaseError = new Error('root cleanup failed')
+  const settlementError = new Error('prepared cleanup failed')
+  const calls = []
   let destroyCount = 0
   const entry = {
-    sftp: { destroy: async () => { destroyCount += 1 } },
+    sftp: {
+      destroy: async () => {
+        destroyCount += 1
+        calls.push('destroy')
+      }
+    },
     remoteFileOperations: new Set([{
-      release: () => releaseGate.promise
+      release: () => {
+        calls.push('release-rejected')
+        return rejectedRelease.promise
+      }
+    }, {
+      release: () => {
+        calls.push('release-pending')
+        return pendingRelease.promise
+      }
     }]),
-    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationSettlements: new Set([rejectedSettlement.promise]),
     remoteFileOperationBackends: new Map(),
     remoteFileOperationTail: Promise.resolve()
   }
 
   const oldDrain = drainRemoteFileGeneration(entry)
   const latestDrain = drainRemoteFileGeneration(entry)
-  releaseGate.reject(new Error('root cleanup failed'))
-  await Promise.all([oldDrain.promise, latestDrain.promise])
+  assert.deepEqual(calls, ['release-rejected', 'release-pending'])
+  rejectedRelease.reject(releaseError)
+  rejectedSettlement.reject(settlementError)
+  await Promise.resolve()
+  assert.equal(destroyCount, 0)
+  pendingRelease.resolve(true)
+  await assert.rejects(oldDrain.promise, error => {
+    assert.equal(error instanceof AggregateError, true)
+    assert.deepEqual(error.errors, [releaseError, settlementError])
+    return true
+  })
+  await latestDrain.promise
 
   assert.equal(destroyCount, 1)
+  assert.deepEqual(calls, ['release-rejected', 'release-pending', 'destroy'])
   assert.equal(activateRemoteFileGeneration(entry, oldDrain.generation), false)
   assert.equal(activateRemoteFileGeneration(entry, latestDrain.generation), true)
 })
@@ -384,9 +413,35 @@ test('binding a new SSH generation destroys the old SFTP transport first', async
   ])
 })
 
-test('session rebind survives rejected root cleanup and initializes after destroy', async () => {
+test('hidden SSH SFTP binding defers remote loading until explicit open', async () => {
+  const { bindSftpEntryRemoteSession } = await loadModule()
+  const calls = []
+  const entry = {
+    terminalId: 'tab-1',
+    port: 41001,
+    sshSessionGeneration: 'generation-old',
+    shouldRenderRemote: () => true,
+    shouldInitializeRemoteOnBind: () => false,
+    initRemoteAll: () => {
+      calls.push('init')
+      return 'ready'
+    },
+    initLocalAll: () => calls.push('local')
+  }
+
+  assert.equal(await bindSftpEntryRemoteSession(entry, {
+    terminalId: 'tab-1',
+    port: 41002,
+    sshSessionGeneration: 'generation-new',
+    sshTerminalPid: '1002'
+  }), undefined)
+  assert.deepEqual(calls, ['local'])
+})
+
+test('session rebind reports rejected cleanup after destroying the stale transport', async () => {
   const { bindSftpEntryRemoteSession } = await loadModule()
   const releaseGate = deferred()
+  const cleanupError = new Error('staging cleanup failed')
   const calls = []
   const entry = {
     sftp: { destroy: async () => calls.push('destroy') },
@@ -395,7 +450,7 @@ test('session rebind survives rejected root cleanup and initializes after destro
       async release () {
         calls.push('release')
         await releaseGate.promise
-        throw new Error('staging cleanup failed')
+        throw cleanupError
       }
     }]),
     remoteFileOperationSettlements: new Set(),
@@ -417,13 +472,15 @@ test('session rebind survives rejected root cleanup and initializes after destro
   await Promise.resolve()
   assert.deepEqual(calls, ['invalidate-identity', 'release'])
   releaseGate.resolve()
-  assert.equal(await binding, 'ready')
+  await assert.rejects(binding, error => {
+    assert.equal(error instanceof AggregateError, true)
+    assert.deepEqual(error.errors, [cleanupError])
+    return true
+  })
   assert.deepEqual(calls, [
     'invalidate-identity',
     'release',
-    'destroy',
-    ['init', 'generation-new'],
-    'local'
+    'destroy'
   ])
 })
 

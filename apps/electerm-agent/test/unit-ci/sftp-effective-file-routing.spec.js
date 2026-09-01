@@ -807,11 +807,7 @@ test('initial SSH home lookup overlaps remote capability acquisition', async () 
   const listing = entry.remoteList(false, undefined, undefined, {
     rethrow: true
   })
-  const phase = await Promise.race([
-    capabilityStarted.promise.then(() => 'capability-started'),
-    new Promise(resolve => setTimeout(() => resolve('blocked-on-home'), 25))
-  ])
-  assert.equal(phase, 'capability-started')
+  await capabilityStarted.promise
 
   homeReady.resolve('/home/hik')
   await listing
@@ -820,6 +816,90 @@ test('initial SSH home lookup overlaps remote capability acquisition', async () 
     [['list', 'initial-home', '/home/hik']]
   )
   assert.equal(entry.state.remotePath, '/home/hik')
+})
+
+test('real entry bind chain keeps hidden SSH login lazy and initial full SFTP eager', async () => {
+  const calls = []
+  let clientCount = 0
+  let preparedProbeCount = 0
+  let acquireCount = 0
+  const backend = createBackend(calls, 'bind-list')
+  const acquire = async ({ onIdentity }) => {
+    acquireCount += 1
+    await onIdentity({
+      loginUsername: 'hik',
+      effectiveUid: '1000',
+      effectiveUsername: 'hik',
+      channel: 'sftp'
+    })
+    return {
+      backend: backend.backend,
+      runtimeIdentity: {
+        channel: 'sftp',
+        effectiveUsername: 'hik'
+      },
+      release: backend.release
+    }
+  }
+  const { entry, lifecycle } = await createEntryHarness({
+    acquire,
+    client: async () => {
+      clientCount += 1
+      return {
+        sshSessionGeneration: `candidate-${clientCount}`,
+        sshTerminalPid: 4242,
+        connect: async () => true,
+        destroy: async () => true
+      }
+    },
+    beginProbe: () => {
+      preparedProbeCount += 1
+      throw new Error('hidden bind started a prepared probe')
+    }
+  })
+  const reports = []
+  const localCalls = []
+  entry.props.tab = {
+    ...entry.props.tab,
+    host: 'fixture.invalid',
+    type: 'ssh'
+  }
+  entry.props.isFtp = false
+  entry.props.enableSftp = false
+  entry.localListOwner = () => localCalls.push('owner')
+  entry.localList = () => localCalls.push('list')
+  entry.remoteListOwner = async () => calls.push(['remote-owner'])
+  entry.updateRemoteList = async remote => remote
+  installClassField(entry, 'initData', {
+    bindSftpEntryRemoteSession: lifecycle.bindSftpEntryRemoteSession,
+    window: { store: { onError: error => reports.push(error) } }
+  })
+  installClassField(entry, 'shouldRenderRemote', {
+    terminalSerialType: 'serial'
+  })
+  installClassField(entry, 'shouldInitializeRemoteOnBind')
+  installClassField(entry, 'initRemoteAll', {
+    beginSftpEntryRemoteTask: lifecycle.beginSftpEntryRemoteTask,
+    isCurrentSftpEntryRemoteTask: lifecycle.isCurrentSftpEntryRemoteTask
+  })
+  installClassField(entry, 'initLocalAll')
+
+  await entry.initData('tab-1', 41001, 'generation-login', '1001')
+
+  assert.equal(clientCount, 0)
+  assert.equal(preparedProbeCount, 0)
+  assert.equal(acquireCount, 0)
+  assert.deepEqual(localCalls, ['owner', 'list'])
+  assert.deepEqual(reports, [])
+
+  entry.props.enableSftp = true
+  await entry.initData('tab-1', 41002, 'generation-full', '1002')
+
+  assert.equal(clientCount, 1)
+  assert.equal(preparedProbeCount, 0)
+  assert.equal(acquireCount, 1)
+  assert.deepEqual(localCalls, ['owner', 'list', 'owner', 'list'])
+  assert.deepEqual(reports, [])
 })
 
 test('explicit first open overlaps one prepared probe with native connect', async () => {
@@ -882,6 +962,7 @@ test('explicit first open overlaps one prepared probe with native connect', asyn
   try {
     assert.equal(beginCount, 1)
     await probeStarted.promise
+    assert.equal(consumeCount, 0)
     assert.equal(acquireCount, 0)
   } catch (error) {
     overlapError = error
@@ -1715,6 +1796,8 @@ test('unmount destroys the detached transport after rejected and synchronous rel
     'src/client/components/sftp/sftp-entry-lifecycle.js'
   )
   const rejectedRelease = deferred()
+  const asynchronousError = new Error('asynchronous release failure')
+  const synchronousError = new Error('synchronous release failure')
   let destroyCount = 0
   const entry = {
     id: 'sftp-tab-1',
@@ -1723,7 +1806,7 @@ test('unmount destroys the detached transport after rejected and synchronous rel
     remoteFileOperations: new Set([{
       release: () => rejectedRelease.promise
     }, {
-      release: () => { throw new Error('synchronous release failure') }
+      release: () => { throw synchronousError }
     }]),
     remoteFileOperationSettlements: new Set(),
     remoteFileOperationBackends: new Map(),
@@ -1739,10 +1822,20 @@ test('unmount destroys the detached transport after rejected and synchronous rel
 
   const disposal = entry.componentWillUnmount()
   assert.equal(destroyCount, 0)
-  rejectedRelease.reject(new Error('asynchronous release failure'))
-  await disposal
+  rejectedRelease.reject(asynchronousError)
+  let observedError
+  await assert.rejects(disposal, error => {
+    observedError = error
+    assert.equal(error instanceof AggregateError, true)
+    assert.deepEqual(error.errors, [asynchronousError, synchronousError])
+    return true
+  })
   assert.equal(destroyCount, 1)
-  assert.equal(await entry.componentWillUnmount(), true)
+  assert.equal(entry.componentWillUnmount(), disposal)
+  await assert.rejects(
+    entry.componentWillUnmount(),
+    error => error === observedError
+  )
   assert.equal(destroyCount, 1)
 })
 

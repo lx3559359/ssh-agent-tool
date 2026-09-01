@@ -270,13 +270,41 @@ export function drainRemoteFileGeneration (entry, options = {}) {
       return Promise.reject(error)
     }
   })
-  const settled = Promise.allSettled([...releases, ...settlements])
+  const releaseSettlement = Promise.allSettled([
+    ...releases,
+    ...settlements
+  ])
   const previousDrain = entry.remoteFileGenerationDrainTail ||
     Promise.resolve()
   const promise = Promise.resolve(previousDrain)
-    .then(() => settled)
-    .then(() => destroySftpEntryClientOnce(entry, client))
-  const drainTail = promise.then(() => undefined)
+    .then(async () => {
+      const results = await releaseSettlement
+      const errors = results
+        .filter(result => result.status === 'rejected')
+        .map(result => result.reason)
+      let destroyed
+      let destroyError
+      try {
+        destroyed = await destroySftpEntryClientOnce(entry, client)
+      } catch (error) {
+        destroyError = error
+      }
+      if (errors.length) {
+        if (destroyError) errors.push(destroyError)
+        throw new AggregateError(
+          errors,
+          '远程文件 generation 释放失败'
+        )
+      }
+      if (destroyError) throw destroyError
+      return destroyed
+    })
+  const drainTail = promise.then(() => undefined, error => {
+    if (error?.code === 'TEARDOWN_TIMEOUT' || error?.uncertain === true) {
+      throw error
+    }
+    return undefined
+  })
   drainTail.catch(() => {})
   entry.remoteFileGenerationDrainTail = drainTail
   return Object.freeze({
@@ -388,7 +416,10 @@ export async function bindSftpEntryRemoteSession (entry, binding = {}) {
   }
   if (!activateRemoteFileGeneration(entry, drain.generation)) return undefined
   const token = captureLifecycle(entry)
-  const remote = entry.shouldRenderRemote()
+  const shouldInitializeRemote =
+    typeof entry.shouldInitializeRemoteOnBind !== 'function' ||
+    entry.shouldInitializeRemoteOnBind()
+  const remote = entry.shouldRenderRemote() && shouldInitializeRemote
     ? await entry.initRemoteAll()
     : undefined
   if (!isCurrentLifecycle(entry, token)) return undefined
