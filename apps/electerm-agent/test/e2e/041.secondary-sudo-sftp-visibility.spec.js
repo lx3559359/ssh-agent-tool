@@ -1,5 +1,7 @@
+const { spawnSync } = require('node:child_process')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
+const path = require('node:path')
 const { _electron: electron, expect, test } = require('@playwright/test')
 const { Client } = require('@electerm/ssh2')
 const {
@@ -641,6 +643,86 @@ test('private launcher fixes the 041 target and one worker', () => {
     SHELLPILOT_PRIVATE_REPORTER_STYLE: 'line',
     VISIBLE: 'kept'
   })
+})
+
+function runPrivateReporterFailureProbe (failureMode) {
+  const probeSource = [
+    "const fs = require('node:fs')",
+    "const path = require('node:path')",
+    "const Reporter = require('./test/e2e/run-041-private')",
+    'const reporter = new Reporter()',
+    "const mode = process.argv[1] || ''",
+    "const probeRoot = path.join(process.cwd(), 'test-results-reporter-unlink-probe')",
+    "const validArtifact = path.join(probeRoot, 'case', 'error-context.md')",
+    "const invalidArtifact = path.resolve(process.cwd(), '..', 'private-outside', 'error-context.md')",
+    "if (mode === 'unlink') fs.mkdirSync(validArtifact, { recursive: true })",
+    'try {',
+    '  const result = {',
+    "    attachments: [{ name: 'error-context', path: mode === 'unlink' ? validArtifact : invalidArtifact }],",
+    '    duration: 1,',
+    '    errors: [],',
+    '    retry: 0,',
+    "    status: 'passed'",
+    '  }',
+    '  reporter.onTestEnd(null, result)',
+    "  const override = reporter.onEnd({ status: 'passed' })",
+    "  if (override?.status === 'failed') process.exitCode = 1",
+    '  reporter.onExit?.()',
+    '} finally {',
+    "  if (mode === 'unlink') fs.rmSync(probeRoot, { recursive: true, force: true })",
+    '}'
+  ].join('\n')
+  return spawnSync(process.execPath, ['-e', probeSource, failureMode], {
+    cwd: path.resolve(__dirname, '../..'),
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      SHELLPILOT_PRIVATE_REPORTER_STYLE: 'line'
+    },
+    windowsHide: true
+  })
+}
+
+function privateReporterProbeSignals (probe) {
+  const inheritedOutput = `${probe.stdout || ''}${probe.stderr || ''}`
+  return {
+    absolutePathDetected: /[A-Za-z]:\\/.test(inheritedOutput),
+    boundedCategorySeen:
+      inheritedOutput.includes(
+        '"category":"private-reporter-internal-failure"'
+      ),
+    boundedCountSeen: /"failureCount":[1-9][0-9]*/.test(inheritedOutput),
+    errorObjectDetected: /\bError:|["']?(?:code|path|stack)["']?\s*:/.test(
+      inheritedOutput
+    ),
+    exitNonzero: Number(probe.status) !== 0,
+    sourceLocationDetected:
+      /(?:run-041-private|secondary-sudo-sftp-visibility)\.js:\d+/
+        .test(inheritedOutput),
+    stackDetected: /\n\s+at\s/.test(inheritedOutput)
+  }
+}
+
+const privateReporterFailureEvidence = {
+  absolutePathDetected: false,
+  boundedCategorySeen: true,
+  boundedCountSeen: true,
+  errorObjectDetected: false,
+  exitNonzero: true,
+  sourceLocationDetected: false,
+  stackDetected: false
+}
+
+test('private reporter rejects invalid artifact paths without raw output', () => {
+  expect(privateReporterProbeSignals(
+    runPrivateReporterFailureProbe('invalid')
+  )).toEqual(privateReporterFailureEvidence)
+})
+
+test('private reporter reports unlink failures without raw output', () => {
+  expect(privateReporterProbeSignals(
+    runPrivateReporterFailureProbe('unlink')
+  )).toEqual(privateReporterFailureEvidence)
 })
 
 test('reporter hygiene deliberate failure probe', () => {

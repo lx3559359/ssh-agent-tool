@@ -117,6 +117,11 @@ class PrivateArtifactReporter {
       timedOut: 0,
       unknown: 0
     }
+    this.internalFailureCounts = {
+      'artifact-path-rejected': 0,
+      'artifact-unlink-failed': 0
+    }
+    this.internalFailureCount = 0
     this.reporterStyle = process.env.SHELLPILOT_PRIVATE_REPORTER_STYLE === 'dot'
       ? 'dot'
       : 'line'
@@ -131,6 +136,22 @@ class PrivateArtifactReporter {
     return Object.hasOwn(this.counts, status) ? status : 'unknown'
   }
 
+  recordInternalFailure (failureCategory) {
+    const category = Object.hasOwn(
+      this.internalFailureCounts,
+      failureCategory
+    )
+      ? failureCategory
+      : 'artifact-unlink-failed'
+    this.internalFailureCounts[category] += 1
+    this.internalFailureCount += 1
+    this.emit({
+      category: 'private-reporter-internal-failure',
+      failureCategory: category,
+      failureCount: this.internalFailureCounts[category]
+    })
+  }
+
   onBegin (_config, suite) {
     this.testCount = suite.allTests().length
     if (this.reporterStyle === 'line') {
@@ -142,17 +163,18 @@ class PrivateArtifactReporter {
     for (let index = result.attachments.length - 1; index >= 0; index -= 1) {
       const attachment = result.attachments[index]
       if (attachment.name !== 'error-context') continue
+      result.attachments.splice(index, 1)
       if (!isPrivateArtifactPath(attachment.path)) {
-        throw new Error('Private reporter rejected artifact path')
+        this.recordInternalFailure('artifact-path-rejected')
+        continue
       }
       try {
         fs.unlinkSync(attachment.path)
       } catch (error) {
         if (error?.code !== 'ENOENT') {
-          throw new Error('Private reporter artifact cleanup failed')
+          this.recordInternalFailure('artifact-unlink-failed')
         }
       }
-      result.attachments.splice(index, 1)
     }
     const status = this.safeStatus(result.status)
     this.counts[status] += 1
@@ -180,15 +202,30 @@ class PrivateArtifactReporter {
     ].includes(result.status)
       ? result.status
       : 'unknown'
+    const finalStatus = this.internalFailureCount > 0
+      ? 'failed'
+      : status
     this.emit({
       category: 'private-test-summary',
       failedCount: this.counts.failed,
+      internalFailureCount: this.internalFailureCount,
       interruptedCount: this.counts.interrupted,
       passedCount: this.counts.passed,
       skippedCount: this.counts.skipped,
-      status,
+      status: finalStatus,
       testCount: this.testCount,
       timedOutCount: this.counts.timedOut
+    })
+    if (this.internalFailureCount > 0) return { status: 'failed' }
+  }
+
+  onExit () {
+    if (this.internalFailureCount === 0) return
+    process.exitCode = 1
+    this.emit({
+      category: 'private-reporter-exit',
+      internalFailureCount: this.internalFailureCount,
+      status: 'failed'
     })
   }
 }
