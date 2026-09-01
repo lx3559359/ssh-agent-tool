@@ -5,6 +5,7 @@ import { createManagedTerminalTransport } from './managed-terminal-transport.js'
 const terminalControlFlag = '__aigshellTerminalControl'
 const managedPtySessionNoncePattern = /^[a-f0-9]{32}$/
 const managedPtyFrameByteLimit = 3840
+const managedPtyLifecycleByteLimit = 8192
 
 function serializeShellIntegrationValue (value) {
   return String(value || '')
@@ -34,6 +35,9 @@ export default class AttachAddonCustom {
     this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
+    this.managedPtyLifecycleOverflowed = false
+    this.managedPtyLifecyclePending = false
+    this.managedPtyLifecycleDiscarding = false
     this.pendingInput = []
     this.hasReceivedInitialData = false
     this.onInitialDataCallback = null
@@ -112,6 +116,7 @@ export default class AttachAddonCustom {
     this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
+    this.managedPtyLifecycleDiscarding = false
     const timeoutNumber = Number(timeout)
     if (Number.isFinite(timeoutNumber) && timeoutNumber > 0) {
       this.suppressTimeout = setTimeout(() => {
@@ -143,6 +148,7 @@ export default class AttachAddonCustom {
     this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
+    this.managedPtyLifecycleDiscarding = false
 
     if (!discard && this.suppressedData.length > 0) {
       for (const data of this.suppressedData) {
@@ -363,6 +369,8 @@ export default class AttachAddonCustom {
   }
 
   _extractManagedPtyLifecycleFrames = data => {
+    this.managedPtyLifecycleOverflowed = false
+    this.managedPtyLifecyclePending = false
     const incoming = typeof data === 'string'
       ? new TextEncoder().encode(data)
       : data instanceof ArrayBuffer
@@ -409,8 +417,21 @@ export default class AttachAddonCustom {
         }
       }
       if (end === -1) {
-        this.managedPtyLifecycleBytes = scan.slice(start)
+        const pending = scan.slice(start)
+        if (pending.byteLength > managedPtyLifecycleByteLimit) {
+          this.managedPtyLifecycleBytes = new Uint8Array()
+          this.managedPtyLifecycleOverflowed = true
+        } else {
+          this.managedPtyLifecycleBytes = pending
+          this.managedPtyLifecyclePending = true
+        }
         return frames
+      }
+      if (end + 1 - start > managedPtyLifecycleByteLimit) {
+        this.managedPtyLifecycleBytes = new Uint8Array()
+        this.managedPtyLifecycleOverflowed = true
+        cursor = end + 1
+        continue
       }
       frames.push(new TextDecoder('utf-8').decode(scan.slice(start, end + 1)))
       cursor = end + 1
@@ -430,12 +451,30 @@ export default class AttachAddonCustom {
 
   _writeManagedPtyHiddenOutput = data => {
     if (!data || data.length === 0) return
-    const releaseData = typeof data === 'string'
+    let releaseData = typeof data === 'string'
       ? this._findSuppressionReleaseData(data)
       : this._findSuppressionReleaseBytes(data)
     const lifecycleFrames = this._extractManagedPtyLifecycleFrames(data)
+    const lifecycleOverflowed = this.managedPtyLifecycleOverflowed
+    if (lifecycleOverflowed) {
+      this.managedPtyLifecycleOverflowed = false
+      this.managedPtyLifecycleDiscarding = true
+      this.prepareManagedPtyEchoRecovery()
+      releaseData = typeof data === 'string'
+        ? this._findSuppressionReleaseData(data)
+        : this._findSuppressionReleaseBytes(data)
+    }
+    if (this.managedPtyLifecycleDiscarding) {
+      if (!lifecycleFrames.includes(this.suppressionReleaseMarker)) return
+      this.managedPtyLifecycleDiscarding = false
+    }
+    if (this.managedPtyLifecyclePending) {
+      return
+    }
     if (this.publishSuppressionRemainder &&
-      this.managedPtyOutputStreamingActive) this._publishRemoteOutput(data)
+      this.managedPtyOutputStreamingActive && !lifecycleOverflowed) {
+      this._publishRemoteOutput(data)
+    }
     for (const frame of lifecycleFrames) {
       if (!this._isAuthenticatedManagedLifecycleFrame(frame)) continue
       if (frame === this.suppressionReleaseMarker) {
@@ -507,6 +546,18 @@ export default class AttachAddonCustom {
         const integrationData = typeof data === 'string'
           ? this._findSuppressionReleaseData(data)
           : this._findSuppressionReleaseBytes(data)
+        if (integrationData === null &&
+          this.managedPtyEchoSuppressionActive &&
+          this.consumeManagedPtyCommandRecord) {
+          this._extractManagedPtyLifecycleFrames(data)
+          if (this.managedPtyLifecycleOverflowed) {
+            this.managedPtyLifecycleOverflowed = false
+            this.managedPtyLifecycleDiscarding = true
+            this.prepareManagedPtyEchoRecovery()
+            this._writeManagedPtyHiddenOutput(data)
+          }
+          return
+        }
         if (integrationData !== null) {
           const publishRemainder = this.publishSuppressionRemainder
           const consumeCommandRecord = this.consumeManagedPtyCommandRecord

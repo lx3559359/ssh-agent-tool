@@ -50,8 +50,14 @@ function taskMarker (token, phase, ...fields) {
   return `\u001b]697;SHELLPILOT_OPS;${token};${phase};${fields.join(';')}\u0007`
 }
 
-function fileFrameAcknowledgement (token, sequence, status = 'ok') {
-  return `\u001b]698;SHELLPILOT_FILE_FRAME;${token};${sequence};${status}\u0007`
+function fileFrameAcknowledgement (
+  token,
+  sequence,
+  total = 3,
+  digest = 'a'.repeat(64),
+  status = 'ok'
+) {
+  return `\u001b]698;SHELLPILOT_FILE_FRAME;${token};${sequence};${total};${digest};${status}\u0007`
 }
 
 function createBoundedProbeProtocol ({
@@ -120,13 +126,15 @@ function createFramedProbeProtocol ({
     frames: Object.freeze(commands.map((command, sequence) => Object.freeze({
       sequence,
       command,
-      acknowledgement: fileFrameAcknowledgement(token, sequence),
+      acknowledgement: fileFrameAcknowledgement(
+        token, sequence, commands.length),
       executesOperation: sequence === commands.length - 1
     }))),
     cleanup: Object.freeze({
       sequence: commands.length,
       command: 'frame-cleanup',
-      acknowledgement: fileFrameAcknowledgement(token, commands.length),
+      acknowledgement: fileFrameAcknowledgement(
+        token, commands.length, commands.length),
       executesOperation: false
     })
   })
@@ -382,6 +390,102 @@ test('command plan rejects an authenticated out-of-order acknowledgement', async
   assert.equal(await lease.release(), true)
 })
 
+test('command plan rejects malformed acknowledgement contracts before submission', async () => {
+  const token = 'da'.repeat(24)
+  const valid = fileFrameAcknowledgement(token, 0)
+  const malformed = [
+    valid.replace(';3;', ';4;'),
+    valid.replace('a'.repeat(64), 'b'.repeat(64)),
+    valid.replace(';ok\u0007', ';ok;extra\u0007'),
+    valid.slice(0, -1),
+    valid.replace(';ok\u0007', ';error\u0007')
+  ]
+  for (const [index, acknowledgement] of malformed.entries()) {
+    const protocol = createFramedProbeProtocol({ token })
+    const buildExecutionPlan = protocol.buildExecutionPlan
+    protocol.buildExecutionPlan = () => {
+      const plan = buildExecutionPlan()
+      return {
+        ...plan,
+        frames: [
+          { ...plan.frames[0], acknowledgement },
+          ...plan.frames.slice(1)
+        ]
+      }
+    }
+    const harness = await createControllerHarness()
+    const lease = await harness.controller.acquire(`invalid-ack-${index}`)
+    await assert.rejects(
+      lease.execute({ request: { operation: 'probe' }, protocol }),
+      /确认合同无效/
+    )
+    assert.equal(harness.submissions.length, 0)
+    assert.equal(await lease.release(), true)
+  }
+})
+
+test('runtime acknowledgement failures clean a staged plan before rejecting', async () => {
+  const token = 'db'.repeat(24)
+  const valid = fileFrameAcknowledgement(token, 0)
+  const malformed = [
+    fileFrameAcknowledgement(token, 0, 4),
+    fileFrameAcknowledgement(token, 0, 3, 'b'.repeat(64)),
+    valid.replace(';ok\u0007', ';ok;extra\u0007'),
+    valid.slice(0, -1)
+  ]
+  for (const [index, acknowledgement] of malformed.entries()) {
+    const protocol = createFramedProbeProtocol({ token })
+    const harness = await createControllerHarness()
+    const lease = await harness.controller.acquire(`runtime-invalid-ack-${index}`)
+    const running = lease.execute({
+      request: { operation: 'probe' },
+      protocol,
+      timeoutMs: 1000
+    })
+    const observed = running.catch(error => error)
+    await Promise.resolve()
+    harness.emit(acknowledgement)
+    harness.emitCommandFinished(0)
+    harness.emitPromptStarted()
+    await Promise.resolve()
+    assert.equal(harness.submissions.at(-1).command, 'frame-cleanup')
+    assert.equal(harness.submissions.some(
+      submission => submission.command === 'frame-final'
+    ), false)
+    harness.emit(fileFrameAcknowledgement(token, 3))
+    harness.emitCommandFinished(0)
+    harness.emitPromptStarted()
+    const error = await observed
+    assert.match(error.message, /命令帧确认/)
+    assert.equal(await lease.release(), true)
+  }
+})
+
+test('unterminated frame acknowledgement enforces its UTF-8 byte cap', async () => {
+  const token = 'de'.repeat(24)
+  const protocol = createFramedProbeProtocol({ token })
+  const harness = await createControllerHarness()
+  const lease = await harness.controller.acquire('ack-utf8-byte-cap')
+  const running = lease.execute({
+    request: { operation: 'probe' }, protocol, timeoutMs: 1000
+  })
+  const observed = running.catch(error => error)
+  await Promise.resolve()
+  harness.emit(
+    `\u001b]698;SHELLPILOT_FILE_FRAME;${token};` + '深'.repeat(200)
+  )
+  harness.emitCommandFinished(0)
+  harness.emitPromptStarted()
+  await Promise.resolve()
+  assert.equal(harness.submissions.at(-1).command, 'frame-cleanup')
+  harness.emit(fileFrameAcknowledgement(token, 3))
+  harness.emitCommandFinished(0)
+  harness.emitPromptStarted()
+  const error = await observed
+  assert.match(error.message, /确认超过安全上限/)
+  assert.equal(await lease.release(), true)
+})
+
 test('command plan rejects an oversized frame before submission', async () => {
   const protocol = createFramedProbeProtocol({
     token: 'd3'.repeat(24),
@@ -488,6 +592,54 @@ test('pre-accept rejection after a staged frame still runs plan cleanup', async 
   assert.equal(await lease.release(), true)
 })
 
+test('non-cancellation rejection after staged state runs cleanup first', async () => {
+  const token = 'd7'.repeat(24)
+  const protocol = createFramedProbeProtocol({ token })
+  const secondAccepted = deferred()
+  const harness = await createControllerHarness({
+    submitCommand: (_command, _options, sequence) => Object.freeze({
+      requestId: 'f'.repeat(32),
+      accepted: sequence === 2
+        ? secondAccepted.promise
+        : Promise.resolve(true),
+      written: Promise.resolve(true)
+    })
+  })
+  const lease = await harness.controller.acquire('operations-frame-reject-cleanup')
+  const running = lease.execute({
+    request: { operation: 'probe' },
+    protocol,
+    timeoutMs: 1000
+  })
+  const observed = running.catch(error => error)
+  await Promise.resolve()
+  harness.emit(fileFrameAcknowledgement(token, 0))
+  harness.emitCommandFinished(0)
+  harness.emitPromptStarted()
+  await Promise.resolve()
+  assert.equal(harness.submissions.at(-1).command, 'frame-chunk')
+
+  const primaryError = new Error('staged frame transport rejected')
+  secondAccepted.reject(primaryError)
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(harness.submissions.at(-1).command, 'frame-cleanup')
+  assert.equal(harness.submissions.some(
+    submission => submission.command === 'frame-final'
+  ), false)
+
+  harness.emit(fileFrameAcknowledgement(token, 3))
+  harness.emitCommandFinished(0)
+  harness.emitPromptStarted()
+  assert.equal(await observed, primaryError)
+  assert.deepEqual(harness.submissions.map(entry => entry.command), [
+    'frame-init',
+    'frame-chunk',
+    'frame-cleanup'
+  ])
+  assert.equal(await lease.release(), true)
+})
+
 test('failed staged-plan cleanup preserves cancellation and cleanup errors', async () => {
   const token = 'd6'.repeat(24)
   const protocol = createFramedProbeProtocol({ token })
@@ -536,6 +688,97 @@ test('failed staged-plan cleanup preserves cancellation and cleanup errors', asy
   assert.equal(harness.submissions.some(
     submission => submission.command === 'frame-final'
   ), false)
+})
+
+test('cleanup written rejection aggregates the original staged failure', async () => {
+  const token = 'dc'.repeat(24)
+  const protocol = createFramedProbeProtocol({ token })
+  const secondAccepted = deferred()
+  const cleanupAccepted = deferred()
+  const cleanupWritten = deferred()
+  const harness = await createControllerHarness({
+    submitCommand: (_command, _options, sequence) => Object.freeze({
+      requestId: 'f'.repeat(32),
+      accepted: sequence === 2
+        ? secondAccepted.promise
+        : sequence === 3
+          ? cleanupAccepted.promise
+          : Promise.resolve(true),
+      written: sequence === 3
+        ? cleanupWritten.promise
+        : Promise.resolve(true)
+    })
+  })
+  const lease = await harness.controller.acquire('cleanup-written-reject')
+  const running = lease.execute({
+    request: { operation: 'probe' }, protocol, timeoutMs: 1000
+  })
+  const observed = running.catch(error => error)
+  await Promise.resolve()
+  harness.emit(fileFrameAcknowledgement(token, 0))
+  harness.emitCommandFinished(0)
+  harness.emitPromptStarted()
+  await Promise.resolve()
+  const primaryError = new Error('staged frame rejected')
+  secondAccepted.reject(primaryError)
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(harness.submissions.at(-1).command, 'frame-cleanup')
+
+  const cleanupError = new Error('cleanup write failed')
+  cleanupWritten.reject(cleanupError)
+  const error = await observed
+  assert.equal(error.name, 'CancellationUnknownError')
+  assert.equal(error.cause instanceof AggregateError, true)
+  assert.equal(error.cause.errors.includes(primaryError), true)
+  assert.equal(error.cause.errors.includes(cleanupError), true)
+  assert.equal(await lease.release(), false)
+})
+
+test('cleanup deadline aggregates timeout and keeps the lease locked', async () => {
+  const token = 'dd'.repeat(24)
+  const protocol = createFramedProbeProtocol({ token })
+  const secondAccepted = deferred()
+  const cleanupAccepted = deferred()
+  const timers = createManualTimers()
+  const harness = await createControllerHarness({
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+    submitCommand: (_command, _options, sequence) => Object.freeze({
+      requestId: 'f'.repeat(32),
+      accepted: sequence === 2
+        ? secondAccepted.promise
+        : sequence === 3
+          ? cleanupAccepted.promise
+          : Promise.resolve(true),
+      written: Promise.resolve(true)
+    })
+  })
+  const lease = await harness.controller.acquire('cleanup-deadline')
+  const running = lease.execute({
+    request: { operation: 'probe' }, protocol, timeoutMs: 1000
+  })
+  const observed = running.catch(error => error)
+  await Promise.resolve()
+  harness.emit(fileFrameAcknowledgement(token, 0))
+  harness.emitCommandFinished(0)
+  harness.emitPromptStarted()
+  await Promise.resolve()
+  const primaryError = new Error('staged frame rejected')
+  secondAccepted.reject(primaryError)
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(harness.submissions.at(-1).command, 'frame-cleanup')
+  timers.runAll()
+
+  const error = await observed
+  assert.equal(error.name, 'CancellationUnknownError')
+  assert.equal(error.cause instanceof AggregateError, true)
+  assert.equal(error.cause.errors.includes(primaryError), true)
+  assert.equal(error.cause.errors.some(
+    value => value.name === 'TimeoutError'
+  ), true)
+  assert.equal(await lease.release(), false)
 })
 
 test('one lease resolves only after matching marker command finish and prompt', async () => {

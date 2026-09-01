@@ -8,6 +8,8 @@ const defaultRecoveryTimeoutMs = 5 * 1000
 const managedPtyFrameByteLimit = 3840
 const managedPtyPlanFrameLimit = 128
 const managedPtyPlanByteLimit = 512 * 1024
+const managedPtyFrameAckByteLimit = 512
+const managedPtyFrameAckPrefix = '\u001b]698;SHELLPILOT_FILE_FRAME;'
 
 function createNamedError (name, message, cause) {
   const error = new Error(message)
@@ -29,6 +31,10 @@ function abortError (
 
 function timeoutError () {
   return createNamedError('TimeoutError', 'PTY 运维任务执行超时')
+}
+
+function cleanupTimeoutError () {
+  return createNamedError('TimeoutError', '受控 PTY 执行计划清理超时')
 }
 
 function cancellationUnknownError (cause) {
@@ -121,7 +127,42 @@ function managedPtyByteLength (value) {
   return new TextEncoder().encode(value).byteLength
 }
 
-function requireManagedFrame (value, token, sequence, allowNoAck = false) {
+function parseManagedFrameAcknowledgement (value) {
+  if (typeof value !== 'string' ||
+    managedPtyByteLength(value) > managedPtyFrameAckByteLimit ||
+    !value.startsWith(managedPtyFrameAckPrefix) ||
+    !value.endsWith('\u0007')) {
+    throw new Error('受控 PTY 命令帧确认合同无效')
+  }
+  const fields = value
+    .slice(managedPtyFrameAckPrefix.length, -1)
+    .split(';')
+  if (fields.length !== 5) {
+    throw new Error('受控 PTY 命令帧确认合同无效')
+  }
+  const [token, rawSequence, rawTotal, digest, status] = fields
+  if (!/^(?:0|[1-9]\d*)$/.test(rawSequence) ||
+    !/^[1-9]\d*$/.test(rawTotal) ||
+    !/^[a-f0-9]{64}$/.test(digest) ||
+    !['ok', 'error'].includes(status)) {
+    throw new Error('受控 PTY 命令帧确认合同无效')
+  }
+  const sequence = Number(rawSequence)
+  const total = Number(rawTotal)
+  if (!Number.isSafeInteger(sequence) || !Number.isSafeInteger(total)) {
+    throw new Error('受控 PTY 命令帧确认合同无效')
+  }
+  return { token, sequence, total, digest, status }
+}
+
+function requireManagedFrame (
+  value,
+  token,
+  sequence,
+  total,
+  digest,
+  allowNoAck = false
+) {
   const command = requireManagedCommand(value?.command)
   if (value?.sequence !== sequence ||
     managedPtyByteLength(command) > managedPtyFrameByteLimit) {
@@ -136,10 +177,10 @@ function requireManagedFrame (value, token, sequence, allowNoAck = false) {
       executesOperation: true
     })
   }
-  if (typeof acknowledgement !== 'string' ||
-    acknowledgement.length > 512 ||
-    !acknowledgement.includes(token) ||
-    !acknowledgement.includes(`;${sequence};ok\u0007`)) {
+  const parsed = parseManagedFrameAcknowledgement(acknowledgement)
+  if (parsed.token !== token || parsed.sequence !== sequence ||
+    parsed.total !== total || parsed.digest !== digest ||
+    parsed.status !== 'ok') {
     throw new Error('受控 PTY 命令帧确认合同无效')
   }
   return Object.freeze({
@@ -179,9 +220,14 @@ function requireManagedExecutionPlan (protocol, token, request) {
     source.frames.length > managedPtyPlanFrameLimit) {
     throw new Error('受控 PTY 命令计划无效')
   }
+  const digest = String(source.digest || '')
+  if (!/^[a-f0-9]{64}$/.test(digest)) {
+    throw new Error('受控 PTY 命令计划摘要无效')
+  }
   const singleFrame = source.frames.length === 1
   const frames = source.frames.map((frame, sequence) =>
-    requireManagedFrame(frame, token, sequence, singleFrame))
+    requireManagedFrame(
+      frame, token, sequence, source.frames.length, digest, singleFrame))
   if (frames.filter(frame => frame.executesOperation).length !== 1 ||
     frames.at(-1).executesOperation !== true) {
     throw new Error('受控 PTY 命令计划执行边界无效')
@@ -195,12 +241,13 @@ function requireManagedExecutionPlan (protocol, token, request) {
   }
   const cleanup = singleFrame || source.cleanup === null
     ? null
-    : requireManagedFrame(source.cleanup, token, frames.length)
+    : requireManagedFrame(
+      source.cleanup, token, frames.length, frames.length, digest)
   return Object.freeze({
     kind: source.kind,
     version: source.version,
     token,
-    digest: String(source.digest || ''),
+    digest,
     frames: Object.freeze(frames),
     cleanup
   })
@@ -318,6 +365,24 @@ export function createManagedPtyTaskController ({
     execution.resolve(result)
   }
 
+  function failExecution (execution, error, options = {}) {
+    if (!execution.settled && !execution.cancelRequested &&
+      !execution.planCleanupStarted && execution.planStateMayExist &&
+      execution.plan.cleanup) {
+      execution.cancelRequested = true
+      execution.cancelError = error
+      execution.cancelRequestedPromptSequence = promptSequence
+      execution.cancellationRecoveryArmed = true
+      clearTimer(execution.timeoutHandle)
+      clearTimer(execution.recoveryHandle)
+      execution.timeoutHandle = null
+      safeCancelSubmission(execution.submissionToken)
+      beginPlanCleanup(execution)
+      return
+    }
+    rejectExecution(execution, error, options)
+  }
+
   function sameIdentity (left, right) {
     return left?.uid === right?.uid && left?.username === right?.username
   }
@@ -343,7 +408,7 @@ export function createManagedPtyTaskController ({
     try {
       settleIfCompleteUnsafe(execution)
     } catch (error) {
-      rejectExecution(execution, error, { cancelExpected: true })
+      failExecution(execution, error, { cancelExpected: true })
     }
   }
 
@@ -369,8 +434,7 @@ export function createManagedPtyTaskController ({
         rejectExecution(execution, execution.cancelError)
         return
       }
-      const currentFrame = execution.plan.frames[execution.frameIndex]
-      if (execution.plan.cleanup && currentFrame?.executesOperation !== true) {
+      if (execution.plan.cleanup && execution.planStateMayExist) {
         if (!execution.commandInputReady) return
         beginPlanCleanup(execution)
         return
@@ -380,17 +444,17 @@ export function createManagedPtyTaskController ({
     }
     if (!execution.commandFinished || !execution.promptReturned) return
     if (execution.frameError) {
-      rejectExecution(execution, execution.frameError)
+      failExecution(execution, execution.frameError)
       return
     }
     if (execution.frame?.acknowledgement && !execution.frameAcknowledged) {
-      rejectExecution(execution, new Error('受控 PTY 命令帧确认缺失'))
+      failExecution(execution, new Error('受控 PTY 命令帧确认缺失'))
       return
     }
     if (execution.frameIndex < execution.plan.frames.length - 1) {
       if (!execution.commandInputReady) return
       if (execution.commandExitCode !== 0) {
-        rejectExecution(execution, new Error('受控 PTY 命令帧执行失败'))
+        failExecution(execution, new Error('受控 PTY 命令帧执行失败'))
         return
       }
       submitExecutionFrame(
@@ -400,16 +464,16 @@ export function createManagedPtyTaskController ({
       return
     }
     if (!execution.parser.started()) {
-      rejectExecution(execution, new Error('PTY 运维任务开始边界缺失'))
+      failExecution(execution, new Error('PTY 运维任务开始边界缺失'))
       return
     }
     if (!execution.parser.ended()) {
-      rejectExecution(execution, new Error('PTY 运维任务结束边界缺失'))
+      failExecution(execution, new Error('PTY 运维任务结束边界缺失'))
       return
     }
     const markerExitCode = execution.parser.exitCode()
     if (markerExitCode !== execution.commandExitCode) {
-      rejectExecution(
+      failExecution(
         execution,
         new Error('PTY 运维任务退出码与 Shell Integration 不一致')
       )
@@ -417,7 +481,7 @@ export function createManagedPtyTaskController ({
     }
     const identity = execution.parser.identity()
     if (!identity) {
-      rejectExecution(execution, new Error('PTY 运维任务缺少有效身份'))
+      failExecution(execution, new Error('PTY 运维任务缺少有效身份'))
       return
     }
     const protocolResult = {
@@ -442,9 +506,13 @@ export function createManagedPtyTaskController ({
         promptAfterSequence: execution.cancelRequestedPromptSequence,
         recoveryArmed: execution.cancellationRecoveryArmed
       }
+      const error = execution.planCleanupStarted
+        ? cancellationCleanupUnknownError(
+          execution.cancelError, cleanupTimeoutError())
+        : cancellationUnknownError(execution.cancelError)
       rejectExecution(
         execution,
-        cancellationUnknownError(execution.cancelError),
+        error,
         {
           cancelExpected: true,
           preserveSubmissionOutput: true
@@ -536,23 +604,41 @@ export function createManagedPtyTaskController ({
   }
 
   function consumeFrameAcknowledgement (execution, chunk) {
+    if (execution.frameError) return
     execution.frameAckBuffer += String(chunk || '')
-    const prefix = `\u001b]698;SHELLPILOT_FILE_FRAME;${execution.plan.token};`
-    const start = execution.frameAckBuffer.indexOf(prefix)
+    const start = execution.frameAckBuffer.indexOf(managedPtyFrameAckPrefix)
     if (start === -1) {
-      execution.frameAckBuffer = execution.frameAckBuffer.slice(-1024)
+      execution.frameAckBuffer = execution.frameAckBuffer.slice(
+        -(managedPtyFrameAckPrefix.length - 1)
+      )
       return
     }
     const end = execution.frameAckBuffer.indexOf('\u0007', start)
     if (end === -1) {
-      if (execution.frameAckBuffer.length > 2048) {
+      if (managedPtyByteLength(
+        execution.frameAckBuffer.slice(start)
+      ) > managedPtyFrameAckByteLimit) {
         execution.frameError = new Error('受控 PTY 命令帧确认超过安全上限')
+        execution.frameAckBuffer = ''
       }
       return
     }
     const acknowledgement = execution.frameAckBuffer.slice(start, end + 1)
-    if (acknowledgement !== execution.frame.acknowledgement) {
+    let parsed
+    try {
+      parsed = parseManagedFrameAcknowledgement(acknowledgement)
+    } catch (error) {
+      execution.frameError = error
+      execution.frameAckBuffer = ''
+      return
+    }
+    if (parsed.token !== execution.plan.token ||
+      parsed.sequence !== execution.frame.sequence ||
+      parsed.total !== execution.plan.frames.length ||
+      parsed.digest !== execution.plan.digest || parsed.status !== 'ok' ||
+      acknowledgement !== execution.frame.acknowledgement) {
       execution.frameError = new Error('受控 PTY 命令帧确认顺序或认证无效')
+      execution.frameAckBuffer = ''
       return
     }
     execution.frameAcknowledged = true
@@ -615,6 +701,10 @@ export function createManagedPtyTaskController ({
       if (active !== execution || execution.settled) return
       execution.submitted = true
       execution.transportAccepted = true
+      if (execution.plan.frames.length > 1 &&
+        options.cleanup !== true && frame.executesOperation !== true) {
+        execution.planStateMayExist = true
+      }
       if (execution.cancelRequested && !execution.planCleanupStarted) {
         armAcceptedCancellationRecovery(execution)
         if (!execution.settled) settleIfComplete(execution)
@@ -656,9 +746,7 @@ export function createManagedPtyTaskController ({
       }
       if (execution.cancelRequested) {
         if (isDefinitivePreAcceptRejection(error)) {
-          const currentFrame = execution.plan.frames[execution.frameIndex]
-          if (execution.plan.cleanup && execution.frameIndex > 0 &&
-            currentFrame?.executesOperation !== true) {
+          if (execution.plan.cleanup && execution.planStateMayExist) {
             safeCancelSubmission(execution.submissionToken)
             beginPlanCleanup(execution)
             return
@@ -669,10 +757,19 @@ export function createManagedPtyTaskController ({
         }
         return
       }
-      rejectExecution(execution, error, { cancelExpected: true })
+      failExecution(execution, error, { cancelExpected: true })
     })
     Promise.resolve(transport.written).catch(error => {
       if (execution.frameGeneration !== frameGeneration) return
+      if (!execution.settled && execution.planCleanupStarted) {
+        recoveryLocked = true
+        rejectExecution(
+          execution,
+          cancellationCleanupUnknownError(execution.cancelError, error),
+          { cancelExpected: true, preserveSubmissionOutput: true }
+        )
+        return
+      }
       if (!execution.settled && !execution.cancelRequested) {
         requestCancellation(execution, error)
       }
@@ -730,6 +827,7 @@ export function createManagedPtyTaskController ({
         frameAckBuffer: '',
         frameError: null,
         planCleanupStarted: false,
+        planStateMayExist: false,
         submissionToken: '',
         timeoutMs,
         onChunk: options.onChunk,

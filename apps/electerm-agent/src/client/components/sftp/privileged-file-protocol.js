@@ -1714,17 +1714,31 @@ function sha256HexUtf8 (value) {
     .digestHex()
 }
 
-function fileFrameAcknowledgement (token, sequence, status = 'ok') {
-  return `\u001b]698;SHELLPILOT_FILE_FRAME;${token};${sequence};${status}\u0007`
+function fileFrameAcknowledgement (
+  token,
+  sequence,
+  total,
+  digest,
+  status = 'ok'
+) {
+  return `\u001b]698;SHELLPILOT_FILE_FRAME;${token};${sequence};${total};${digest};${status}\u0007`
 }
 
-function fileFrameAcknowledgementCommand (token, sequence, status = 'ok') {
-  return `printf '\\033]698;SHELLPILOT_FILE_FRAME;${token};${sequence};${status}\\007'`
+function fileFrameAcknowledgementCommand (
+  token,
+  sequence,
+  total,
+  digest,
+  status = 'ok'
+) {
+  return `printf '\\033]698;SHELLPILOT_FILE_FRAME;${token};${sequence};${total};${digest};${status}\\007'`
 }
 
 function freezePrivilegedFileFrame ({
   token,
   sequence,
+  total,
+  digest,
   command,
   executesOperation = false
 }) {
@@ -1737,7 +1751,12 @@ function freezePrivilegedFileFrame ({
   return Object.freeze({
     sequence,
     command,
-    acknowledgement: fileFrameAcknowledgement(token, sequence),
+    acknowledgement: fileFrameAcknowledgement(
+      token,
+      sequence,
+      total,
+      digest
+    ),
     executesOperation
   })
 }
@@ -1795,9 +1814,12 @@ export function buildPrivilegedFileExecutionPlan ({
   }
   const cleanupState = frameStateCleanupCommand()
   const frames = []
+  const totalFrames = chunks.length + 2
   frames.push(freezePrivilegedFileFrame({
     token,
     sequence: 0,
+    total: totalFrames,
+    digest,
     command: [
       cleanupState + ';',
       `__sp_pf_t=${shellQuote(token)};`,
@@ -1806,7 +1828,7 @@ export function buildPrivilegedFileExecutionPlan ({
       '__sp_pf_i=0;',
       `__sp_pf_z=${encodedCommand.length};`,
       "__sp_pf_b='';",
-      fileFrameAcknowledgementCommand(token, 0)
+      fileFrameAcknowledgementCommand(token, 0, totalFrames, digest)
     ].join(' ')
   }))
   for (const [index, chunk] of chunks.entries()) {
@@ -1814,6 +1836,8 @@ export function buildPrivilegedFileExecutionPlan ({
     frames.push(freezePrivilegedFileFrame({
       token,
       sequence,
+      total: totalFrames,
+      digest,
       command: [
         `if [ "$__sp_pf_t" = ${shellQuote(token)} ] &&`,
         `[ "$__sp_pf_h" = ${shellQuote(digest)} ] &&`,
@@ -1821,10 +1845,21 @@ export function buildPrivilegedFileExecutionPlan ({
         `[ "$__sp_pf_i" -eq ${index} ]; then`,
         '__sp_pf_b="$' + '{__sp_pf_b}' + chunk + '";',
         `__sp_pf_i=${sequence};`,
-        fileFrameAcknowledgementCommand(token, sequence) + ';',
+        fileFrameAcknowledgementCommand(
+          token,
+          sequence,
+          totalFrames,
+          digest
+        ) + ';',
         'else',
         cleanupState + ';',
-        fileFrameAcknowledgementCommand(token, sequence, 'error') + ';',
+        fileFrameAcknowledgementCommand(
+          token,
+          sequence,
+          totalFrames,
+          digest,
+          'error'
+        ) + ';',
         'fi'
       ].join(' ')
     }))
@@ -1833,6 +1868,8 @@ export function buildPrivilegedFileExecutionPlan ({
   frames.push(freezePrivilegedFileFrame({
     token,
     sequence: finalSequence,
+    total: totalFrames,
+    digest,
     executesOperation: true,
     command: [
       `if [ "$__sp_pf_t" = ${shellQuote(token)} ] &&`,
@@ -1845,14 +1882,31 @@ export function buildPrivilegedFileExecutionPlan ({
       `if [ "$__sp_pf_v" = ${shellQuote(digest)} ] &&`,
       '__sp_pf_c="$(printf %s "$__sp_pf_b" | base64 -d)"; then',
       cleanupState.replace(' __sp_pf_c', '') + ';',
-      fileFrameAcknowledgementCommand(token, finalSequence) + ';',
+      fileFrameAcknowledgementCommand(
+        token,
+        finalSequence,
+        totalFrames,
+        digest
+      ) + ';',
       'eval "$__sp_pf_c"; __sp_pf_s=$?; unset __sp_pf_c; (exit "$__sp_pf_s");',
       'else',
       cleanupState + ';',
-      fileFrameAcknowledgementCommand(token, finalSequence, 'error') + ';',
+      fileFrameAcknowledgementCommand(
+        token,
+        finalSequence,
+        totalFrames,
+        digest,
+        'error'
+      ) + ';',
       'fi; else',
       cleanupState + ';',
-      fileFrameAcknowledgementCommand(token, finalSequence, 'error') + ';',
+      fileFrameAcknowledgementCommand(
+        token,
+        finalSequence,
+        totalFrames,
+        digest,
+        'error'
+      ) + ';',
       'fi'
     ].join(' ')
   }))
@@ -1860,11 +1914,18 @@ export function buildPrivilegedFileExecutionPlan ({
   const cleanup = freezePrivilegedFileFrame({
     token,
     sequence: cleanupSequence,
+    total: totalFrames,
+    digest,
     command: [
       'if [ "$' + '{__sp_pf_t-}" = ' + shellQuote(token) + ' ]; then',
       cleanupState + ';',
       'fi;',
-      fileFrameAcknowledgementCommand(token, cleanupSequence)
+      fileFrameAcknowledgementCommand(
+        token,
+        cleanupSequence,
+        totalFrames,
+        digest
+      )
     ].join(' ')
   })
   return Object.freeze({

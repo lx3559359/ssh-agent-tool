@@ -249,7 +249,7 @@ test('managed PTY holds suppression across command-plan prompts', async () => {
     `\u001b]633;E;${testTrackerNonce};${first}\u0007`
   const firstOutput = [
     `\u001b]633;C;${testTrackerNonce}\u0007`,
-    '\u001b]698;SHELLPILOT_FILE_FRAME;token;0;ok\u0007',
+    `\u001b]698;SHELLPILOT_FILE_FRAME;token;0;2;${'a'.repeat(64)};ok\u0007`,
     `\u001b]633;D;${testTrackerNonce};0\u0007`
   ].join('')
   const firstPrompt =
@@ -280,7 +280,7 @@ test('managed PTY holds suppression across command-plan prompts', async () => {
     `\u001b]633;E;${testTrackerNonce};${final}\u0007`
   const finalOutput = [
     `\u001b]633;C;${testTrackerNonce}\u0007`,
-    '\u001b]698;SHELLPILOT_FILE_FRAME;token;1;ok\u0007',
+    `\u001b]698;SHELLPILOT_FILE_FRAME;token;1;2;${'a'.repeat(64)};ok\u0007`,
     '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007',
     `\u001b]633;D;${testTrackerNonce};0\u0007`
   ].join('')
@@ -321,6 +321,7 @@ test('real tracker attach and controller advance a held command plan only after 
   let rejectNextChunk = false
   let blockedChunk = null
   const planToken = 'd'.repeat(48)
+  const planDigest = 'a'.repeat(64)
   const commands = ['frame-init', 'frame-chunk', 'frame-final']
   const parent = {}
   const term = trackerHarness.terminal
@@ -367,19 +368,19 @@ test('real tracker attach and controller advance a held command plan only after 
       kind: 'managed-pty-command-plan',
       version: 1,
       token: planToken,
-      digest: 'a'.repeat(64),
+      digest: planDigest,
       frames: Object.freeze(commands.map((command, sequence) => Object.freeze({
         sequence,
         command,
         acknowledgement:
-          `\u001b]698;SHELLPILOT_FILE_FRAME;${planToken};${sequence};ok\u0007`,
+          `\u001b]698;SHELLPILOT_FILE_FRAME;${planToken};${sequence};${commands.length};${planDigest};ok\u0007`,
         executesOperation: sequence === commands.length - 1
       }))),
       cleanup: Object.freeze({
         sequence: commands.length,
         command: 'frame-cleanup',
         acknowledgement:
-          `\u001b]698;SHELLPILOT_FILE_FRAME;${planToken};3;ok\u0007`,
+          `\u001b]698;SHELLPILOT_FILE_FRAME;${planToken};3;3;${planDigest};ok\u0007`,
         executesOperation: false
       })
     }),
@@ -447,7 +448,7 @@ test('real tracker attach and controller advance a held command plan only after 
     addon.writeToTerminal([
       `\u001b]633;E;${testTrackerNonce};${commands[index]}\u0007`,
       `\u001b]633;C;${testTrackerNonce}\u0007`,
-      `\u001b]698;SHELLPILOT_FILE_FRAME;${planToken};${index};ok\u0007`,
+      `\u001b]698;SHELLPILOT_FILE_FRAME;${planToken};${index};${commands.length};${planDigest};ok\u0007`,
       result,
       `\u001b]633;D;${testTrackerNonce};0\u0007`
     ].join(''))
@@ -497,7 +498,7 @@ test('real tracker attach and controller advance a held command plan only after 
   addon.writeToTerminal([
     `\u001b]633;E;${testTrackerNonce};frame-cleanup\u0007`,
     `\u001b]633;C;${testTrackerNonce}\u0007`,
-    `\u001b]698;SHELLPILOT_FILE_FRAME;${planToken};3;ok\u0007`,
+    `\u001b]698;SHELLPILOT_FILE_FRAME;${planToken};3;3;${planDigest};ok\u0007`,
     `\u001b]633;D;${testTrackerNonce};0\u0007`
   ].join(''))
   addon.writeToTerminal(
@@ -506,6 +507,102 @@ test('real tracker attach and controller advance a held command plan only after 
   )
   assert.equal((await cancelled).name, 'AbortError')
   assert.equal(await cleanupLease.release(), true)
+})
+
+test('managed PTY bounds unterminated lifecycle bytes and recovers at a prompt', async () => {
+  const { addon, sent, term } = await createDirectAttachHarness()
+  const writes = []
+  const output = []
+  term.write = value => writes.push(value)
+  addon.onRemoteOutput(chunk => output.push(chunk))
+  const command = 'frame-with-unterminated-lifecycle'
+  assert.ok(addon.submitManagedPtyCommand(
+    command,
+    testTrackerNonce,
+    { holdSuppression: true }
+  ))
+  addon.writeToTerminal(
+    `\u001b]633;E;${testTrackerNonce};${command}\u0007`
+  )
+  addon.sendToServer('queued-after-overflow')
+
+  const prefix = `\u001b]633;E;${testTrackerNonce};`
+  for (const chunk of [prefix, ...Array(6).fill('深'.repeat(600))]) {
+    addon.writeToTerminal(chunk)
+  }
+  assert.ok(addon.managedPtyLifecycleBytes.byteLength <= 8192)
+  assert.equal(addon.outputSuppressed, true)
+  assert.equal(sent.includes('queued-after-overflow'), false)
+  assert.equal(writes.join('').includes('深'), false)
+  assert.equal(output.join('').includes('深'), false)
+
+  addon.writeToTerminal(
+    `\u001b]633;A;${testTrackerNonce}\u0007recovered:# ` +
+    `\u001b]633;B;${testTrackerNonce}\u0007`
+  )
+  await Promise.resolve()
+  assert.equal(addon.outputSuppressed, false)
+  assert.equal(addon.managedPtyLifecycleBytes.byteLength, 0)
+  assert.equal(sent.at(-1), 'queued-after-overflow')
+  assert.equal(writes.join('').includes('recovered:#'), true)
+  assert.equal(writes.join('').includes('深'), false)
+})
+
+test('managed PTY recovers when an oversized lifecycle frame precedes A B', async () => {
+  const { addon, sent, term } = await createDirectAttachHarness()
+  const writes = []
+  const output = []
+  term.write = value => writes.push(value)
+  addon.onRemoteOutput(chunk => output.push(chunk))
+  const command = 'frame-with-complete-oversized-lifecycle'
+  assert.ok(addon.submitManagedPtyCommand(
+    command,
+    testTrackerNonce,
+    { holdSuppression: true }
+  ))
+  addon.writeToTerminal(
+    `\u001b]633;E;${testTrackerNonce};${command}\u0007`
+  )
+  addon.sendToServer('queued-after-complete-overflow')
+
+  addon.writeToTerminal(
+    `\u001b]633;E;${testTrackerNonce};${'深'.repeat(3000)}\u0007` +
+    `\u001b]633;A;${testTrackerNonce}\u0007recovered-same-chunk:# ` +
+    `\u001b]633;B;${testTrackerNonce}\u0007`
+  )
+  await Promise.resolve()
+  assert.equal(addon.outputSuppressed, false)
+  assert.equal(sent.at(-1), 'queued-after-complete-overflow')
+  assert.equal(writes.join('').includes('recovered-same-chunk:#'), true)
+  assert.equal(writes.join('').includes('深'), false)
+  assert.equal(output.join('').includes('深'), false)
+})
+
+test('managed PTY recovers from pre-E overflow and same-chunk A B', async () => {
+  const { addon, sent, term } = await createDirectAttachHarness()
+  const writes = []
+  const output = []
+  term.write = value => writes.push(value)
+  addon.onRemoteOutput(chunk => output.push(chunk))
+  const command = 'frame-awaiting-command-record'
+  assert.ok(addon.submitManagedPtyCommand(
+    command,
+    testTrackerNonce,
+    { holdSuppression: true }
+  ))
+  addon.sendToServer('queued-before-command-record')
+
+  addon.writeToTerminal(
+    `\u001b]633;E;${testTrackerNonce};${'深'.repeat(3000)}\u0007` +
+    `\u001b]633;A;${testTrackerNonce}\u0007recovered-pre-E:# ` +
+    `\u001b]633;B;${testTrackerNonce}\u0007`
+  )
+  await Promise.resolve()
+  assert.equal(addon.outputSuppressed, false)
+  assert.equal(sent.at(-1), 'queued-before-command-record')
+  assert.equal(writes.join('').includes('recovered-pre-E:#'), true)
+  assert.equal(writes.join('').includes('深'), false)
+  assert.equal(output.join('').includes('深'), false)
 })
 
 test('managed PTY keeps privileged probe output hidden until authenticated prompt', async () => {

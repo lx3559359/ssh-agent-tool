@@ -995,12 +995,17 @@ test('privileged execution plans bound every frame for deep Unicode paths', asyn
       assert.equal(frame.command.includes(path), false)
       assert.match(frame.acknowledgement, new RegExp(
         `^\\u001b\\]698;SHELLPILOT_FILE_FRAME;${token};` +
-        `${frame.sequence};ok\\u0007$`
+        `${frame.sequence};${plan.frames.length};${plan.digest};ok\\u0007$`
       ))
     }
     assert.equal(plan.frames.at(-1).executesOperation, true)
     assert.ok(Buffer.byteLength(plan.cleanup.command, 'utf8') <= 3840)
     assert.equal(plan.cleanup.command.includes(path), false)
+    assert.match(plan.cleanup.acknowledgement, new RegExp(
+      `^\\u001b\\]698;SHELLPILOT_FILE_FRAME;${token};` +
+      `${plan.frames.length};${plan.frames.length};` +
+      `${plan.digest};ok\\u0007$`
+    ))
   }
 })
 
