@@ -320,6 +320,8 @@ test('real tracker attach and controller advance a held command plan only after 
   const { createManagedPtyTaskController } = await importManagedPtyController()
   const trackerHarness = createTrackerTerminal()
   const lifecycleWrites = []
+  const coalescedEvents = []
+  let coalescedFrameIndex = null
   const submissions = []
   const transportWrites = []
   let rejectNextChunk = false
@@ -342,6 +344,13 @@ test('real tracker attach and controller advance a held command plan only after 
     let match = pattern.exec(String(value))
     while (match) {
       trackerHarness.osc(match[1])
+      const phase = match[1].split(';')[0]
+      if (coalescedFrameIndex !== null &&
+        ['D', 'A', 'B'].includes(phase)) {
+        coalescedEvents.push(
+          `${coalescedFrameIndex}:tracker-${phase}`
+        )
+      }
       match = pattern.exec(String(value))
     }
   }
@@ -350,6 +359,29 @@ test('real tracker attach and controller advance a held command plan only after 
   tracker.beginSession(testTrackerNonce)
   const addon = new AttachAddon(term, {}, false)
   addon._sendData = data => transportWrites.push(data)
+  addon.onRemoteOutput(chunk => {
+    if (coalescedFrameIndex === null) return
+    const output = String(chunk)
+    const acknowledgement =
+      `\u001b]698;SHELLPILOT_FILE_FRAME;${planToken};` +
+      `${coalescedFrameIndex};${commands.length};${planDigest};ok\u0007`
+    const fileMarker =
+      `\u001b]698;SHELLPILOT_FILE;${planToken};start;MA==;cm9vdA==\u0007`
+    const promptFrame = `\u001b]633;A;${testTrackerNonce}\u0007`
+    const inputFrame = `\u001b]633;B;${testTrackerNonce}\u0007`
+    if (output.includes(acknowledgement)) {
+      coalescedEvents.push(`${coalescedFrameIndex}:listener-ack`)
+    }
+    if (output.includes(fileMarker)) {
+      coalescedEvents.push(`${coalescedFrameIndex}:listener-file`)
+    }
+    if (output.includes(promptFrame)) {
+      coalescedEvents.push(`${coalescedFrameIndex}:listener-A`)
+    }
+    if (output.includes(inputFrame)) {
+      coalescedEvents.push(`${coalescedFrameIndex}:listener-B`)
+    }
+  })
   addon.managedPtyTransport = {
     submit: command => {
       submissions.push(command)
@@ -469,10 +501,59 @@ test('real tracker attach and controller advance a held command plan only after 
       `\u001b]633;B;${testTrackerNonce}\u0007`
     )
   }
-  completeFrame(0)
+  const completeCoalescedFrame = (index, inputInFirstChunk) => {
+    const acknowledgement =
+      `\u001b]698;SHELLPILOT_FILE_FRAME;${planToken};${index};` +
+      `${commands.length};${planDigest};ok\u0007`
+    const fileMarker =
+      `\u001b]698;SHELLPILOT_FILE;${planToken};start;MA==;cm9vdA==\u0007`
+    const promptFrame = `\u001b]633;A;${testTrackerNonce}\u0007`
+    const inputFrame = `\u001b]633;B;${testTrackerNonce}\u0007`
+    coalescedFrameIndex = index
+    addon.writeToTerminal([
+      `\u001b]633;E;${testTrackerNonce};${commands[index]}\u0007`,
+      `\u001b]633;C;${testTrackerNonce}\u0007`,
+      acknowledgement,
+      fileMarker,
+      `\u001b]633;D;${testTrackerNonce};0\u0007`,
+      promptFrame,
+      `coalesced-${index}:# `,
+      inputInFirstChunk ? inputFrame : ''
+    ].join(''))
+    const expectedBeforeInput = [
+      `${index}:listener-ack`,
+      `${index}:listener-file`,
+      `${index}:tracker-D`,
+      `${index}:tracker-A`
+    ]
+    const expectedAfterInput = [
+      ...expectedBeforeInput,
+      `${index}:listener-A`,
+      `${index}:listener-B`,
+      `${index}:tracker-B`
+    ]
+    assert.deepEqual(
+      coalescedEvents.filter(event => event.startsWith(`${index}:`)),
+      inputInFirstChunk
+        ? expectedAfterInput
+        : expectedBeforeInput
+    )
+    if (!inputInFirstChunk) addon.writeToTerminal(inputFrame)
+    assert.deepEqual(
+      coalescedEvents.filter(event => event.startsWith(`${index}:`)),
+      expectedAfterInput
+    )
+    assert.equal(lifecycleWrites.join('').includes(acknowledgement), false)
+    assert.equal(lifecycleWrites.join('').includes(fileMarker), false)
+    coalescedFrameIndex = null
+    assert.equal(
+      lifecycleWrites.join('').includes(`coalesced-${index}:# `), false
+    )
+  }
+  completeCoalescedFrame(0, true)
   await Promise.resolve()
   assert.deepEqual(submissions, ['frame-init', 'frame-chunk'])
-  completeFrame(1)
+  completeCoalescedFrame(1, false)
   await Promise.resolve()
   assert.deepEqual(submissions, commands)
   let finalSettled = false
@@ -505,6 +586,10 @@ test('real tracker attach and controller advance a held command plan only after 
   assert.equal(lifecycleWrites.join('').includes('final-visible:#'), true)
   assert.equal(addon.outputSuppressed, false)
   assert.equal(await lease.release(), true)
+  assert.equal(
+    submissions.filter(command => command === 'frame-cleanup').length,
+    0
+  )
   await Promise.resolve()
   assert.equal(
     transportWrites.filter(value => value === 'queued-final-input').length,
@@ -786,6 +871,8 @@ test('managed PTY publishes safe data around split lifecycle frames once', async
     '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
   const secondLifecycle =
     `\u001b]633;A;${testTrackerNonce}\u0007`
+  const inputLifecycle =
+    `\u001b]633;B;${testTrackerNonce}\u0007`
 
   addon.writeToTerminal(
     acknowledgement + firstLifecycle.slice(0, -1)
@@ -801,7 +888,13 @@ test('managed PTY publishes safe data around split lifecycle frames once', async
   addon.writeToTerminal(secondLifecycle.slice('\u001b]63'.length))
   assert.equal(
     output.join(''),
-    acknowledgement + firstLifecycle + fileMarker + secondLifecycle
+    acknowledgement + firstLifecycle + fileMarker
+  )
+  addon.writeToTerminal(inputLifecycle)
+  assert.equal(
+    output.join(''),
+    acknowledgement + firstLifecycle + fileMarker +
+      secondLifecycle + inputLifecycle
   )
   assert.equal(output.join('').split(acknowledgement).length - 1, 1)
   assert.equal(output.join('').split(fileMarker).length - 1, 1)

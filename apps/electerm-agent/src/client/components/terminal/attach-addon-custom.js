@@ -642,12 +642,10 @@ export default class AttachAddonCustom {
     const inputFrameAfterPromptIndex = promptFrameIndex === -1
       ? -1
       : lifecycleFrames.indexOf(inputFrame, promptFrameIndex + 1)
-    if (!this.managedPtyHoldSuppression && releaseData !== null &&
+    if (releaseData !== null &&
       !this.managedPtyPromptReleasePending &&
       this.suppressionReleaseMarker === promptFrame &&
       promptFrameIndex !== -1) {
-      writePrePromptLifecycleFrames()
-      this.writeToTerminalDirect(promptFrame)
       const releaseBytes = toBytes(releaseData)
       const promptFrameLength = new TextEncoder().encode(promptFrame).length
       const promptReleaseBytes = releaseBytes.slice(promptFrameLength)
@@ -681,13 +679,15 @@ export default class AttachAddonCustom {
         : new Uint8Array()
       this.managedPtyPromptReleaseBytes = promptReleaseBytes
       this.managedPtyPromptReleasePending = true
+      if (this.publishSuppressionRemainder &&
+        this.managedPtyOutputStreamingActive &&
+        this.managedPtyPromptListenerPrefixBytes.length > 0) {
+        this._publishRemoteOutput(this.managedPtyPromptListenerPrefixBytes)
+        this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
+      }
+      writePrePromptLifecycleFrames()
+      this.writeToTerminalDirect(promptFrame)
       if (inputFrameAfterPromptIndex === -1) {
-        if (this.publishSuppressionRemainder &&
-          this.managedPtyOutputStreamingActive &&
-          this.managedPtyPromptListenerPrefixBytes.length > 0) {
-          this._publishRemoteOutput(this.managedPtyPromptListenerPrefixBytes)
-          this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
-        }
         this.suppressionReleaseMarker = inputFrame
         this.suppressionScanText = ''
         this.suppressionScanBytes = new Uint8Array()
@@ -772,6 +772,9 @@ export default class AttachAddonCustom {
       this.managedPtyPromptReleasePending = false
       this.managedPtyOutputStreamingActive = false
       this.consumeManagedPtyCommandRecord = false
+      if (promptReleaseReady && releaseData.length > 0) {
+        this.writeToTerminalDirect(inputFrame)
+      }
       return
     }
     this.onShellIntegrationDetected()
