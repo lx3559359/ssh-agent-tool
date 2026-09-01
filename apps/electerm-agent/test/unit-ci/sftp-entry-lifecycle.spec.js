@@ -721,6 +721,7 @@ test('pending session binding keeps old committed readiness unsettled', async ()
     firstReadyCommitted: true
   })
   assert.equal(getSftpEntryReadinessSnapshot(entry).fullySettled, true)
+  const lateOldCommit = beginSftpEntryRenderCommit(entry)
 
   const binding = bindSftpEntryRemoteSession(entry, {
     terminalId: 'tab-new',
@@ -730,14 +731,83 @@ test('pending session binding keeps old committed readiness unsettled', async ()
   })
   const pending = getSftpEntryReadinessSnapshot(entry)
   assert.equal(pending.sessionBindingPending, true)
+  assert.equal(pending.visibleRemoteCommitted, false)
+  assert.equal(pending.firstReadyCommitted, false)
   assert.equal(pending.fullySettled, false)
 
   oldDestroyed.resolve()
   await binding
-  assert.equal(
-    getSftpEntryReadinessSnapshot(entry).sessionBindingPending,
-    false
-  )
+  assert.equal(await lateOldCommit.promise, false)
+  assert.equal(lateOldCommit.settle({
+    committed: true,
+    visibleRemoteCommitted: true,
+    firstReadyCommitted: true
+  }), false)
+  const rebound = getSftpEntryReadinessSnapshot(entry)
+  assert.equal(rebound.sessionBindingPending, false)
+  assert.equal(rebound.visibleRemoteCommitted, false)
+  assert.equal(rebound.firstReadyCommitted, false)
+  assert.equal(rebound.fullySettled, false)
+
+  beginSftpEntryRenderCommit(entry).settle({
+    committed: true,
+    visibleRemoteCommitted: true
+  })
+  const visible = getSftpEntryReadinessSnapshot(entry)
+  assert.equal(visible.visibleRemoteCommitted, true)
+  assert.equal(visible.firstReadyCommitted, false)
+  assert.equal(visible.fullySettled, false)
+
+  beginSftpEntryRenderCommit(entry).settle({
+    committed: true,
+    firstReadyCommitted: true
+  })
+  assert.equal(getSftpEntryReadinessSnapshot(entry).fullySettled, true)
+})
+
+test('failed new generation initialization cannot reuse old readiness', async () => {
+  const {
+    beginSftpEntryRenderCommit,
+    bindSftpEntryRemoteSession,
+    getSftpEntryReadinessSnapshot
+  } = await loadModule()
+  const failure = new Error('new generation unavailable')
+  const calls = []
+  const entry = {
+    state: { remoteLoading: false, remoteRefreshState: 'idle' },
+    sshSessionGeneration: 'generation-old',
+    sshTerminalPid: '1001',
+    shouldRenderRemote: () => true,
+    shouldInitializeRemoteOnBind: () => true,
+    initRemoteAll: async () => {
+      calls.push(['init', entry.sshSessionGeneration])
+      throw failure
+    },
+    initLocalAll: () => calls.push(['local', entry.sshSessionGeneration])
+  }
+  beginSftpEntryRenderCommit(entry).settle({
+    committed: true,
+    visibleRemoteCommitted: true,
+    firstReadyCommitted: true
+  })
+  assert.equal(getSftpEntryReadinessSnapshot(entry).fullySettled, true)
+
+  await bindSftpEntryRemoteSession(entry, {
+    terminalId: 'tab-new',
+    port: 41002,
+    sshSessionGeneration: 'generation-new',
+    sshTerminalPid: '1002'
+  })
+
+  const snapshot = getSftpEntryReadinessSnapshot(entry)
+  assert.deepEqual(calls, [
+    ['init', 'generation-new'],
+    ['local', 'generation-new']
+  ])
+  assert.equal(snapshot.sessionBindingPending, false)
+  assert.equal(snapshot.visibleRemoteCommitted, false)
+  assert.equal(snapshot.firstReadyCommitted, false)
+  assert.equal(snapshot.fullySettled, false)
 })
 
 test('hidden SSH SFTP binding defers remote loading until explicit open', async () => {

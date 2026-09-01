@@ -40,6 +40,7 @@ export function initializeSftpEntryReadiness (entry) {
     metricTasks: new Set(),
     visibleRemoteCommitted: false,
     firstReadyCommitted: false,
+    commitEpoch: 0,
     disposed: false
   }
   SFTP_ENTRY_READINESS.set(entry, readiness)
@@ -103,7 +104,9 @@ export function beginSftpEntryRenderCommit (entry) {
       if (settled) return false
       settled = true
       readiness.renderCommits.delete(commit)
-      const committed = result === true || Boolean(result?.committed)
+      const committed = (
+        result === true || Boolean(result?.committed)
+      ) && readiness.commitEpoch === commitEpoch
       if (committed) {
         readiness.visibleRemoteCommitted ||= Boolean(
           result?.visibleRemoteCommitted
@@ -116,6 +119,7 @@ export function beginSftpEntryRenderCommit (entry) {
       return true
     }
   }
+  const commitEpoch = readiness.commitEpoch
   readiness.renderCommits.add(commit)
   if (readiness.disposed || entry.remoteFileUnmounted) {
     commit.settle(false)
@@ -129,6 +133,16 @@ export function disposeSftpEntryReadiness (entry) {
   for (const commit of [...readiness.renderCommits]) {
     commit.settle(false)
   }
+}
+
+function invalidateSftpEntryCommittedReadiness (entry) {
+  const readiness = initializeSftpEntryReadiness(entry)
+  for (const commit of [...readiness.renderCommits]) {
+    commit.settle(false)
+  }
+  readiness.commitEpoch = nextEpoch(readiness.commitEpoch)
+  readiness.visibleRemoteCommitted = false
+  readiness.firstReadyCommitted = false
 }
 
 function safeDirectoryRequestCount (entry) {
@@ -460,6 +474,7 @@ export function quiesceSftpEntryTransfers (entry, options = {}) {
 }
 
 export function drainRemoteFileGeneration (entry, options = {}) {
+  invalidateSftpEntryCommittedReadiness(entry)
   if (options.invalidateIdentity !== false) {
     try {
       entry.invalidateRemoteFileIdentity?.()
