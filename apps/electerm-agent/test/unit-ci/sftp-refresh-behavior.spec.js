@@ -92,16 +92,19 @@ test('sftp history click updates path temp and reloads that side', () => {
   assert.match(body, /this\[`\$\{type\}List`\]\(undefined,\s*undefined,\s*oldPath\)/)
 })
 
-test('opening SFTP retries a hidden preload failure without repeating an initialized remote', () => {
+test('only an explicit full or split SFTP open starts or retries remote loading', () => {
   const source = readSftpSource('sftp-entry.jsx')
   const componentDidUpdate = loadClassMethod(source, 'componentDidUpdate', {
     paneMap: { fileManager: 'fileManager' },
     typeMap: { local: 'local', remote: 'remote' }
   })
   let retries = 0
+  const initOptions = []
   const entry = {
     props: {
       pane: 'fileManager',
+      sshSftpSplitView: false,
+      enableSftp: false,
       tab: { sftpCreated: false },
       config: { autoRefreshWhenSwitchToSftp: false }
     },
@@ -115,7 +118,10 @@ test('opening SFTP retries a hidden preload failure without repeating an initial
     },
     sftp: { isSshFsFallback: true },
     shouldRenderRemote: () => true,
-    initRemoteAll: async () => { retries += 1 },
+    initRemoteAll: async options => {
+      retries += 1
+      initOptions.push(options)
+    },
     runSftpBackgroundTask: task => task(),
     onGoto: () => {},
     setState: () => {}
@@ -126,7 +132,17 @@ test('opening SFTP retries a hidden preload failure without repeating an initial
     pane: 'terminal'
   }, { ...entry.state })
 
+  assert.equal(retries, 0)
+
+  entry.props.enableSftp = true
+  componentDidUpdate.call(entry, {
+    ...entry.props,
+    pane: 'terminal'
+  }, { ...entry.state })
+
   assert.equal(retries, 1)
+  assert.equal(initOptions.length, 1)
+  assert.equal(initOptions[0].explicitOpen, true)
 
   entry.props.tab.sftpCreated = true
   componentDidUpdate.call(entry, {
@@ -135,6 +151,19 @@ test('opening SFTP retries a hidden preload failure without repeating an initial
   }, { ...entry.state })
 
   assert.equal(retries, 1)
+
+  entry.props.pane = 'terminal'
+  entry.props.sshSftpSplitView = true
+  entry.props.tab.sftpCreated = false
+  componentDidUpdate.call(entry, {
+    ...entry.props,
+    sshSftpSplitView: false
+  }, { ...entry.state })
+
+  assert.equal(retries, 2)
+  assert.equal(initOptions.length, 2)
+  assert.equal(initOptions[0].explicitOpen, true)
+  assert.equal(initOptions[1].explicitOpen, true)
 })
 
 test('hidden SFTP preload failures are cleaned up without interrupting SSH', () => {
@@ -228,7 +257,10 @@ test('SFTP records cached paint, first authoritative ready and refresh duration 
   assert.match(cachedBody, /cachedPaintCommitted = true/)
   assert.match(cachedBody, /if \(!cachedPaintCommitted \|\|/)
   assert.match(cachedBody, /isCurrentSftpEntryRemoteTask\(this, task\)/)
-  assert.match(refreshBody, /const refreshStartedAt = performance\.now\(\)/)
+  assert.match(
+    refreshBody,
+    /globalThis\.performance\?\.now\?\.\(\) \?\? Date\.now\(\)/
+  )
   assert.match(refreshBody, /'sftp_refresh_ms'/)
   assert.match(refreshBody, /'first_sftp_ready_ms'/)
   assert.match(refreshBody, /this\.firstSftpReadyRecorded/)

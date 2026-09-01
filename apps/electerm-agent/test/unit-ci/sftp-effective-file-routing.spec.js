@@ -224,6 +224,7 @@ function createEntryHarness ({
   acquire,
   replaceTimer,
   client,
+  beginProbe,
   reportBackgroundError = () => {}
 } = {}) {
   const stateWrites = []
@@ -329,6 +330,9 @@ function createEntryHarness ({
         Client: client || (async () => {
           throw new Error('unexpected SFTP client construction')
         }),
+        beginRemoteFileCapabilityProbe: beginProbe || (() => {
+          throw new Error('unexpected prepared probe')
+        }),
         refs: { get: () => null },
         getProxy: () => null,
         buildSftpSafetyEndpoint: () => ({}),
@@ -347,6 +351,7 @@ function createEntryHarness ({
         uniq: values => [...new Set(values)],
         preserveSftpDraftItems: (_oldRemote, remote) => remote,
         reconcileSelectedFileIds: (_oldRemote, _remote, selected) => selected,
+        recordPerformanceDuration: () => true,
         remoteFileOperationUnmounted,
         remoteFileOperationStale,
         replaceSftpEntryTimer: replaceTimer || (() => 1),
@@ -776,6 +781,240 @@ test('ordinary remote refresh schedules no delayed compensation callback', async
   await entry.remoteList(false, '/root')
   assert.equal(timers.length, 0)
   assert.deepEqual(reports, [])
+})
+
+test('initial SSH home lookup overlaps remote capability acquisition', async () => {
+  const homeReady = deferred()
+  const capabilityStarted = deferred()
+  const calls = []
+  const capability = createBackend(calls, 'initial-home')
+  const acquire = async () => {
+    capabilityStarted.resolve()
+    return {
+      backend: capability.backend,
+      runtimeIdentity: {
+        channel: 'sftp',
+        effectiveUsername: 'hik'
+      },
+      release: capability.release
+    }
+  }
+  const { entry } = await createEntryHarness({ acquire })
+  entry.state.remotePath = ''
+  entry.getPwd = () => homeReady.promise
+  entry.updateRemoteList = async remote => remote
+
+  const listing = entry.remoteList(false, undefined, undefined, {
+    rethrow: true
+  })
+  const phase = await Promise.race([
+    capabilityStarted.promise.then(() => 'capability-started'),
+    new Promise(resolve => setTimeout(() => resolve('blocked-on-home'), 25))
+  ])
+  assert.equal(phase, 'capability-started')
+
+  homeReady.resolve('/home/hik')
+  await listing
+  assert.deepEqual(
+    calls.filter(call => call[0] === 'list'),
+    [['list', 'initial-home', '/home/hik']]
+  )
+  assert.equal(entry.state.remotePath, '/home/hik')
+})
+
+test('explicit first open overlaps one prepared probe with native connect', async () => {
+  const connectGate = deferred()
+  const connectStarted = deferred()
+  const probeStarted = deferred()
+  const calls = []
+  const backend = createBackend(calls, 'prepared-list')
+  let beginCount = 0
+  let acquireCount = 0
+  let consumeCount = 0
+  let preparedReleaseCount = 0
+  const prepared = Object.freeze({
+    consume: async () => {
+      consumeCount += 1
+      return {
+        backend: backend.backend,
+        runtimeIdentity: {
+          channel: 'pty-root',
+          effectiveUsername: 'root'
+        },
+        release: backend.release
+      }
+    },
+    abort: async () => { preparedReleaseCount += 1 },
+    release: async () => { preparedReleaseCount += 1 }
+  })
+  const candidate = {
+    sshSessionGeneration: 'generation-1',
+    sshTerminalPid: 4242,
+    async connect () {
+      connectStarted.resolve()
+      await connectGate.promise
+      return true
+    },
+    async destroy () { calls.push(['destroy-candidate']) }
+  }
+  const { entry } = await createEntryHarness({
+    client: async () => candidate,
+    beginProbe: options => {
+      beginCount += 1
+      assert.equal(Object.hasOwn(options, 'sftp'), false)
+      probeStarted.resolve()
+      return prepared
+    },
+    acquire: async options => {
+      acquireCount += 1
+      throw new Error(`unexpected normal acquire: ${options.operationId}`)
+    }
+  })
+  entry.sftp = null
+  entry.updateRemoteList = async remote => remote
+
+  const listing = entry.remoteList(false, '/root', undefined, {
+    explicitOpen: true,
+    rethrow: true
+  })
+  await connectStarted.promise
+  let overlapError
+  try {
+    assert.equal(beginCount, 1)
+    await probeStarted.promise
+    assert.equal(acquireCount, 0)
+  } catch (error) {
+    overlapError = error
+  } finally {
+    connectGate.resolve()
+  }
+  await listing
+  if (overlapError) throw overlapError
+
+  assert.equal(beginCount, 1)
+  assert.equal(acquireCount, 0)
+  assert.equal(consumeCount, 1)
+  assert.equal(preparedReleaseCount, 0)
+  assert.deepEqual(
+    calls.filter(call => call[0] === 'list'),
+    [['list', 'prepared-list', '/root']]
+  )
+})
+
+test('explicit probe release settles before failed candidate destroy', async () => {
+  const releaseGate = deferred()
+  const abortStarted = deferred()
+  const probeStarted = deferred()
+  const connectError = new Error('native connect failed')
+  const calls = []
+  let releasePromise
+  let releaseCount = 0
+  const release = () => {
+    if (releasePromise) return releasePromise
+    releaseCount += 1
+    calls.push('abort-start')
+    abortStarted.resolve()
+    releasePromise = releaseGate.promise.then(() => {
+      calls.push('abort-end')
+      return true
+    })
+    return releasePromise
+  }
+  const prepared = Object.freeze({
+    consume: async () => { throw new Error('unexpected consume') },
+    abort: release,
+    release
+  })
+  const candidate = {
+    sshSessionGeneration: 'generation-1',
+    sshTerminalPid: 4242,
+    async connect () { throw connectError },
+    async destroy () {
+      calls.push('destroy')
+      return true
+    }
+  }
+  const { entry } = await createEntryHarness({
+    client: async () => candidate,
+    beginProbe: () => {
+      probeStarted.resolve()
+      return prepared
+    },
+    acquire: async () => { throw new Error('unexpected acquire') }
+  })
+  entry.sftp = null
+
+  const listing = entry.remoteList(false, '/root', undefined, {
+    explicitOpen: true,
+    rethrow: true
+  })
+  await probeStarted.promise
+  await abortStarted.promise
+  assert.deepEqual(calls, ['abort-start'])
+  releaseGate.resolve()
+  await assert.rejects(listing, error => error === connectError)
+  assert.equal(releaseCount, 1)
+  assert.deepEqual(calls, ['abort-start', 'abort-end', 'destroy'])
+})
+
+test('generation drain and stale remoteList share one prepared release before destroy', async () => {
+  const connectGate = deferred()
+  const connectStarted = deferred()
+  const releaseGate = deferred()
+  const calls = []
+  let releasePromise
+  let releaseCount = 0
+  const release = () => {
+    if (releasePromise) return releasePromise
+    releaseCount += 1
+    calls.push('abort-start')
+    releasePromise = releaseGate.promise.then(() => {
+      calls.push('abort-end')
+      return true
+    })
+    return releasePromise
+  }
+  const prepared = Object.freeze({
+    consume: async () => { throw new Error('unexpected consume') },
+    abort: release,
+    release
+  })
+  const candidate = {
+    sshSessionGeneration: 'generation-1',
+    sshTerminalPid: 4242,
+    async connect () {
+      connectStarted.resolve()
+      await connectGate.promise
+      return true
+    },
+    async destroy () {
+      calls.push('destroy')
+      return true
+    }
+  }
+  const { entry, lifecycle } = await createEntryHarness({
+    client: async () => candidate,
+    beginProbe: () => prepared,
+    acquire: async () => { throw new Error('unexpected acquire') }
+  })
+  entry.sftp = null
+
+  const listing = entry.remoteList(false, '/root', undefined, {
+    explicitOpen: true,
+    rethrow: true
+  })
+  await connectStarted.promise
+  const drain = lifecycle.drainRemoteFileGeneration(entry)
+  await Promise.resolve()
+  assert.deepEqual(calls, ['abort-start'])
+  releaseGate.resolve()
+  await drain.promise
+  assert.deepEqual(calls, ['abort-start', 'abort-end'])
+
+  connectGate.resolve()
+  await assert.rejects(listing, error => error?.name === 'AbortError')
+  assert.equal(releaseCount, 1)
+  assert.deepEqual(calls, ['abort-start', 'abort-end', 'destroy'])
 })
 
 test('operation acquired after unmount releases once without running work or setting state', async () => {

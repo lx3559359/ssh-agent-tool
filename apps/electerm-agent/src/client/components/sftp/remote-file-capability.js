@@ -612,6 +612,254 @@ export function createRemoteFileTransferCapability (capability) {
   return internal.createTransferCapability()
 }
 
+function preparedProbeAbortError () {
+  const error = new Error('远程文件预探测已取消')
+  error.name = 'AbortError'
+  error.code = 'ABORT_ERR'
+  return error
+}
+
+function throwPreparedProbeAbort (signal) {
+  if (!signal?.aborted) return
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : preparedProbeAbortError()
+}
+
+async function resolvePreparedProbeTerminal ({
+  operationId,
+  tab,
+  getTerminal
+}) {
+  const ownerId = requiredIdentity(operationId, '操作标识')
+  if (typeof getTerminal !== 'function') {
+    throw new Error('远程文件端点缺少终端解析器')
+  }
+  const tabId = requiredIdentity(tab?.id, '标签页标识')
+  const terminal = await getTerminal(tabId)
+  if (!terminal || typeof terminal.getTerminalSafetyEndpoint !== 'function' ||
+    typeof terminal.acquireRemoteFilePtyTask !== 'function') {
+    throw new Error('远程文件端点缺少同标签页 SSH 终端')
+  }
+  const pinnedEndpoint = assertExactSshTerminalEndpoint({
+    tab,
+    terminalEndpoint: terminal.getTerminalSafetyEndpoint()
+  })
+  const assertTerminalCurrent = async () => {
+    const currentTerminal = await getTerminal(tabId)
+    if (!currentTerminal ||
+      typeof currentTerminal.getTerminalSafetyEndpoint !== 'function') {
+      throw new Error('当前 SSH 终端已不可用')
+    }
+    const currentEndpoint = assertExactSshTerminalEndpoint({
+      tab,
+      terminalEndpoint: currentTerminal.getTerminalSafetyEndpoint()
+    })
+    assertSameSessionEndpoint(pinnedEndpoint, currentEndpoint)
+    return currentEndpoint
+  }
+  const assertCurrent = async sftp => {
+    const currentTerminal = await getTerminal(tabId)
+    if (!currentTerminal ||
+      typeof currentTerminal.getTerminalSafetyEndpoint !== 'function') {
+      throw new Error('当前 SSH 终端已不可用')
+    }
+    const currentEndpoint = assertExactRemoteFileEndpoint({
+      tab,
+      sftp,
+      terminalEndpoint: currentTerminal.getTerminalSafetyEndpoint()
+    })
+    assertSameSessionEndpoint(pinnedEndpoint, currentEndpoint)
+    return currentEndpoint
+  }
+  return Object.freeze({
+    ownerId,
+    terminal,
+    loginUsername: requiredIdentity(
+      tab?.username || tab?.user,
+      'SSH 登录用户名'
+    ),
+    assertTerminalCurrent,
+    assertCurrent
+  })
+}
+
+export function beginRemoteFileCapabilityProbe ({
+  operationId,
+  tab = {},
+  getTerminal,
+  signal,
+  onLeaseState
+} = {}) {
+  const controller = new AbortController()
+  let pty
+  let leaseOwner = 'prepared'
+  let releasePromise
+  let consumePromise
+  let abortPromise
+  const abortFromCaller = () => {
+    if (!controller.signal.aborted) {
+      controller.abort(signal?.reason || preparedProbeAbortError())
+    }
+  }
+  if (signal?.aborted) abortFromCaller()
+  else signal?.addEventListener?.('abort', abortFromCaller, { once: true })
+
+  const releasePreparedLease = () => {
+    if (leaseOwner !== 'prepared') return releasePromise || Promise.resolve(true)
+    if (releasePromise) return releasePromise
+    releasePromise = (async () => {
+      if (!pty) return true
+      const released = await pty.release()
+      leaseOwner = 'released'
+      return released
+    })()
+    return releasePromise
+  }
+
+  const probePromise = (async () => {
+    throwPreparedProbeAbort(controller.signal)
+    const context = await resolvePreparedProbeTerminal({
+      operationId,
+      tab,
+      getTerminal
+    })
+    throwPreparedProbeAbort(controller.signal)
+    pty = await context.terminal.acquireRemoteFilePtyTask(context.ownerId)
+    if (!pty || typeof pty.execute !== 'function' ||
+      typeof pty.release !== 'function') {
+      throw new Error('远程文件 PTY 租约合同无效')
+    }
+    pty = observeRemoteFilePtyLease(pty, {
+      operationId: context.ownerId,
+      onLeaseState
+    })
+    throwPreparedProbeAbort(controller.signal)
+    await context.assertTerminalCurrent()
+    const probe = await pty.execute(createPrivilegedFileRequest({
+      operation: 'probe'
+    }), { signal: controller.signal })
+    const identity = requireProbeResult(probe)
+    await context.assertTerminalCurrent()
+    return Object.freeze({ context, probe, identity })
+  })().catch(async cause => {
+    let releaseError
+    try {
+      await releasePreparedLease()
+    } catch (error) {
+      releaseError = error
+    }
+    const unavailable = remoteFileIdentityUnavailable(cause)
+    if (releaseError) unavailable.releaseError = releaseError
+    throw unavailable
+  })
+  probePromise.catch(() => {})
+
+  const abort = () => {
+    if (abortPromise) return abortPromise
+    abortFromCaller()
+    abortPromise = (async () => {
+      try {
+        await probePromise
+      } catch (error) {
+        if (error?.releaseError) throw error.releaseError
+      }
+      return releasePreparedLease()
+    })()
+    return abortPromise
+  }
+
+  const consume = ({ sftp, onIdentity } = {}) => {
+    if (consumePromise) return consumePromise
+    consumePromise = (async () => {
+      let capability
+      try {
+        const { context, probe, identity } = await probePromise
+        await context.assertCurrent(sftp)
+        if (await verifyNativeRootSftp(sftp, context.loginUsername)) {
+          await releasePreparedLease()
+          capability = createNativeSftpFileBackend(sftp)
+          capability = createGuardedRemoteFileCapability(
+            capability,
+            () => context.assertCurrent(sftp)
+          )
+          await onIdentity?.(Object.freeze({
+            loginUsername: context.loginUsername,
+            effectiveUid: '0',
+            effectiveUsername: context.loginUsername,
+            channel: 'sftp'
+          }))
+          await context.assertCurrent(sftp)
+          return capability
+        }
+
+        const channel = identity.uid === '0' ? 'pty-root' : 'sftp'
+        const identityUpdate = Object.freeze(channel === 'sftp'
+          ? {
+              loginUsername: context.loginUsername,
+              effectiveUid: 'unknown',
+              effectiveUsername: context.loginUsername,
+              channel
+            }
+          : {
+              loginUsername: context.loginUsername,
+              effectiveUid: identity.uid,
+              effectiveUsername: identity.username,
+              channel
+            })
+        if (channel === 'sftp') {
+          await releasePreparedLease()
+          capability = createNativeSftpFileBackend(sftp)
+        } else {
+          leaseOwner = 'capability'
+          const backendLease = createBackendLease(pty)
+          capability = await createPrivilegedFileBackend({
+            sftp,
+            lease: backendLease,
+            identity,
+            capabilities: probe.capabilities
+          })
+        }
+        await context.assertCurrent(sftp)
+        capability = createGuardedRemoteFileCapability(
+          capability,
+          () => context.assertCurrent(sftp)
+        )
+        await onIdentity?.(identityUpdate)
+        await context.assertCurrent(sftp)
+        return capability
+      } catch (cause) {
+        let releaseError
+        if (capability) {
+          try {
+            await capability.release()
+          } catch (error) {
+            releaseError = error
+          }
+        } else if (leaseOwner === 'prepared') {
+          try {
+            await releasePreparedLease()
+          } catch (error) {
+            releaseError = error
+          }
+        }
+        const unavailable = cause?.code === 'REMOTE_FILE_IDENTITY_UNAVAILABLE'
+          ? cause
+          : remoteFileIdentityUnavailable(cause)
+        if (releaseError) unavailable.releaseError = releaseError
+        throw unavailable
+      }
+    })()
+    return consumePromise
+  }
+
+  return Object.freeze({
+    consume,
+    abort,
+    release: abort
+  })
+}
+
 export async function acquireRemoteFileCapability ({
   operationId,
   tab = {},

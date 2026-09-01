@@ -304,6 +304,131 @@ async function assertUnavailable (promise, causePattern) {
   })
 }
 
+test('prepared probe starts without SFTP and is consumed once after native connect', async () => {
+  const { beginRemoteFileCapabilityProbe } = await importModule(
+    capabilityModule
+  )
+  const fake = createFakeSftp()
+  currentSftpNodes = fake.nodes
+  const probeStarted = deferred()
+  const terminal = createTerminalStub({
+    onProbeStart: () => probeStarted.resolve()
+  })
+  const identities = []
+  const prepared = beginRemoteFileCapabilityProbe({
+    operationId: 'prepared-explicit-open',
+    tab: tab(),
+    getTerminal: () => terminal
+  })
+
+  await probeStarted.promise
+  assert.equal(terminal.acquireCount, 1)
+  assert.equal(terminal.requests().length, 1)
+
+  const capability = await prepared.consume({
+    sftp: fake.sftp,
+    onIdentity: identity => identities.push(identity)
+  })
+  assert.equal(capability.channel, 'pty-root')
+  assert.equal(terminal.acquireCount, 1)
+  assert.equal(terminal.requests().length, 1)
+  assert.deepEqual(identities, [{
+    loginUsername: 'hik',
+    effectiveUid: '0',
+    effectiveUsername: 'root',
+    channel: 'pty-root'
+  }])
+  await capability.release()
+  assert.equal(terminal.releaseCount, 1)
+})
+
+test('prepared probe releases once when connected native SFTP is verified root', async () => {
+  const { beginRemoteFileCapabilityProbe } = await importModule(
+    capabilityModule
+  )
+  const fake = createFakeSftp({
+    async readFilePreview () {
+      return {
+        content: 'Uid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0',
+        truncated: false,
+        binary: false,
+        bytesRead: 32
+      }
+    }
+  })
+  currentSftpNodes = fake.nodes
+  const probeStarted = deferred()
+  const terminal = createTerminalStub({
+    endpoint: terminalEndpoint({
+      username: 'root',
+      connectionUsername: 'root'
+    }),
+    onProbeStart: () => probeStarted.resolve()
+  })
+  const prepared = beginRemoteFileCapabilityProbe({
+    operationId: 'prepared-native-root',
+    tab: tab({ username: 'root' }),
+    getTerminal: () => terminal
+  })
+
+  await probeStarted.promise
+  const capability = await prepared.consume({ sftp: fake.sftp })
+  assert.equal(capability.channel, 'sftp')
+  assert.equal(terminal.acquireCount, 1)
+  assert.equal(terminal.releaseCount, 1)
+  await capability.release()
+  await prepared.abort()
+  assert.equal(terminal.releaseCount, 1)
+})
+
+test('prepared probe abort is idempotent and waits for lease release', async () => {
+  const { beginRemoteFileCapabilityProbe } = await importModule(
+    capabilityModule
+  )
+  const probeGate = deferred()
+  const probeStarted = deferred()
+  const terminal = createTerminalStub({
+    probeGate,
+    onProbeStart: () => probeStarted.resolve()
+  })
+  const prepared = beginRemoteFileCapabilityProbe({
+    operationId: 'prepared-abort',
+    tab: tab(),
+    getTerminal: () => terminal
+  })
+
+  await probeStarted.promise
+  const firstAbort = prepared.abort()
+  const secondAbort = prepared.abort()
+  probeGate.resolve()
+  await Promise.all([firstAbort, secondAbort])
+  assert.equal(terminal.acquireCount, 1)
+  assert.equal(terminal.releaseCount, 1)
+})
+
+test('prepared non-root probe failure stays unavailable instead of falling back', async () => {
+  const { beginRemoteFileCapabilityProbe } = await importModule(
+    capabilityModule
+  )
+  const fake = createFakeSftp()
+  currentSftpNodes = fake.nodes
+  const terminal = createTerminalStub({
+    executeError: new Error('prepared probe failed')
+  })
+  const prepared = beginRemoteFileCapabilityProbe({
+    operationId: 'prepared-failed',
+    tab: tab(),
+    getTerminal: () => terminal
+  })
+
+  await assertUnavailable(
+    prepared.consume({ sftp: fake.sftp }),
+    /prepared probe failed/
+  )
+  assert.equal(terminal.acquireCount, 1)
+  assert.equal(terminal.releaseCount, 1)
+})
+
 test('lease state is acquired before delayed probe resolves and released with root capability', async () => {
   const { acquireRemoteFileCapability } = await importModule(capabilityModule)
   const fake = createFakeSftp()
@@ -654,24 +779,59 @@ test('invalid probe identity and every lease failure fail closed', async t => {
   }
 })
 
-test('root backend initialization failure transfers and releases the lease exactly once', async () => {
+test('lazy root staging failure preserves capability and releases the lease once', async () => {
   const { acquireRemoteFileCapability } = await importModule(capabilityModule)
   const fake = createFakeSftp({ getHomeDir: undefined })
   currentSftpNodes = fake.nodes
-  const terminal = createTerminalStub()
+  const terminal = createTerminalStub({
+    executeRequest: async request => {
+      if (request.operation !== 'lstat') {
+        throw new Error(`unexpected request: ${request.operation}`)
+      }
+      return {
+        exitCode: 0,
+        kind: 'lstat',
+        ok: true,
+        metadata: {
+          type: 'file',
+          mode: 0o100600,
+          size: 1,
+          uid: 0,
+          gid: 0,
+          device: '1',
+          inode: '2',
+          parentDevice: '1',
+          parentInode: '1',
+          parentRealPath: '/home/hik'
+        }
+      }
+    }
+  })
   const identities = []
 
-  await assertUnavailable(acquireRemoteFileCapability({
+  const capability = await acquireRemoteFileCapability({
     operationId: 'root-backend-init-failure',
     tab: tab(),
     sftp: fake.sftp,
     getTerminal: () => terminal,
     onIdentity: value => identities.push(value)
-  }), /SFTP|暂存区|合同/i)
+  })
+  assert.equal(terminal.releaseCount, 0)
+  await assert.rejects(
+    capability.backend.readFileChunk('/home/hik/file', {
+      offset: 0,
+      maxBytes: 1
+    }),
+    /SFTP|暂存区|合同|getHomeDir/i
+  )
+  assert.equal(terminal.releaseCount, 0)
+  assert.equal(await capability.release(), true)
+  assert.equal(await capability.release(), true)
 
   assert.equal(terminal.releaseCount, 1)
   assert.equal(terminal.owner(), '')
-  assert.deepEqual(identities, [])
+  assert.equal(identities.length, 1)
+  assert.equal(identities[0].channel, 'pty-root')
 })
 
 test('post-construction publication failure releases root capability exactly once', async () => {
