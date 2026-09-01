@@ -12,10 +12,13 @@ const requiredEnvironmentVariables = Object.freeze([
   'SHELLPILOT_E2E_USERNAME',
   'SHELLPILOT_E2E_PASSWORD'
 ])
-const internalTerminalPattern = /__sp_|SHELLPILOT_(?:FILE|OPS|TOKEN)/
-const leakedProbePattern = /shellpilot\s+root\s+one\s+read/i
 
 test.setTimeout(180000)
+test.use({
+  screenshot: 'off',
+  trace: 'off',
+  video: 'off'
+})
 
 function readRootConfig () {
   const values = Object.fromEntries(requiredEnvironmentVariables.map(name => [
@@ -44,7 +47,9 @@ function connectSsh (config) {
   return new Promise((resolve, reject) => {
     const client = new Client()
     client.once('ready', () => resolve(client))
-    client.once('error', reject)
+    client.once('error', () => reject(
+      new Error('Remote maintenance connection failed')
+    ))
     client.connect({ ...config, readyTimeout: 30000 })
   })
 }
@@ -52,7 +57,9 @@ function connectSsh (config) {
 function execRemote (client, command, input = '') {
   return new Promise((resolve, reject) => {
     client.exec(command, (error, stream) => {
-      if (error) return reject(error)
+      if (error) {
+        return reject(new Error('Provisioning request could not start'))
+      }
       let settled = false
       let stderr = ''
       const finish = callback => value => {
@@ -67,7 +74,11 @@ function execRemote (client, command, input = '') {
       stream.stderr.on('data', data => { stderr += String(data) })
       stream.once('close', code => {
         if (code === 0) return finish(resolve)()
-        finish(reject)(new Error(`Provisioning request failed (${code}): ${stderr.trim()}`))
+        const stderrPresent = Boolean(stderr.trim())
+        const safeStderr = stderrPresent ? 'stderr=present' : 'stderr=empty'
+        finish(reject)(new Error(
+          `Provisioning request failed (${Number(code)}); ${safeStderr}`
+        ))
       })
       if (input) stream.end(input)
     })
@@ -124,23 +135,63 @@ async function removeTemporarySudoUser (rootConfig, username) {
   }
 }
 
-async function terminalState (page) {
+async function terminalReady (page) {
   return page.evaluate(() => {
     const terminal = window.refs.get('term-' + window.store.activeTabId)
-    let text = ''
+    return Boolean(
+      terminal?.term &&
+      terminal?.attachAddon &&
+      terminal?.pid &&
+      !terminal?.onClose
+    )
+  })
+}
+
+async function terminalBufferLength (page) {
+  return page.evaluate(() => {
     try {
-      text = terminal?.getTerminalBufferText?.() || ''
-    } catch {}
-    return {
-      ready: Boolean(
-        terminal?.term &&
-        terminal?.attachAddon &&
-        terminal?.pid &&
-        !terminal?.onClose
-      ),
-      text
+      const terminal = window.refs.get('term-' + window.store.activeTabId)
+      return String(terminal?.getTerminalBufferText?.() || '').length
+    } catch {
+      return 0
     }
   })
+}
+
+async function terminalOutputSignals (page, start, expectedOutput = '') {
+  return page.evaluate(({ start, expectedOutput }) => {
+    let buffer = ''
+    try {
+      const terminal = window.refs.get('term-' + window.store.activeTabId)
+      buffer = String(terminal?.getTerminalBufferText?.() || '')
+    } catch {}
+    const delta = buffer.slice(Math.max(0, Number(start) || 0))
+    return {
+      passwordPromptSeen: delta.toLowerCase().includes('password'),
+      promptRecovered: /(?:^|\n)[^\n]*[#>$]\s*$/.test(delta),
+      expectedOutputSeen: Boolean(expectedOutput) &&
+        delta.includes(expectedOutput),
+      internalLeakDetected: /__sp_|SHELLPILOT_(?:FILE|OPS|TOKEN)/
+        .test(delta),
+      probeLeakDetected: /shellpilot\s+root\s+one\s+read/i.test(delta)
+    }
+  }, { start, expectedOutput })
+}
+
+function expectNoTerminalLeak (signals) {
+  expect(signals.internalLeakDetected).toBe(false)
+  expect(signals.probeLeakDetected).toBe(false)
+}
+
+function randomMarkerProof () {
+  const markerInput = [...crypto.randomBytes(24)]
+    .map(value => String.fromCharCode(97 + (value % 16)))
+    .join('')
+  const markerExpectedOutput = markerInput.toUpperCase()
+  const markerTypedBytes =
+    `printf '%s\\n' '${markerInput}' | tr 'a-p' 'A-P'`
+  expect(markerTypedBytes.includes(markerExpectedOutput)).toBe(false)
+  return { markerTypedBytes, markerExpectedOutput }
 }
 
 async function acceptHostKeyIfPrompted (page) {
@@ -175,7 +226,7 @@ async function connectRealServer (page, config) {
     '.quick-connect-wizard-footer button.ant-btn-primary'
   ).click()
   await acceptHostKeyIfPrompted(page)
-  await expect.poll(async () => (await terminalState(page)).ready, {
+  await expect.poll(() => terminalReady(page), {
     timeout: 30000
   }).toBe(true)
 }
@@ -230,7 +281,7 @@ async function openHalfSftp (page) {
   ]
   return {
     totalMs: Date.now() - startedAt,
-    idleStable: idleSnapshot.idleStable,
+    cleanup: idleSnapshot,
     metrics: Object.fromEntries(metricNames.map(name => {
       const before = metricSnapshot(beforeMetrics, name)
       const after = metricSnapshot(afterMetrics, name)
@@ -257,31 +308,67 @@ async function showTerminal (page) {
   ).last()).toBeVisible()
 }
 
-async function sftpTaskState (page) {
+async function sftpCleanupSnapshot (page) {
   return page.evaluate(() => {
     const terminal = window.refs.get('term-' + window.store.activeTabId)
     const entry = window.refs.get('sftp-' + window.store.activeTabId)
+    const addon = terminal?.attachAddon
     const refreshState = String(entry?.state.remoteRefreshState || '')
+    const refreshIdle = Boolean(
+      entry?.state.remoteLoading === false &&
+      !['refreshing', 'cached-refreshing'].includes(refreshState)
+    )
+    const generationLeaseCount = Number(
+      entry?.remoteFileGeneration?.capabilities?.size || 0
+    )
+    const legacyLeaseCount = Number(entry?.remoteFileOperations?.size || 0)
+    const suppressionBufferCount = Number(addon?.suppressedData?.length || 0) +
+      Number(String(addon?.suppressionReleaseMarker || '').length) +
+      Number(String(addon?.suppressionScanText || '').length) +
+      Number(addon?.suppressionScanBytes?.length || 0) +
+      Number(addon?.managedPtyLifecycleBytes?.length || 0) +
+      Number(String(addon?.managedPtyExpectedCommand || '').length) +
+      Number(Boolean(addon?.onSuppressionEndCallback)) +
+      Number(Boolean(addon?.suppressTimeout))
     return {
-      idle: Boolean(
-        terminal?.operationsPtyTaskController?.isBusy?.() !== true &&
-        entry?.state.remoteLoading === false &&
-        !['refreshing', 'cached-refreshing'].includes(refreshState)
+      busy: terminal?.operationsPtyTaskController?.isBusy?.() === true,
+      refreshIdle,
+      activeLeaseCount: Math.max(generationLeaseCount, legacyLeaseCount),
+      uncertainLeaseCount: Number(entry?.uncertainRemoteFileLeases?.size || 0),
+      outputSuppressed: Boolean(
+        addon?.outputSuppressed ||
+        addon?.managedPtyEchoSuppressionActive ||
+        addon?.managedPtyOutputStreamingActive
       ),
-      refreshState
+      suppressionBufferCount,
+      pendingInputCount: Number(addon?.pendingInput?.length || 0)
     }
   })
+}
+
+function isSftpCleanupSnapshot (snapshot) {
+  return Boolean(
+    snapshot &&
+    snapshot.busy === false &&
+    snapshot.refreshIdle === true &&
+    snapshot.activeLeaseCount === 0 &&
+    snapshot.uncertainLeaseCount === 0 &&
+    snapshot.outputSuppressed === false &&
+    snapshot.suppressionBufferCount === 0 &&
+    snapshot.pendingInputCount === 0
+  )
 }
 
 async function waitForSftpTaskIdle (page, stableMs = 250) {
   let stableSnapshot
   await expect.poll(async () => {
-    const before = await sftpTaskState(page)
-    if (!before.idle) return false
+    const before = await sftpCleanupSnapshot(page)
+    if (!isSftpCleanupSnapshot(before)) return false
     await page.waitForTimeout(stableMs)
-    const after = await sftpTaskState(page)
+    const after = await sftpCleanupSnapshot(page)
     const stable = Boolean(
-      after.idle && after.refreshState === before.refreshState
+      isSftpCleanupSnapshot(after) &&
+      JSON.stringify(after) === JSON.stringify(before)
     )
     if (stable) stableSnapshot = after
     return stable
@@ -290,6 +377,17 @@ async function waitForSftpTaskIdle (page, stableMs = 250) {
     ...stableSnapshot,
     idleStable: true
   }
+}
+
+function expectSftpCleanupSnapshot (snapshot) {
+  expect(snapshot.idleStable).toBe(true)
+  expect(snapshot.busy).toBe(false)
+  expect(snapshot.refreshIdle).toBe(true)
+  expect(snapshot.activeLeaseCount).toBe(0)
+  expect(snapshot.uncertainLeaseCount).toBe(0)
+  expect(snapshot.outputSuppressed).toBe(false)
+  expect(snapshot.suppressionBufferCount).toBe(0)
+  expect(snapshot.pendingInputCount).toBe(0)
 }
 
 test('secondary login elevation keeps half-screen SFTP internals invisible', async () => {
@@ -309,48 +407,53 @@ test('secondary login elevation keeps half-screen SFTP internals invisible', asy
     await connectRealServer(run.page, { ...rootConfig, ...secondary })
     await run.page.waitForTimeout(1500)
     console.log('[041] login ready')
-    const loginText = (await terminalState(run.page)).text
-    expect(loginText).not.toMatch(internalTerminalPattern)
-    expect(loginText).not.toMatch(leakedProbePattern)
+    expectNoTerminalLeak(await terminalOutputSignals(run.page, 0))
 
-    const sudoStart = loginText.length
+    const sudoStart = await terminalBufferLength(run.page)
     console.log('[041] elevation start')
     await sendTerminalText(run.page, 'sudo -k -i')
     await run.page.waitForTimeout(2000)
     await expect.poll(async () => (
-      await terminalState(run.page)
-    ).text.slice(sudoStart).toLowerCase(), {
+      await terminalOutputSignals(run.page, sudoStart)
+    ).passwordPromptSeen, {
       timeout: 10000
-    }).toContain('password')
+    }).toBe(true)
     await sendTerminalText(run.page, secondary.password)
     await expect.poll(async () => (
-      await terminalState(run.page)
-    ).text.slice(sudoStart), { timeout: 15000 }).toMatch(/#\s*$/)
+      await terminalOutputSignals(run.page, sudoStart)
+    ).promptRecovered, { timeout: 15000 }).toBe(true)
     console.log('[041] elevation complete')
 
     const durations = []
     const cycleTimings = []
-    let visibleStart = (await terminalState(run.page)).text.length
+    let visibleStart = await terminalBufferLength(run.page)
     for (let cycle = 0; cycle < 3; cycle += 1) {
       console.log(`[041] half-SFTP cycle ${cycle + 1} start`)
       const timing = await openHalfSftp(run.page)
+      expectSftpCleanupSnapshot(timing.cleanup)
       durations.push(timing.totalMs)
       cycleTimings.push(timing)
       console.log(`[041] half-SFTP cycle ${cycle + 1} metrics`, timing)
-      const identity = await run.page.evaluate(() => {
+      const identitySignals = await run.page.evaluate(expectedLogin => {
         const entry = window.refs.get('sftp-' + window.store.activeTabId)
-        return entry?.state.remoteFileIdentity || null
+        const identity = entry?.state.remoteFileIdentity
+        return {
+          privilegedChannel: identity?.channel === 'pty-root',
+          effectiveRoot: identity?.effectiveUid === '0',
+          loginMatches: identity?.loginUsername === expectedLogin
+        }
+      }, secondary.username)
+      expect(identitySignals).toEqual({
+        privilegedChannel: true,
+        effectiveRoot: true,
+        loginMatches: true
       })
-      expect(identity?.channel).toBe('pty-root')
-      expect(identity?.effectiveUid).toBe('0')
-      expect(identity?.loginUsername).toBe(secondary.username)
-      const terminalText = (await terminalState(run.page)).text
-      const visibleDelta = terminalText.slice(visibleStart)
-      expect(visibleDelta).not.toMatch(internalTerminalPattern)
-      expect(visibleDelta).not.toMatch(leakedProbePattern)
+      expectNoTerminalLeak(
+        await terminalOutputSignals(run.page, visibleStart)
+      )
       await showTerminal(run.page)
       console.log(`[041] half-SFTP cycle ${cycle + 1} complete`)
-      visibleStart = (await terminalState(run.page)).text.length
+      visibleStart = await terminalBufferLength(run.page)
     }
     console.log('[041] half-SFTP totals', durations)
     const firstReady = cycleTimings[0].metrics.first_sftp_ready_ms
@@ -373,18 +476,33 @@ test('secondary login elevation keeps half-screen SFTP internals invisible', asy
       } else {
         expect(warmRefresh.sampleDelta).toBe(0)
         expect(timing.totalMs).toBeLessThan(1500)
-        expect(timing.idleStable).toBe(true)
+        expect(timing.cleanup.idleStable).toBe(true)
       }
     }
     expect(Math.max(...durations.slice(1))).toBeLessThan(1500)
     await waitForSftpTaskIdle(run.page)
 
-    const inputMarker = 'shellpilot-secondary-terminal-ok'
-    const beforeInput = (await terminalState(run.page)).text.length
-    await sendTerminalText(run.page, `printf '${inputMarker}\\n'`)
-    await expect.poll(async () => (
-      await terminalState(run.page)
-    ).text.slice(beforeInput), { timeout: 10000 }).toContain(inputMarker)
+    const { markerTypedBytes, markerExpectedOutput } = randomMarkerProof()
+    const beforeInput = await terminalBufferLength(run.page)
+    await sendTerminalText(run.page, markerTypedBytes)
+    await expect.poll(async () => {
+      const signals = await terminalOutputSignals(
+        run.page,
+        beforeInput,
+        markerExpectedOutput
+      )
+      return {
+        expectedOutputSeen: signals.expectedOutputSeen,
+        promptRecovered: signals.promptRecovered,
+        internalLeakDetected: signals.internalLeakDetected,
+        probeLeakDetected: signals.probeLeakDetected
+      }
+    }, { timeout: 10000 }).toEqual({
+      expectedOutputSeen: true,
+      promptRecovered: true,
+      internalLeakDetected: false,
+      probeLeakDetected: false
+    })
     console.log('[041] login keyboard marker verified')
   } finally {
     console.log('[041] cleanup app start')
