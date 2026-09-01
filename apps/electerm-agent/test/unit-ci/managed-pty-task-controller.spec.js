@@ -811,6 +811,12 @@ test('cleanup deadline aggregates timeout and keeps the lease locked', async () 
   await Promise.resolve()
   await Promise.resolve()
   assert.equal(harness.submissions.at(-1).command, 'frame-cleanup')
+  cleanupAccepted.resolve(true)
+  await Promise.resolve()
+  harness.emit(fileFrameAcknowledgement(token, 3))
+  harness.emitCommandFinished(0)
+  assert.equal(harness.emitPromptBoundary(), true)
+  await Promise.resolve()
   timers.runAll()
 
   const error = await observed
@@ -1008,7 +1014,13 @@ test('late authenticated prompt unlocks after cancellation recovery deadline', a
   assert.equal(harness.disposedListeners, 1)
   assert.equal(harness.lifecycleEvents.includes('cancel-output'), false)
 
-  assert.equal(harness.emitPromptStarted(), true)
+  assert.equal(harness.emitPromptBoundary(), true)
+  assert.equal(harness.controller.isBusy(), true)
+  assert.equal(harness.lifecycleEvents.includes('cancel-output'), false)
+  assert.deepEqual(harness.controller.handleUserInput('queued-late'), {
+    handled: true, send: false, queue: true
+  })
+  assert.equal(harness.controller.handleCommandInputStarted(), true)
   assert.equal(harness.controller.isBusy(), false)
   assert.equal(harness.lifecycleEvents.includes('cancel-output'), true)
   assert.deepEqual(
@@ -1019,7 +1031,7 @@ test('late authenticated prompt unlocks after cancellation recovery deadline', a
   harness.emitManagedEnd(0)
 })
 
-test('cancellation recovery without a prompt remains locked until invalidation', async () => {
+test('cancellation recovery without B remains locked until invalidation', async () => {
   const harness = await createControllerHarness({ recoveryTimeoutMs: 20 })
   const signalController = new AbortController()
   const lease = await harness.controller.acquire('operations-no-prompt')
@@ -1032,6 +1044,7 @@ test('cancellation recovery without a prompt remains locked until invalidation',
   await Promise.resolve()
   harness.emitManagedStart()
   signalController.abort()
+  assert.equal(harness.emitPromptBoundary(), true)
 
   await assert.rejects(running, error => error.name === 'CancellationUnknownError')
   assert.equal(harness.controller.isBusy(), true)

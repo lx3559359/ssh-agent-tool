@@ -419,7 +419,8 @@ export function createManagedPtyTaskController ({
   function settleIfCompleteUnsafe (execution) {
     if (execution.settled) return
     if (execution.cancelRequested) {
-      if (!execution.promptReturned) return
+      if (!execution.promptReturned ||
+        !execution.commandInputReady) return
       if (execution.planCleanupStarted) {
         clearTimer(execution.recoveryHandle)
         if (execution.frameError || !execution.frameAcknowledged ||
@@ -467,6 +468,7 @@ export function createManagedPtyTaskController ({
       )
       return
     }
+    if (!execution.commandInputReady) return
     if (!execution.parser.started()) {
       failExecution(execution, new Error('PTY 运维任务开始边界缺失'))
       return
@@ -508,7 +510,8 @@ export function createManagedPtyTaskController ({
       lateRecovery = {
         owner: execution.owner,
         promptAfterSequence: execution.cancelRequestedPromptSequence,
-        recoveryArmed: execution.cancellationRecoveryArmed
+        recoveryArmed: execution.cancellationRecoveryArmed,
+        promptReturned: false
       }
       const error = execution.planCleanupStarted
         ? cancellationCleanupUnknownError(
@@ -549,6 +552,7 @@ export function createManagedPtyTaskController ({
     if (execution.settled && lateRecovery?.owner === execution.owner) {
       lateRecovery.promptAfterSequence = promptSequence
       lateRecovery.recoveryArmed = true
+      lateRecovery.promptReturned = false
     }
     sendCancellationInterrupt(execution, 'accepted')
     if (!execution.settled) beginRecoveryDeadline(execution)
@@ -962,15 +966,7 @@ export function createManagedPtyTaskController ({
       if (!recoveryLocked || !lateRecovery ||
         lateRecovery.recoveryArmed !== true ||
         promptSequence <= lateRecovery.promptAfterSequence) return false
-      const recoveryOwner = lateRecovery.owner
-      lateRecovery = null
-      recoveryLocked = false
-      if (leaseOwner === recoveryOwner) {
-        leaseOwner = ''
-        safeNotifyIdle()
-      }
-      firstIdentity = null
-      safeCancelSubmissionOutput()
+      lateRecovery.promptReturned = true
       return true
     }
     if (execution.cancelRequested) {
@@ -987,6 +983,21 @@ export function createManagedPtyTaskController ({
 
   function handleCommandInputStarted () {
     const execution = active
+    if (!execution) {
+      if (!recoveryLocked || !lateRecovery ||
+        lateRecovery.recoveryArmed !== true ||
+        lateRecovery.promptReturned !== true) return false
+      const recoveryOwner = lateRecovery.owner
+      lateRecovery = null
+      recoveryLocked = false
+      if (leaseOwner === recoveryOwner) {
+        leaseOwner = ''
+        safeNotifyIdle()
+      }
+      firstIdentity = null
+      safeCancelSubmissionOutput()
+      return true
+    }
     if (!execution || !execution.promptReturned) return false
     execution.commandInputReady = true
     execution.planCleanupInputReady = true

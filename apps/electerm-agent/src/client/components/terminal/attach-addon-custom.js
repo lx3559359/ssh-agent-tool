@@ -36,6 +36,9 @@ export default class AttachAddonCustom {
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
     this.managedPtyListenerBytes = new Uint8Array()
+    this.managedPtyPromptReleaseBytes = new Uint8Array()
+    this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
+    this.managedPtyPromptReleasePending = false
     this.managedPtyLifecycleOverflowed = false
     this.managedPtyLifecyclePending = false
     this.managedPtyLifecycleDiscarding = false
@@ -118,6 +121,9 @@ export default class AttachAddonCustom {
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
     this.managedPtyListenerBytes = new Uint8Array()
+    this.managedPtyPromptReleaseBytes = new Uint8Array()
+    this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
+    this.managedPtyPromptReleasePending = false
     this.managedPtyLifecycleDiscarding = false
     const timeoutNumber = Number(timeout)
     if (Number.isFinite(timeoutNumber) && timeoutNumber > 0) {
@@ -151,6 +157,9 @@ export default class AttachAddonCustom {
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
     this.managedPtyListenerBytes = new Uint8Array()
+    this.managedPtyPromptReleaseBytes = new Uint8Array()
+    this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
+    this.managedPtyPromptReleasePending = false
     this.managedPtyLifecycleDiscarding = false
 
     if (!discard && this.suppressedData.length > 0) {
@@ -181,6 +190,9 @@ export default class AttachAddonCustom {
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
     this.managedPtyListenerBytes = new Uint8Array()
+    this.managedPtyPromptReleaseBytes = new Uint8Array()
+    this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
+    this.managedPtyPromptReleasePending = false
     return true
   }
 
@@ -553,6 +565,7 @@ export default class AttachAddonCustom {
   _writeManagedPtyHiddenOutput = data => {
     if (!data || data.length === 0) return
     const wasDiscarding = this.managedPtyLifecycleDiscarding
+    const promptReleaseWasPending = this.managedPtyPromptReleasePending
     let releaseData = typeof data === 'string'
       ? this._findSuppressionReleaseData(data)
       : this._findSuppressionReleaseBytes(data)
@@ -572,23 +585,151 @@ export default class AttachAddonCustom {
       if (!lifecycleFrames.includes(this.suppressionReleaseMarker)) return
       this.managedPtyLifecycleDiscarding = false
     }
+    if (promptReleaseWasPending) {
+      const incomingBytes = typeof data === 'string'
+        ? new TextEncoder().encode(data)
+        : data instanceof ArrayBuffer
+          ? new Uint8Array(data)
+          : data instanceof Uint8Array
+            ? data
+            : new Uint8Array(data)
+      const combined = new Uint8Array(
+        this.managedPtyPromptReleaseBytes.length + incomingBytes.length
+      )
+      combined.set(this.managedPtyPromptReleaseBytes)
+      combined.set(incomingBytes, this.managedPtyPromptReleaseBytes.length)
+      if (combined.byteLength > managedPtyLifecycleByteLimit) {
+        this.managedPtyPromptReleaseBytes = new Uint8Array()
+        this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
+        this.managedPtyPromptReleasePending = false
+        this.managedPtyLifecycleDiscarding = true
+        this.prepareManagedPtyEchoRecovery()
+        return
+      }
+      this.managedPtyPromptReleaseBytes = combined
+    }
+    const promptFrame = `${String.fromCharCode(27)}]633;A;` +
+      `${this.managedPtySessionNonce}${String.fromCharCode(7)}`
+    const inputFrame = `${String.fromCharCode(27)}]633;B;` +
+      `${this.managedPtySessionNonce}${String.fromCharCode(7)}`
+    const forwardedPrePromptLifecycleFrames = new Set()
+    const writePrePromptLifecycleFrames = () => {
+      for (const frame of lifecycleFrames) {
+        if (frame === promptFrame) break
+        if (frame === inputFrame) continue
+        if (!this._isAuthenticatedManagedLifecycleFrame(frame)) continue
+        this.writeToTerminalDirect(frame)
+        forwardedPrePromptLifecycleFrames.add(frame)
+      }
+    }
     if (this.managedPtyLifecyclePending) {
-      if (this.publishSuppressionRemainder &&
+      writePrePromptLifecycleFrames()
+      if (!promptReleaseWasPending && this.publishSuppressionRemainder &&
         this.managedPtyOutputStreamingActive &&
         listenerData.publishData.length > 0) {
         this._publishRemoteOutput(listenerData.publishData)
       }
       return
     }
+    const toBytes = value => {
+      if (typeof value === 'string') return new TextEncoder().encode(value)
+      if (value instanceof ArrayBuffer) return new Uint8Array(value)
+      if (value instanceof Uint8Array) return value
+      return new Uint8Array(value)
+    }
+    let promptReleaseReady = false
+    const promptFrameIndex = lifecycleFrames.indexOf(promptFrame)
+    const inputFrameAfterPromptIndex = promptFrameIndex === -1
+      ? -1
+      : lifecycleFrames.indexOf(inputFrame, promptFrameIndex + 1)
+    if (!this.managedPtyHoldSuppression && releaseData !== null &&
+      !this.managedPtyPromptReleasePending &&
+      this.suppressionReleaseMarker === promptFrame &&
+      promptFrameIndex !== -1) {
+      writePrePromptLifecycleFrames()
+      this.writeToTerminalDirect(promptFrame)
+      const releaseBytes = toBytes(releaseData)
+      const promptFrameLength = new TextEncoder().encode(promptFrame).length
+      const promptReleaseBytes = releaseBytes.slice(promptFrameLength)
+      if (promptReleaseBytes.byteLength > managedPtyLifecycleByteLimit) {
+        this.managedPtyPromptReleaseBytes = new Uint8Array()
+        this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
+        this.managedPtyPromptReleasePending = false
+        this.managedPtyLifecycleDiscarding = true
+        this.prepareManagedPtyEchoRecovery()
+        return
+      }
+      const promptBytes = new TextEncoder().encode(promptFrame)
+      let promptIndex = -1
+      for (let index = 0;
+        index <= listenerData.publishData.length - promptBytes.length;
+        index++) {
+        let matches = true
+        for (let offset = 0; offset < promptBytes.length; offset++) {
+          if (listenerData.publishData[index + offset] !== promptBytes[offset]) {
+            matches = false
+            break
+          }
+        }
+        if (matches) {
+          promptIndex = index
+          break
+        }
+      }
+      this.managedPtyPromptListenerPrefixBytes = promptIndex > 0
+        ? listenerData.publishData.slice(0, promptIndex)
+        : new Uint8Array()
+      this.managedPtyPromptReleaseBytes = promptReleaseBytes
+      this.managedPtyPromptReleasePending = true
+      if (inputFrameAfterPromptIndex === -1) {
+        if (this.publishSuppressionRemainder &&
+          this.managedPtyOutputStreamingActive &&
+          this.managedPtyPromptListenerPrefixBytes.length > 0) {
+          this._publishRemoteOutput(this.managedPtyPromptListenerPrefixBytes)
+          this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
+        }
+        this.suppressionReleaseMarker = inputFrame
+        this.suppressionScanText = ''
+        this.suppressionScanBytes = new Uint8Array()
+        this.suppressionDecoder = new TextDecoder('utf-8')
+        return
+      }
+      releaseData = this.managedPtyPromptReleaseBytes
+      promptReleaseReady = true
+    } else if (promptReleaseWasPending &&
+      lifecycleFrames.includes(inputFrame)) {
+      releaseData = this.managedPtyPromptReleaseBytes
+      promptReleaseReady = true
+    } else if (promptReleaseWasPending) {
+      return
+    }
+    if (promptReleaseReady) {
+      this.managedPtyPromptReleaseBytes = new Uint8Array()
+      this.managedPtyPromptReleasePending = false
+    }
     if (this.publishSuppressionRemainder &&
       this.managedPtyOutputStreamingActive && !lifecycleOverflowed) {
-      const publishData = wasDiscarding
-        ? releaseData
+      let publishData = wasDiscarding
+        ? toBytes(releaseData)
         : listenerData.publishData
+      if (promptReleaseReady) {
+        const promptBytes = new TextEncoder().encode(promptFrame)
+        const prefixBytes = this.managedPtyPromptListenerPrefixBytes
+        const releaseBytes = toBytes(releaseData)
+        publishData = new Uint8Array(
+          prefixBytes.length + promptBytes.length + releaseBytes.length
+        )
+        publishData.set(prefixBytes)
+        publishData.set(promptBytes, prefixBytes.length)
+        publishData.set(releaseBytes, prefixBytes.length + promptBytes.length)
+      }
       if (publishData?.length > 0) this._publishRemoteOutput(publishData)
     }
     for (const frame of lifecycleFrames) {
       if (!this._isAuthenticatedManagedLifecycleFrame(frame)) continue
+      if (forwardedPrePromptLifecycleFrames.has(frame)) continue
+      if (promptReleaseReady &&
+        (frame === promptFrame || frame === inputFrame)) continue
       if (frame === this.suppressionReleaseMarker) {
         if (this.managedPtyHoldSuppression) {
           this.writeToTerminalDirect(frame)
@@ -601,7 +742,24 @@ export default class AttachAddonCustom {
     if (releaseData === null) return
     if (this.publishSuppressionRemainder &&
       !this.managedPtyOutputStreamingActive) {
-      this._publishRemoteOutput(releaseData)
+      let publishData = wasDiscarding
+        ? toBytes(releaseData)
+        : listenerData.publishData
+      if (promptReleaseReady) {
+        const promptBytes = new TextEncoder().encode(promptFrame)
+        const prefixBytes = this.managedPtyPromptListenerPrefixBytes
+        const releaseBytes = toBytes(releaseData)
+        publishData = new Uint8Array(
+          prefixBytes.length + promptBytes.length + releaseBytes.length
+        )
+        publishData.set(prefixBytes)
+        publishData.set(promptBytes, prefixBytes.length)
+        publishData.set(releaseBytes, prefixBytes.length + promptBytes.length)
+      }
+      if (publishData.length > 0) this._publishRemoteOutput(publishData)
+    }
+    if (promptReleaseReady) {
+      this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
     }
     if (this.managedPtyHoldSuppression) {
       this.suppressionScanText = ''
@@ -609,6 +767,9 @@ export default class AttachAddonCustom {
       this.suppressionDecoder = new TextDecoder('utf-8')
       this.managedPtyLifecycleBytes = new Uint8Array()
       this.managedPtyListenerBytes = new Uint8Array()
+      this.managedPtyPromptReleaseBytes = new Uint8Array()
+      this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
+      this.managedPtyPromptReleasePending = false
       this.managedPtyOutputStreamingActive = false
       this.consumeManagedPtyCommandRecord = false
       return
@@ -697,6 +858,9 @@ export default class AttachAddonCustom {
             this.suppressionDecoder = new TextDecoder('utf-8')
             this.managedPtyLifecycleBytes = new Uint8Array()
             this.managedPtyListenerBytes = new Uint8Array()
+            this.managedPtyPromptReleaseBytes = new Uint8Array()
+            this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
+            this.managedPtyPromptReleasePending = false
             if (releasedData.length > 0) {
               this._writeManagedPtyHiddenOutput(releasedData)
             }
@@ -855,6 +1019,9 @@ export default class AttachAddonCustom {
       this.suppressionDecoder = new TextDecoder('utf-8')
       this.managedPtyLifecycleBytes = new Uint8Array()
       this.managedPtyListenerBytes = new Uint8Array()
+      this.managedPtyPromptReleaseBytes = new Uint8Array()
+      this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
+      this.managedPtyPromptReleasePending = false
       this.managedPtyOutputStreamingActive = false
     } else {
       this.startOutputSuppression(null, null, true, true, commandMarker)
@@ -1045,6 +1212,9 @@ export default class AttachAddonCustom {
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
     this.managedPtyListenerBytes = new Uint8Array()
+    this.managedPtyPromptReleaseBytes = new Uint8Array()
+    this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
+    this.managedPtyPromptReleasePending = false
     this.pendingInput = []
     clearTimeout(this._echoCheckTimer)
     this._echoCheckTimer = null
