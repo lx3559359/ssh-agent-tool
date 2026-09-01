@@ -267,6 +267,7 @@ function createBackendHarness (options = {}) {
   async function executeCore ({ request, protocol }) {
     assert.equal(typeof protocol?.buildCommand, 'function')
     requests.push(request)
+    await options.beforePrivilegedRequest?.(request)
     const args = request.args
     const injectedFailure = options.failPrivilegedRequest?.(request)
     if (injectedFailure) throw injectedFailure
@@ -1397,18 +1398,31 @@ test('backup helper works through the real privileged facade and fails closed on
   }
 })
 
-test('privileged backend validates root identity and bounded lease and releases failed creation', async () => {
+test('privileged backend validates identity and lease and delays bad handshake until content operation', async () => {
   const { createPrivilegedFileBackend } = await importModule(backendsModule)
-  const harness = createBackendHarness({ badHandshake: true })
+  const harness = createBackendHarness({
+    badHandshake: true,
+    privilegedTree: {
+      '/root/file': { type: 'file', content: 'abc' }
+    }
+  })
+  const backend = await createPrivilegedFileBackend({
+    sftp: harness.sftp,
+    lease: harness.lease,
+    identity: { uid: '0', username: 'root' },
+    createToken: createTokenFactory()
+  })
+
+  assert.deepEqual(await backend.sftp.list('/root'), [{
+    name: 'file', type: '-', size: 3,
+    accessTime: 1000, modifyTime: 2000,
+    mode: 0o100640, owner: 3, group: 4
+  }])
   await assert.rejects(
-    createPrivilegedFileBackend({
-      sftp: harness.sftp,
-      lease: harness.lease,
-      identity: { uid: '0', username: 'root' },
-      createToken: createTokenFactory()
-    }),
+    backend.sftp.digestFile('/root/file', { expectedSize: 3 }),
     /handshake rejected/
   )
+  await backend.release()
   assert.equal(harness.leaseReleases, 1)
   for (const value of [
     { sftp: harness.sftp, lease: {}, identity: { uid: '0', username: 'root' } },
@@ -1417,6 +1431,107 @@ test('privileged backend validates root identity and bounded lease and releases 
   ]) {
     await assert.rejects(createPrivilegedFileBackend(value), /lease|租约|root|身份|username/i)
   }
+})
+
+test('privileged backend defers staging for list and unused release', async () => {
+  const harness = createBackendHarness({
+    privilegedTree: {
+      '/root': { type: 'directory' }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  assert.deepEqual(harness.requests, [])
+  assert.equal(backend.staging, undefined)
+  assert.deepEqual(await backend.sftp.list('/root'), [])
+  assert.deepEqual(
+    harness.requests.map(request => request.operation),
+    ['list']
+  )
+
+  await backend.release()
+  assert.equal(
+    harness.requests.some(request => request.operation === 'stage-handshake'),
+    false
+  )
+  assert.equal(harness.leaseReleases, 1)
+})
+
+test('privileged backend shares one staging initialization across concurrent content proofs', async () => {
+  const harness = createBackendHarness({
+    privilegedTree: {
+      '/root/file': { type: 'file', content: 'abc' }
+    }
+  })
+  const backend = await createRootBackend(harness)
+
+  const results = await Promise.all([
+    backend.sftp.digestFile('/root/file', { expectedSize: 3 }),
+    backend.sftp.digestFile('/root/file', { expectedSize: 3 })
+  ])
+
+  assert.equal(results.every(result => result.digest === sha256('abc')), true)
+  assert.equal(harness.requests.filter(
+    request => request.operation === 'stage-handshake'
+  ).length, 1)
+  assert.ok(backend.staging)
+  await backend.release()
+})
+
+test('privileged backend releases a staging session that completes after close starts', async () => {
+  let gateEnabled = false
+  let stagingRequest
+  let releaseHandshake
+  const handshakeStarted = new Promise(resolve => {
+    releaseHandshake = resolve
+  })
+  let continueHandshake
+  const handshakeGate = new Promise(resolve => {
+    continueHandshake = resolve
+  })
+  const harness = createBackendHarness({
+    privilegedTree: {
+      '/root/file': { type: 'file', content: 'abc' }
+    },
+    beforePrivilegedRequest: async request => {
+      if (request.operation !== 'stage-handshake') return
+      stagingRequest = request
+      if (!gateEnabled) return
+      releaseHandshake()
+      await handshakeGate
+    }
+  })
+  const backend = await createRootBackend(harness)
+  assert.equal(harness.requests.filter(
+    request => request.operation === 'stage-handshake'
+  ).length, 0)
+  gateEnabled = true
+  const operation = backend.sftp.digestFile('/root/file', { expectedSize: 3 })
+  await handshakeStarted
+  let releasePromise
+  try {
+    releasePromise = Promise.resolve(backend.release())
+  } catch (error) {
+    releasePromise = Promise.reject(error)
+  } finally {
+    continueHandshake()
+  }
+  const [operationResult, releaseResult] = await Promise.allSettled([
+    operation, releasePromise
+  ])
+  assert.equal(operationResult.status, 'rejected')
+  assert.match(operationResult.reason?.message || '', /已经释放/)
+  assert.equal(releaseResult.status, 'fulfilled')
+  assert.equal(releaseResult.value, true)
+  assert.equal(harness.leaseReleases, 1)
+  assert.ok(stagingRequest)
+  const basePath = stagingRequest.args.rootPath.slice(
+    0, stagingRequest.args.rootPath.lastIndexOf('/')
+  )
+  const residuals = [...harness.nodes.keys()].filter(path => (
+    path === basePath || path.startsWith(`${basePath}/`)
+  ))
+  assert.deepEqual(residuals, [])
 })
 
 test('privileged backend releases every releasable lease after construction validation fails', async () => {
