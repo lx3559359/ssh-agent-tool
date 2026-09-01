@@ -62,12 +62,12 @@ function execRemote (client, command, input = '') {
         callback(value)
       }
       const timeout = setTimeout(finish(reject), 30000,
-        new Error('Temporary account command timed out'))
+        new Error('Provisioning request timed out'))
       stream.resume()
       stream.stderr.on('data', data => { stderr += String(data) })
       stream.once('close', code => {
         if (code === 0) return finish(resolve)()
-        finish(reject)(new Error(`Temporary account command failed (${code}): ${stderr.trim()}`))
+        finish(reject)(new Error(`Provisioning request failed (${code}): ${stderr.trim()}`))
       })
       if (input) stream.end(input)
     })
@@ -79,9 +79,9 @@ async function createTemporarySudoUser (rootConfig) {
   const password = `Sp!${crypto.randomBytes(18).toString('base64url')}9`
   const client = await connectSsh(rootConfig)
   try {
-    console.log('[041] root exec: check sudo')
+    console.log('[041] provisioning prerequisite check')
     await execRemote(client, 'command -v sudo >/dev/null 2>&1')
-    console.log('[041] root exec: useradd')
+    console.log('[041] provisioning identity setup')
     await execRemote(
       client,
       `/usr/sbin/useradd -m -s /bin/bash ${username}`
@@ -94,7 +94,7 @@ async function createTemporarySudoUser (rootConfig) {
       `/usr/sbin/usermod -aG sudo ${username}; ` +
       'else exit 45; fi'
     )
-    console.log('[041] root exec: chpasswd')
+    console.log('[041] provisioning credential setup')
     await execRemote(client, '/usr/sbin/chpasswd', `${username}:${password}\n`)
     return { username, password }
   } catch (error) {
@@ -220,14 +220,17 @@ async function openHalfSftp (page) {
       entry.state.remoteLoading === false
     )
   }), { timeout: 30000 }).toBe(true)
+  const idleSnapshot = await waitForSftpTaskIdle(page)
   const afterMetrics = await performanceSummary(page)
   const metricNames = [
     'first_sftp_ready_ms',
     'sftp_refresh_ms',
+    'sftp_cached_paint_ms',
     'managed_input_ack_ms'
   ]
   return {
     totalMs: Date.now() - startedAt,
+    idleStable: idleSnapshot.idleStable,
     metrics: Object.fromEntries(metricNames.map(name => {
       const before = metricSnapshot(beforeMetrics, name)
       const after = metricSnapshot(afterMetrics, name)
@@ -237,8 +240,7 @@ async function openHalfSftp (page) {
         sampleDelta: after.samples - before.samples,
         latestMs: after.latestMs
       }]
-    })),
-    phase: 'ui_commit'
+    }))
   }
 }
 
@@ -255,41 +257,64 @@ async function showTerminal (page) {
   ).last()).toBeVisible()
 }
 
-async function waitForSftpTaskIdle (page) {
-  await expect.poll(() => page.evaluate(() => {
+async function sftpTaskState (page) {
+  return page.evaluate(() => {
     const terminal = window.refs.get('term-' + window.store.activeTabId)
     const entry = window.refs.get('sftp-' + window.store.activeTabId)
     const refreshState = String(entry?.state.remoteRefreshState || '')
-    return Boolean(
-      terminal?.operationsPtyTaskController?.isBusy?.() !== true &&
-      !['refreshing', 'cached-refreshing'].includes(refreshState)
-    )
-  }), { timeout: 30000 }).toBe(true)
+    return {
+      idle: Boolean(
+        terminal?.operationsPtyTaskController?.isBusy?.() !== true &&
+        entry?.state.remoteLoading === false &&
+        !['refreshing', 'cached-refreshing'].includes(refreshState)
+      ),
+      refreshState
+    }
+  })
 }
 
-test('secondary login sudo root keeps half-screen SFTP internals invisible', async () => {
+async function waitForSftpTaskIdle (page, stableMs = 250) {
+  let stableSnapshot
+  await expect.poll(async () => {
+    const before = await sftpTaskState(page)
+    if (!before.idle) return false
+    await page.waitForTimeout(stableMs)
+    const after = await sftpTaskState(page)
+    const stable = Boolean(
+      after.idle && after.refreshState === before.refreshState
+    )
+    if (stable) stableSnapshot = after
+    return stable
+  }, { timeout: 30000 }).toBe(true)
+  return {
+    ...stableSnapshot,
+    idleStable: true
+  }
+}
+
+test('secondary login elevation keeps half-screen SFTP internals invisible', async () => {
   const { config: rootConfig, missingEnvironmentVariables } = readRootConfig()
   test.skip(
     missingEnvironmentVariables.length > 0,
     `缺少真实服务器测试环境变量：${missingEnvironmentVariables.join(', ')}`
   )
-  console.log('[041] provisioning temporary secondary account')
+  console.log('[041] provisioning start')
   const secondary = await createTemporarySudoUser(rootConfig)
-  console.log('[041] temporary secondary account ready')
+  console.log('[041] provisioning complete')
   let run
   try {
-    console.log('[041] launching app')
+    console.log('[041] login app start')
     run = await launchQualityApp(electron)
-    console.log('[041] connecting as secondary account')
+    console.log('[041] login connection start')
     await connectRealServer(run.page, { ...rootConfig, ...secondary })
     await run.page.waitForTimeout(1500)
-    console.log('[041] secondary login ready')
+    console.log('[041] login ready')
     const loginText = (await terminalState(run.page)).text
     expect(loginText).not.toMatch(internalTerminalPattern)
     expect(loginText).not.toMatch(leakedProbePattern)
 
     const sudoStart = loginText.length
-    console.log('[041] requesting password sudo root')
+    console.log('[041] elevation start')
     await sendTerminalText(run.page, 'sudo -k -i')
     await run.page.waitForTimeout(2000)
     await expect.poll(async () => (
@@ -301,17 +326,17 @@ test('secondary login sudo root keeps half-screen SFTP internals invisible', asy
     await expect.poll(async () => (
       await terminalState(run.page)
     ).text.slice(sudoStart), { timeout: 15000 }).toMatch(/#\s*$/)
-    console.log('[041] sudo root ready')
+    console.log('[041] elevation complete')
 
     const durations = []
     const cycleTimings = []
     let visibleStart = (await terminalState(run.page)).text.length
     for (let cycle = 0; cycle < 3; cycle += 1) {
-      console.log(`[041] opening half SFTP cycle ${cycle + 1}`)
+      console.log(`[041] half-SFTP cycle ${cycle + 1} start`)
       const timing = await openHalfSftp(run.page)
       durations.push(timing.totalMs)
       cycleTimings.push(timing)
-      console.log(`[041] half SFTP cycle ${cycle + 1} timing`, timing)
+      console.log(`[041] half-SFTP cycle ${cycle + 1} metrics`, timing)
       const identity = await run.page.evaluate(() => {
         const entry = window.refs.get('sftp-' + window.store.activeTabId)
         return entry?.state.remoteFileIdentity || null
@@ -324,10 +349,10 @@ test('secondary login sudo root keeps half-screen SFTP internals invisible', asy
       expect(visibleDelta).not.toMatch(internalTerminalPattern)
       expect(visibleDelta).not.toMatch(leakedProbePattern)
       await showTerminal(run.page)
-      console.log(`[041] half SFTP cycle ${cycle + 1} complete`)
+      console.log(`[041] half-SFTP cycle ${cycle + 1} complete`)
       visibleStart = (await terminalState(run.page)).text.length
     }
-    console.log('[041] half SFTP totals', durations)
+    console.log('[041] half-SFTP totals', durations)
     const firstReady = cycleTimings[0].metrics.first_sftp_ready_ms
     const firstRefresh = cycleTimings[0].metrics.sftp_refresh_ms
     expect(firstReady.sampleDelta).toBe(1)
@@ -337,9 +362,19 @@ test('secondary login sudo root keeps half-screen SFTP internals invisible', asy
     expect(firstRefresh.latestMs).toBeGreaterThan(0)
     expect(firstRefresh.latestMs).toBeLessThan(5000)
     for (const timing of cycleTimings.slice(1)) {
-      expect(
-        timing.metrics.first_sftp_ready_ms.sampleDelta
-      ).toBe(0)
+      const warmFirstReady = timing.metrics.first_sftp_ready_ms
+      const warmRefresh = timing.metrics.sftp_refresh_ms
+      const cachedPaint = timing.metrics.sftp_cached_paint_ms
+      expect(warmFirstReady.sampleDelta).toBe(0)
+      expect([0, 1]).toContain(cachedPaint.sampleDelta)
+      if (cachedPaint.sampleDelta === 1) {
+        expect(cachedPaint.latestMs).toBeGreaterThan(0)
+        expect(cachedPaint.latestMs).toBeLessThan(1500)
+      } else {
+        expect(warmRefresh.sampleDelta).toBe(0)
+        expect(timing.totalMs).toBeLessThan(1500)
+        expect(timing.idleStable).toBe(true)
+      }
     }
     expect(Math.max(...durations.slice(1))).toBeLessThan(1500)
     await waitForSftpTaskIdle(run.page)
@@ -350,11 +385,11 @@ test('secondary login sudo root keeps half-screen SFTP internals invisible', asy
     await expect.poll(async () => (
       await terminalState(run.page)
     ).text.slice(beforeInput), { timeout: 10000 }).toContain(inputMarker)
-    console.log('[041] terminal input verified')
+    console.log('[041] login keyboard marker verified')
   } finally {
-    console.log('[041] cleaning app')
+    console.log('[041] cleanup app start')
     if (run) await cleanupQualityApp(run.electronApp, run.profileRoot)
-    console.log('[041] removing temporary secondary account')
+    console.log('[041] cleanup identity start')
     await removeTemporarySudoUser(rootConfig, secondary.username)
     console.log('[041] cleanup complete')
   }
