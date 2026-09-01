@@ -265,10 +265,15 @@ async function openHalfSftp (page) {
   await expect(toggle).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(() => page.evaluate(() => {
     const entry = window.refs.get('sftp-' + window.store.activeTabId)
+    const readiness = entry?.getSftpReadinessSnapshot?.()
+    const remoteArea = document.querySelector(
+      '.session-current .sftp-remote-section .file-list.remote'
+    )
     return Boolean(
       entry?.sftp &&
-      entry.state.inited &&
-      entry.state.remoteLoading === false
+      readiness?.fullySettled &&
+      readiness?.visibleRemoteCommitted &&
+      remoteArea?.getClientRects?.().length
     )
   }), { timeout: 30000 }).toBe(true)
   const idleSnapshot = await waitForSftpTaskIdle(page)
@@ -313,6 +318,7 @@ async function sftpCleanupSnapshot (page) {
     const terminal = window.refs.get('term-' + window.store.activeTabId)
     const entry = window.refs.get('sftp-' + window.store.activeTabId)
     const addon = terminal?.attachAddon
+    const readiness = entry?.getSftpReadinessSnapshot?.() || {}
     const refreshState = String(entry?.state.remoteRefreshState || '')
     const refreshIdle = Boolean(
       entry?.state.remoteLoading === false &&
@@ -333,6 +339,16 @@ async function sftpCleanupSnapshot (page) {
     return {
       busy: terminal?.operationsPtyTaskController?.isBusy?.() === true,
       refreshIdle,
+      fullySettled: readiness.fullySettled === true,
+      visibleRemoteCommitted: readiness.visibleRemoteCommitted === true,
+      firstReadyCommitted: readiness.firstReadyCommitted === true,
+      explicitOpenPending: readiness.explicitOpenPending === true,
+      sessionBindingPending: readiness.sessionBindingPending === true,
+      backgroundTaskCount: Number(readiness.backgroundTaskCount || 0),
+      renderCommitCount: Number(readiness.renderCommitCount || 0),
+      metricTaskCount: Number(readiness.metricTaskCount || 0),
+      directoryRequestCount: Number(readiness.directoryRequestCount || 0),
+      requestEpoch: Number(readiness.requestEpoch || 0),
       activeLeaseCount: Math.max(generationLeaseCount, legacyLeaseCount),
       authoritativeActiveLeaseCount: Number(
         entry?.activeRemoteFileLeases?.size || 0
@@ -354,6 +370,14 @@ function isSftpCleanupSnapshot (snapshot) {
     snapshot &&
     snapshot.busy === false &&
     snapshot.refreshIdle === true &&
+    snapshot.fullySettled === true &&
+    snapshot.visibleRemoteCommitted === true &&
+    snapshot.firstReadyCommitted === true &&
+    snapshot.explicitOpenPending === false &&
+    snapshot.backgroundTaskCount === 0 &&
+    snapshot.renderCommitCount === 0 &&
+    snapshot.metricTaskCount === 0 &&
+    snapshot.directoryRequestCount === 0 &&
     snapshot.activeLeaseCount === 0 &&
     snapshot.authoritativeActiveLeaseCount === 0 &&
     snapshot.uncertainLeaseCount === 0 &&
@@ -363,22 +387,14 @@ function isSftpCleanupSnapshot (snapshot) {
   )
 }
 
-async function waitForSftpTaskIdle (page, stableMs = 250) {
-  let stableSnapshot
+async function waitForSftpTaskIdle (page) {
+  let settledSnapshot
   await expect.poll(async () => {
-    const before = await sftpCleanupSnapshot(page)
-    if (!isSftpCleanupSnapshot(before)) return false
-    await page.waitForTimeout(stableMs)
-    const after = await sftpCleanupSnapshot(page)
-    const stable = Boolean(
-      isSftpCleanupSnapshot(after) &&
-      JSON.stringify(after) === JSON.stringify(before)
-    )
-    if (stable) stableSnapshot = after
-    return stable
+    settledSnapshot = await sftpCleanupSnapshot(page)
+    return isSftpCleanupSnapshot(settledSnapshot)
   }, { timeout: 30000 }).toBe(true)
   return {
-    ...stableSnapshot,
+    ...settledSnapshot,
     idleStable: true
   }
 }
@@ -387,6 +403,15 @@ function expectSftpCleanupSnapshot (snapshot) {
   expect(snapshot.idleStable).toBe(true)
   expect(snapshot.busy).toBe(false)
   expect(snapshot.refreshIdle).toBe(true)
+  expect(snapshot.fullySettled).toBe(true)
+  expect(snapshot.visibleRemoteCommitted).toBe(true)
+  expect(snapshot.firstReadyCommitted).toBe(true)
+  expect(snapshot.explicitOpenPending).toBe(false)
+  expect(snapshot.sessionBindingPending).toBe(false)
+  expect(snapshot.backgroundTaskCount).toBe(0)
+  expect(snapshot.renderCommitCount).toBe(0)
+  expect(snapshot.metricTaskCount).toBe(0)
+  expect(snapshot.directoryRequestCount).toBe(0)
   expect(snapshot.activeLeaseCount).toBe(0)
   expect(snapshot.authoritativeActiveLeaseCount).toBe(0)
   expect(snapshot.uncertainLeaseCount).toBe(0)
@@ -410,14 +435,12 @@ test('secondary login elevation keeps half-screen SFTP internals invisible', asy
     run = await launchQualityApp(electron)
     console.log('[041] login connection start')
     await connectRealServer(run.page, { ...rootConfig, ...secondary })
-    await run.page.waitForTimeout(1500)
     console.log('[041] login ready')
     expectNoTerminalLeak(await terminalOutputSignals(run.page, 0))
 
     const sudoStart = await terminalBufferLength(run.page)
     console.log('[041] elevation start')
     await sendTerminalText(run.page, 'sudo -k -i')
-    await run.page.waitForTimeout(2000)
     await expect.poll(async () => (
       await terminalOutputSignals(run.page, sudoStart)
     ).passwordPromptSeen, {
@@ -474,15 +497,13 @@ test('secondary login elevation keeps half-screen SFTP internals invisible', asy
       const warmRefresh = timing.metrics.sftp_refresh_ms
       const cachedPaint = timing.metrics.sftp_cached_paint_ms
       expect(warmFirstReady.sampleDelta).toBe(0)
-      expect([0, 1]).toContain(cachedPaint.sampleDelta)
-      if (cachedPaint.sampleDelta === 1) {
-        expect(cachedPaint.latestMs).toBeGreaterThan(0)
-        expect(cachedPaint.latestMs).toBeLessThan(1500)
-      } else {
-        expect(warmRefresh.sampleDelta).toBe(0)
-        expect(timing.totalMs).toBeLessThan(1500)
-        expect(timing.cleanup.idleStable).toBe(true)
-      }
+      expect(warmRefresh.sampleDelta).toBe(0)
+      expect(cachedPaint.sampleDelta).toBe(0)
+      expect(timing.cleanup.requestEpoch).toBe(
+        cycleTimings[0].cleanup.requestEpoch
+      )
+      expect(timing.totalMs).toBeLessThan(1500)
+      expect(timing.cleanup.idleStable).toBe(true)
     }
     expect(Math.max(...durations.slice(1))).toBeLessThan(1500)
     await waitForSftpTaskIdle(run.page)

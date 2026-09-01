@@ -3,6 +3,7 @@ import normalizeRemotePath from '../../common/normalize-remote-path.js'
 
 const TIMER_KEYS = ['timer', 'timer4', 'timer5', 'retryHandler']
 const DEBOUNCE_KEYS = ['remoteListDebounce', 'localListDebounce']
+const SFTP_ENTRY_READINESS = new WeakMap()
 
 function isExpectedSftpBackgroundAbort (error) {
   return error?.name === 'AbortError' ||
@@ -28,6 +29,200 @@ export function runSftpBackgroundTask (task, options = {}) {
     }
     return undefined
   })
+}
+
+export function initializeSftpEntryReadiness (entry) {
+  const existing = SFTP_ENTRY_READINESS.get(entry)
+  if (existing) return existing
+  const readiness = {
+    backgroundTasks: new Set(),
+    renderCommits: new Set(),
+    metricTasks: new Set(),
+    visibleRemoteCommitted: false,
+    firstReadyCommitted: false,
+    disposed: false
+  }
+  SFTP_ENTRY_READINESS.set(entry, readiness)
+  return readiness
+}
+
+function trackSftpEntryPromise (entry, key, operation) {
+  const readiness = initializeSftpEntryReadiness(entry)
+  const tasks = readiness[key]
+  const tracked = Promise.resolve(operation).finally(() => {
+    tasks.delete(tracked)
+  })
+  tasks.add(tracked)
+  return tracked
+}
+
+export function trackSftpEntryBackgroundTask (entry, operation) {
+  if (typeof operation !== 'function') {
+    return trackSftpEntryPromise(entry, 'backgroundTasks', operation)
+  }
+  let resolveStart
+  let rejectStart
+  const start = new Promise((resolve, reject) => {
+    resolveStart = resolve
+    rejectStart = reject
+  })
+  const tracked = trackSftpEntryPromise(entry, 'backgroundTasks', start)
+  try {
+    resolveStart(operation())
+  } catch (error) {
+    rejectStart(error)
+  }
+  return tracked
+}
+
+export function trackSftpEntryMetric (entry, operation) {
+  return trackSftpEntryPromise(entry, 'metricTasks', operation)
+}
+
+export function runTrackedSftpBackgroundTask (
+  entry,
+  task,
+  options = {}
+) {
+  return trackSftpEntryBackgroundTask(
+    entry,
+    () => runSftpBackgroundTask(task, options)
+  )
+}
+
+export function beginSftpEntryRenderCommit (entry) {
+  const readiness = initializeSftpEntryReadiness(entry)
+  let resolveCommit
+  let settled = false
+  const promise = new Promise(resolve => {
+    resolveCommit = resolve
+  })
+  const commit = {
+    promise,
+    settle (result = false) {
+      if (settled) return false
+      settled = true
+      readiness.renderCommits.delete(commit)
+      const committed = result === true || Boolean(result?.committed)
+      if (committed) {
+        readiness.visibleRemoteCommitted ||= Boolean(
+          result?.visibleRemoteCommitted
+        )
+        readiness.firstReadyCommitted ||= Boolean(
+          result?.firstReadyCommitted
+        )
+      }
+      resolveCommit(committed)
+      return true
+    }
+  }
+  readiness.renderCommits.add(commit)
+  if (readiness.disposed || entry.remoteFileUnmounted) {
+    commit.settle(false)
+  }
+  return Object.freeze(commit)
+}
+
+export function disposeSftpEntryReadiness (entry) {
+  const readiness = initializeSftpEntryReadiness(entry)
+  readiness.disposed = true
+  for (const commit of [...readiness.renderCommits]) {
+    commit.settle(false)
+  }
+}
+
+function safeDirectoryRequestCount (entry) {
+  try {
+    return Math.max(0, Number(
+      entry.remoteDirectoryCache?.stats?.()?.inflight || 0
+    ))
+  } catch {
+    return 0
+  }
+}
+
+export function getSftpEntryReadinessSnapshot (entry) {
+  const readiness = initializeSftpEntryReadiness(entry)
+  const refreshState = String(entry.state?.remoteRefreshState || '')
+  const directoryRequestCount = safeDirectoryRequestCount(entry)
+  const snapshot = {
+    explicitOpenPending: Boolean(entry.sftpExplicitInitialization),
+    sessionBindingPending: Boolean(entry.sftpSessionBinding),
+    backgroundTaskCount: readiness.backgroundTasks.size,
+    renderCommitCount: readiness.renderCommits.size,
+    metricTaskCount: readiness.metricTasks.size,
+    directoryRequestCount,
+    requestEpoch: Number(entry.sftpRemoteRequestEpoch || 0),
+    visibleRemoteCommitted: readiness.visibleRemoteCommitted,
+    firstReadyCommitted: readiness.firstReadyCommitted
+  }
+  const refreshIdle = entry.state?.remoteLoading === false &&
+    !['refreshing', 'cached-refreshing'].includes(refreshState)
+  return Object.freeze({
+    ...snapshot,
+    fullySettled: readiness.disposed === false &&
+      refreshIdle &&
+      snapshot.visibleRemoteCommitted &&
+      snapshot.firstReadyCommitted &&
+      snapshot.explicitOpenPending === false &&
+      snapshot.sessionBindingPending === false &&
+      snapshot.backgroundTaskCount === 0 &&
+      snapshot.renderCommitCount === 0 &&
+      snapshot.metricTaskCount === 0 &&
+      snapshot.directoryRequestCount === 0
+  })
+}
+
+export function startSftpEntryExplicitInitialization (
+  entry,
+  task,
+  options = {}
+) {
+  const pendingBinding = entry.sftpSessionBinding || null
+  const existingBinding = entry.sftpExplicitInitializationBinding || null
+  const existingLifecycle = entry.sftpExplicitInitializationLifecycle
+  const existingIsCurrent = Boolean(entry.sftpExplicitInitialization) && (
+    pendingBinding
+      ? existingBinding === pendingBinding
+      : !existingBinding && isCurrentLifecycle(entry, existingLifecycle)
+  )
+  if (existingIsCurrent) {
+    return entry.sftpExplicitInitialization
+  }
+  const reservationLifecycle = pendingBinding
+    ? null
+    : captureLifecycle(entry)
+  let resolveStart
+  let rejectStart
+  const start = new Promise((resolve, reject) => {
+    resolveStart = resolve
+    rejectStart = reject
+  })
+  const shared = trackSftpEntryBackgroundTask(
+    entry,
+    runSftpBackgroundTask(start, options)
+  ).finally(() => {
+    if (entry.sftpExplicitInitialization === shared) {
+      entry.sftpExplicitInitialization = null
+      entry.sftpExplicitInitializationBinding = null
+      entry.sftpExplicitInitializationLifecycle = null
+    }
+  })
+  entry.sftpExplicitInitialization = shared
+  entry.sftpExplicitInitializationBinding = pendingBinding
+  entry.sftpExplicitInitializationLifecycle = reservationLifecycle
+  try {
+    const invoke = () => (typeof task === 'function' ? task() : task)
+    resolveStart(pendingBinding
+      ? Promise.resolve(pendingBinding).then(bindingResult => (
+        bindingResult ? invoke() : undefined
+      ))
+      : invoke()
+    )
+  } catch (error) {
+    rejectStart(error)
+  }
+  return shared
 }
 
 export function shouldRetryUnexpectedSftpPacket (error, {
@@ -406,7 +601,7 @@ export async function reconnectSftpEntryRemote (entry) {
     : undefined
 }
 
-export async function bindSftpEntryRemoteSession (entry, binding = {}) {
+async function prepareSftpEntryRemoteSessionBinding (entry, binding = {}) {
   const nextGeneration = String(binding.sshSessionGeneration || '').trim()
   const nextTerminalPid = String(binding.sshTerminalPid || '').trim()
   const terminalSessionChanged =
@@ -434,15 +629,35 @@ export async function bindSftpEntryRemoteSession (entry, binding = {}) {
   }
   if (!activateRemoteFileGeneration(entry, drain.generation)) return undefined
   const token = captureLifecycle(entry)
-  const shouldInitializeRemote =
-    typeof entry.shouldInitializeRemoteOnBind !== 'function' ||
-    entry.shouldInitializeRemoteOnBind()
-  const remote = entry.shouldRenderRemote() && shouldInitializeRemote
-    ? await entry.initRemoteAll()
-    : undefined
-  if (!isCurrentLifecycle(entry, token)) return undefined
-  entry.initLocalAll()
-  return remote
+  return Object.freeze({
+    shouldInitializeRemote:
+      typeof entry.shouldInitializeRemoteOnBind !== 'function' ||
+        entry.shouldInitializeRemoteOnBind(),
+    token
+  })
+}
+
+export function bindSftpEntryRemoteSession (entry, binding = {}) {
+  const bindingWork = prepareSftpEntryRemoteSessionBinding(entry, binding)
+  entry.sftpSessionBinding = bindingWork
+  const completion = bindingWork.then(async prepared => {
+    if (!prepared) return undefined
+    let remote
+    if (entry.shouldRenderRemote() && prepared.shouldInitializeRemote) {
+      remote = await startSftpEntryExplicitInitialization(
+        entry,
+        () => entry.initRemoteAll()
+      )
+    }
+    if (!isCurrentLifecycle(entry, prepared.token)) return undefined
+    entry.initLocalAll()
+    return remote
+  })
+  return completion.finally(() => {
+    if (entry.sftpSessionBinding === bindingWork) {
+      entry.sftpSessionBinding = null
+    }
+  })
 }
 
 function canonicalRemotePath (value) {

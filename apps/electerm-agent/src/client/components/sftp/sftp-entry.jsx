@@ -78,17 +78,24 @@ import {
   commitSftpEntryRemoteClient,
   destroySftpEntryClientOnce,
   drainRemoteFileGeneration,
+  disposeSftpEntryReadiness,
   disposeSftpEntryScheduling,
   bindSftpEntryRemoteSession,
+  beginSftpEntryRenderCommit,
+  getSftpEntryReadinessSnapshot,
+  initializeSftpEntryReadiness,
   initializeRemoteFileGeneration,
   isCurrentRemoteFileGeneration,
   quiesceSftpEntryTransfers,
   removeDeletedRemoteEntries,
   reconnectSftpEntryRemote,
-  runSftpBackgroundTask,
+  runTrackedSftpBackgroundTask,
+  startSftpEntryExplicitInitialization,
   isCurrentSftpEntryRemoteTask,
   replaceSftpEntryTimer,
-  shouldRetryUnexpectedSftpPacket
+  shouldRetryUnexpectedSftpPacket,
+  trackSftpEntryBackgroundTask,
+  trackSftpEntryMetric
 } from './sftp-entry-lifecycle.js'
 import { createTransactionRunner } from '../../common/safety-transactions/transaction-runner.js'
 import { buildSideEffectSafetyRequest } from '../../common/safety-transactions/side-effect-model.js'
@@ -280,6 +287,7 @@ export default class Sftp extends Component {
     this.activeRemoteFileLeases = new Set()
     this.uncertainRemoteFileLeases = new Set()
     this.preparedRemoteFileCapabilityProbe = null
+    initializeSftpEntryReadiness(this)
     initializeRemoteFileGeneration(this)
     this.sftpSafetyProgressHandlers = new Map()
     this.sftpSafetyAdapter = createSftpTransactionAdapter({
@@ -331,9 +339,11 @@ export default class Sftp extends Component {
       !this.state.loadingSftp &&
       !this.state.remoteLoading
     ) {
-      this.runSftpBackgroundTask(() => this.initRemoteAll({
-        explicitOpen: true
-      }))
+      startSftpEntryExplicitInitialization(
+        this,
+        () => this.initRemoteAll({ explicitOpen: true }),
+        { reportError: error => this.onError(error) }
+      )
     } else if (
       this.props.config.autoRefreshWhenSwitchToSftp &&
       explicitlyOpenedSftp &&
@@ -368,6 +378,7 @@ export default class Sftp extends Component {
   componentWillUnmount () {
     if (this.remoteFileUnmounted) return this.remoteFileDisposalPromise
     this.remoteFileUnmounted = true
+    this.disposeSftpReadiness?.()
     this.remoteDirectoryCache?.clear?.()
     this.resetRemoteFileLeaseOutcome?.({ publish: false })
     const transferSettlement = this.quiesceActiveTransfers?.()
@@ -2475,9 +2486,15 @@ export default class Sftp extends Component {
       : new Error(e('shellpilotSftpUnavailable'))
   }
 
-  runSftpBackgroundTask = task => runSftpBackgroundTask(task, {
-    reportError: error => window.store.onError(error)
-  })
+  runSftpBackgroundTask = task => runTrackedSftpBackgroundTask(
+    this,
+    task,
+    { reportError: error => window.store.onError(error) }
+  )
+
+  disposeSftpReadiness = () => disposeSftpEntryReadiness(this)
+
+  getSftpReadinessSnapshot = () => getSftpEntryReadinessSnapshot(this)
 
   initLocalAll = () => {
     this.localListOwner()
@@ -2491,7 +2508,10 @@ export default class Sftp extends Component {
       explicitOpen: options.explicitOpen === true
     })
     if (isCurrentSftpEntryRemoteTask(this, task)) {
-      await this.remoteListOwner(task)
+      await trackSftpEntryBackgroundTask(
+        this,
+        () => this.remoteListOwner(task)
+      )
     }
   }
 
@@ -2586,10 +2606,22 @@ export default class Sftp extends Component {
       this.props.pid
     )
     if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
-    this.setState({
-      remoteGidTree,
-      remoteUidTree
-    })
+    const commit = beginSftpEntryRenderCommit(this)
+    let prepared = false
+    this.setState(() => {
+      if (this.remoteFileUnmounted ||
+        (task && !isCurrentSftpEntryRemoteTask(this, task))) return null
+      prepared = true
+      return {
+        remoteGidTree,
+        remoteUidTree
+      }
+    }, () => commit.settle({
+      committed: prepared &&
+        !this.remoteFileUnmounted &&
+        (!task || isCurrentSftpEntryRemoteTask(this, task))
+    }))
+    await commit.promise
   }
 
   localListOwner = async () => {
@@ -3177,11 +3209,19 @@ export default class Sftp extends Component {
         !generation.accepting ||
         !isCurrentRemoteFileGeneration(this, generation) ||
         !isCurrentSftpEntryRemoteTask(this, task)) return
-      recordPerformanceDuration(
-        'sftp_cached_paint_ms',
-        (globalThis.performance?.now?.() ?? Date.now()) - startedAt,
-        { outcome: 'completed' }
-      )
+      let acceptance
+      try {
+        acceptance = recordPerformanceDuration(
+          'sftp_cached_paint_ms',
+          (globalThis.performance?.now?.() ?? Date.now()) - startedAt,
+          { outcome: 'completed' }
+        )
+      } catch (error) {
+        acceptance = Promise.reject(error)
+      }
+      Promise.allSettled([
+        trackSftpEntryMetric(this, acceptance)
+      ])
     })
   }
 
@@ -3539,10 +3579,13 @@ export default class Sftp extends Component {
         ]).slice(0, maxSftpHistory)
       }
       assertCurrentGeneration()
+      const renderCommit = beginSftpEntryRenderCommit(this)
+      let remoteStatePrepared = false
       this.setState(prevState => {
         if (!generation.accepting ||
           !isCurrentRemoteFileGeneration(this, generation) ||
           !isCurrentSftpEntryRemoteTask(this, task)) return null
+        remoteStatePrepared = true
         const nextRemote = preserveSftpDraftItems(prevState.remote, remote)
         const nextUpdate = nextRemote === remote
           ? update
@@ -3562,28 +3605,66 @@ export default class Sftp extends Component {
             }
           : nextUpdate
       }, () => {
-        if (!generation.accepting ||
-          !isCurrentRemoteFileGeneration(this, generation) ||
-          !isCurrentSftpEntryRemoteTask(this, task)) return
-        const renderedAt =
-          globalThis.performance?.now?.() ?? Date.now()
-        recordPerformanceDuration(
-          'sftp_refresh_ms',
-          renderedAt - refreshStartedAt,
-          { outcome: cachedRemote ? 'cache-refreshed' : 'completed' }
-        )
-        if (!this.firstSftpReadyRecorded) {
-          this.firstSftpReadyRecorded = true
-          recordPerformanceDuration(
-            'first_sftp_ready_ms',
-            renderedAt - this.sftpReadyStartedAt,
-            { outcome: 'completed' }
-          )
-        }
-        this.props.editTab(tab.id, {
-          sftpCreated: true
+        Promise.resolve().then(async () => {
+          if (!remoteStatePrepared ||
+            !generation.accepting ||
+            !isCurrentRemoteFileGeneration(this, generation) ||
+            !isCurrentSftpEntryRemoteTask(this, task)) {
+            renderCommit.settle(false)
+            return
+          }
+          const renderedAt =
+            globalThis.performance?.now?.() ?? Date.now()
+          const acceptMetric = (name, duration, outcome) => {
+            let acceptance
+            try {
+              acceptance = recordPerformanceDuration(
+                name,
+                duration,
+                { outcome }
+              )
+            } catch (error) {
+              acceptance = Promise.reject(error)
+            }
+            return trackSftpEntryMetric(this, acceptance)
+          }
+          const metricAcceptances = [acceptMetric(
+            'sftp_refresh_ms',
+            renderedAt - refreshStartedAt,
+            cachedRemote ? 'cache-refreshed' : 'completed'
+          )]
+          if (!this.firstSftpReadyRecorded) {
+            this.firstSftpReadyRecorded = true
+            metricAcceptances.push(acceptMetric(
+              'first_sftp_ready_ms',
+              renderedAt - this.sftpReadyStartedAt,
+              'completed'
+            ))
+          }
+          try {
+            this.props.editTab(tab.id, {
+              sftpCreated: true
+            })
+          } catch (error) {
+            metricAcceptances.push(trackSftpEntryMetric(
+              this,
+              Promise.reject(error)
+            ))
+          }
+          await Promise.allSettled(metricAcceptances)
+          renderCommit.settle({
+            committed: true,
+            visibleRemoteCommitted: true,
+            firstReadyCommitted: this.firstSftpReadyRecorded
+          })
         })
       })
+      const committed = await renderCommit.promise
+      if (!committed) {
+        assertCurrentGeneration()
+        if (!isCurrentSftpEntryRemoteTask(this, task)) return
+        throw remoteFileOperationStale()
+      }
     } catch (error) {
       if (!generation.accepting ||
         !isCurrentRemoteFileGeneration(this, generation) ||

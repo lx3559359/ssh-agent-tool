@@ -298,6 +298,100 @@ test('background SFTP observer absorbs expected aborts and reports other failure
   assert.deepEqual(reports, [failure])
 })
 
+test('explicit SFTP initialization is reserved synchronously and shared', async () => {
+  const { startSftpEntryExplicitInitialization } = await loadModule()
+  const gate = deferred()
+  const calls = []
+  const entry = {}
+
+  const first = startSftpEntryExplicitInitialization(entry, async () => {
+    calls.push('first')
+    await gate.promise
+    return 'ready'
+  })
+  const second = startSftpEntryExplicitInitialization(entry, async () => {
+    calls.push('duplicate')
+    return 'duplicate'
+  })
+
+  assert.equal(first, second)
+  assert.equal(entry.sftpExplicitInitialization, first)
+  assert.deepEqual(calls, ['first'])
+  gate.resolve()
+  assert.equal(await first, 'ready')
+  assert.equal(entry.sftpExplicitInitialization, null)
+
+  assert.equal(await startSftpEntryExplicitInitialization(
+    entry,
+    async () => {
+      calls.push('warm')
+      return 'warm-ready'
+    }
+  ), 'warm-ready')
+  assert.deepEqual(calls, ['first', 'warm'])
+})
+
+test('failed explicit SFTP initialization clears the reservation for retry', async () => {
+  const { startSftpEntryExplicitInitialization } = await loadModule()
+  const failure = new Error('first open failed')
+  const reports = []
+  const calls = []
+  const entry = {}
+
+  assert.equal(await startSftpEntryExplicitInitialization(
+    entry,
+    async () => {
+      calls.push('failed')
+      throw failure
+    },
+    { reportError: error => reports.push(error) }
+  ), undefined)
+  assert.equal(entry.sftpExplicitInitialization, null)
+  assert.deepEqual(reports, [failure])
+
+  assert.equal(await startSftpEntryExplicitInitialization(
+    entry,
+    async () => {
+      calls.push('retry')
+      return 'ready'
+    },
+    { reportError: error => reports.push(error) }
+  ), 'ready')
+  assert.deepEqual(calls, ['failed', 'retry'])
+  assert.deepEqual(reports, [failure])
+})
+
+test('unmount settles every pending SFTP render commit', async () => {
+  const {
+    beginSftpEntryRenderCommit,
+    disposeSftpEntryReadiness,
+    getSftpEntryReadinessSnapshot
+  } = await loadModule()
+  const entry = {
+    state: {
+      remoteLoading: false,
+      remoteRefreshState: 'idle'
+    }
+  }
+  const first = beginSftpEntryRenderCommit(entry)
+  const second = beginSftpEntryRenderCommit(entry)
+
+  assert.equal(
+    getSftpEntryReadinessSnapshot(entry).renderCommitCount,
+    2
+  )
+  entry.remoteFileUnmounted = true
+  disposeSftpEntryReadiness(entry)
+
+  assert.deepEqual(await Promise.all([first.promise, second.promise]), [
+    false,
+    false
+  ])
+  const snapshot = getSftpEntryReadinessSnapshot(entry)
+  assert.equal(snapshot.renderCommitCount, 0)
+  assert.equal(snapshot.fullySettled, false)
+})
+
 test('remote reconnect destroys the stale SFTP transport before recreating it', async () => {
   const { reconnectSftpEntryRemote } = await loadModule()
   const calls = []
@@ -508,6 +602,142 @@ test('binding a new SSH generation destroys the old SFTP transport first', async
     ['init', null, 'generation-new'],
     'local'
   ])
+})
+
+test('explicit open racing session bind shares one initialization on the bound generation', async () => {
+  const {
+    bindSftpEntryRemoteSession,
+    startSftpEntryExplicitInitialization
+  } = await loadModule()
+  const oldDestroyed = deferred()
+  const calls = []
+  const entry = {
+    terminalId: 'tab-old',
+    port: 41001,
+    sshSessionGeneration: 'generation-old',
+    sftp: {
+      async destroy () {
+        calls.push('destroy-old')
+        await oldDestroyed.promise
+      }
+    },
+    shouldRenderRemote: () => true,
+    shouldInitializeRemoteOnBind: () => true,
+    initRemoteAll: options => {
+      calls.push(['init', entry.sshSessionGeneration, options])
+      return 'ready'
+    },
+    initLocalAll: () => calls.push(['local', entry.sshSessionGeneration])
+  }
+  const binding = bindSftpEntryRemoteSession(entry, {
+    terminalId: 'tab-new',
+    port: 41002,
+    sshSessionGeneration: 'generation-new',
+    sshTerminalPid: '1002'
+  })
+  const explicit = startSftpEntryExplicitInitialization(
+    entry,
+    () => entry.initRemoteAll({ explicitOpen: true })
+  )
+
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.deepEqual(calls, ['destroy-old'])
+  oldDestroyed.resolve()
+  assert.equal(await explicit, 'ready')
+  assert.equal(await binding, 'ready')
+  assert.deepEqual(calls, [
+    'destroy-old',
+    ['init', 'generation-new', { explicitOpen: true }],
+    ['local', 'generation-new']
+  ])
+})
+
+test('session bind never reuses an explicit initialization from the old generation', async () => {
+  const {
+    bindSftpEntryRemoteSession,
+    startSftpEntryExplicitInitialization
+  } = await loadModule()
+  const oldInitialization = deferred()
+  const calls = []
+  const entry = {
+    terminalId: 'tab-old',
+    port: 41001,
+    sshSessionGeneration: 'generation-old',
+    sshTerminalPid: '1001',
+    shouldRenderRemote: () => true,
+    shouldInitializeRemoteOnBind: () => true,
+    initRemoteAll: options => {
+      const generation = entry.sshSessionGeneration
+      calls.push(['init', generation, options])
+      return generation === 'generation-old'
+        ? oldInitialization.promise
+        : 'ready-new'
+    },
+    initLocalAll: () => calls.push(['local', entry.sshSessionGeneration])
+  }
+  const explicit = startSftpEntryExplicitInitialization(
+    entry,
+    () => entry.initRemoteAll({ explicitOpen: true })
+  )
+  const binding = bindSftpEntryRemoteSession(entry, {
+    terminalId: 'tab-new',
+    port: 41002,
+    sshSessionGeneration: 'generation-new',
+    sshTerminalPid: '1002'
+  })
+
+  await Promise.resolve()
+  await Promise.resolve()
+  oldInitialization.resolve('ready-old')
+  assert.equal(await explicit, 'ready-old')
+  assert.equal(await binding, 'ready-new')
+  assert.deepEqual(calls, [
+    ['init', 'generation-old', { explicitOpen: true }],
+    ['init', 'generation-new', undefined],
+    ['local', 'generation-new']
+  ])
+})
+
+test('pending session binding keeps old committed readiness unsettled', async () => {
+  const {
+    beginSftpEntryRenderCommit,
+    bindSftpEntryRemoteSession,
+    getSftpEntryReadinessSnapshot
+  } = await loadModule()
+  const oldDestroyed = deferred()
+  const entry = {
+    state: { remoteLoading: false, remoteRefreshState: 'idle' },
+    sshSessionGeneration: 'generation-old',
+    sshTerminalPid: '1001',
+    sftp: { destroy: () => oldDestroyed.promise },
+    shouldRenderRemote: () => true,
+    shouldInitializeRemoteOnBind: () => false,
+    initLocalAll: () => {}
+  }
+  beginSftpEntryRenderCommit(entry).settle({
+    committed: true,
+    visibleRemoteCommitted: true,
+    firstReadyCommitted: true
+  })
+  assert.equal(getSftpEntryReadinessSnapshot(entry).fullySettled, true)
+
+  const binding = bindSftpEntryRemoteSession(entry, {
+    terminalId: 'tab-new',
+    port: 41002,
+    sshSessionGeneration: 'generation-new',
+    sshTerminalPid: '1002'
+  })
+  const pending = getSftpEntryReadinessSnapshot(entry)
+  assert.equal(pending.sessionBindingPending, true)
+  assert.equal(pending.fullySettled, false)
+
+  oldDestroyed.resolve()
+  await binding
+  assert.equal(
+    getSftpEntryReadinessSnapshot(entry).sessionBindingPending,
+    false
+  )
 })
 
 test('hidden SSH SFTP binding defers remote loading until explicit open', async () => {

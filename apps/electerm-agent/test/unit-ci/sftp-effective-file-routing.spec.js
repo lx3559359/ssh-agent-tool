@@ -225,7 +225,8 @@ function createEntryHarness ({
   replaceTimer,
   client,
   beginProbe,
-  reportBackgroundError = () => {}
+  reportBackgroundError = () => {},
+  recordPerformanceDuration = () => true
 } = {}) {
   const stateWrites = []
   const entry = {
@@ -342,6 +343,9 @@ function createEntryHarness ({
         isCurrentSftpEntryRemoteTask: lifecycle.isCurrentSftpEntryRemoteTask,
         isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration,
         initializeRemoteFileGeneration: lifecycle.initializeRemoteFileGeneration,
+        beginSftpEntryRenderCommit: lifecycle.beginSftpEntryRenderCommit,
+        trackSftpEntryMetric: lifecycle.trackSftpEntryMetric,
+        getSftpEntryReadinessSnapshot: lifecycle.getSftpEntryReadinessSnapshot,
         commitSftpEntryRemoteClient: lifecycle.commitSftpEntryRemoteClient,
         destroySftpEntryClientOnce: lifecycle.destroySftpEntryClientOnce,
         deepCopy: value => structuredClone(value),
@@ -351,7 +355,7 @@ function createEntryHarness ({
         uniq: values => [...new Set(values)],
         preserveSftpDraftItems: (_oldRemote, remote) => remote,
         reconcileSelectedFileIds: (_oldRemote, _remote, selected) => selected,
-        recordPerformanceDuration: () => true,
+        recordPerformanceDuration,
         remoteFileOperationUnmounted,
         remoteFileOperationStale,
         replaceSftpEntryTimer: replaceTimer || (() => 1),
@@ -781,6 +785,183 @@ test('ordinary remote refresh schedules no delayed compensation callback', async
   await entry.remoteList(false, '/root')
   assert.equal(timers.length, 0)
   assert.deepEqual(reports, [])
+})
+
+test('remote list waits for committed paint and metric acceptance', async () => {
+  const committed = deferred()
+  const metricsAccepted = deferred()
+  const metricNames = []
+  const acquire = async () => ({
+    backend: { list: async () => [] },
+    release: async () => true
+  })
+  const { entry, lifecycle } = await createEntryHarness({
+    acquire,
+    recordPerformanceDuration: name => {
+      metricNames.push(name)
+      return metricsAccepted.promise
+    }
+  })
+  entry.updateRemoteList = async remote => remote
+  entry.props.editTab = (_id, update) => Object.assign(entry.props.tab, update)
+  let commitCallback
+  entry.setState = (update, callback) => {
+    const next = typeof update === 'function' ? update(entry.state) : update
+    if (next) Object.assign(entry.state, next)
+    if (next?.inited) {
+      commitCallback = callback
+      committed.resolve()
+      return
+    }
+    callback?.()
+  }
+  let listingSettled = false
+  const listing = entry.remoteList(false, '/root').finally(() => {
+    listingSettled = true
+  })
+
+  await committed.promise
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(entry.state.inited, true)
+  assert.equal(listingSettled, false)
+  assert.deepEqual(
+    lifecycle.getSftpEntryReadinessSnapshot(entry),
+    {
+      explicitOpenPending: false,
+      sessionBindingPending: false,
+      backgroundTaskCount: 0,
+      renderCommitCount: 1,
+      metricTaskCount: 0,
+      directoryRequestCount: 0,
+      requestEpoch: 1,
+      visibleRemoteCommitted: false,
+      firstReadyCommitted: false,
+      fullySettled: false
+    }
+  )
+
+  commitCallback()
+  await Promise.resolve()
+  assert.deepEqual(metricNames, [
+    'sftp_refresh_ms',
+    'first_sftp_ready_ms'
+  ])
+  assert.equal(listingSettled, false)
+  const accepting = lifecycle.getSftpEntryReadinessSnapshot(entry)
+  assert.equal(accepting.renderCommitCount, 1)
+  assert.equal(accepting.metricTaskCount, 2)
+  assert.equal(accepting.fullySettled, false)
+
+  metricsAccepted.resolve(true)
+  await listing
+  assert.deepEqual(
+    lifecycle.getSftpEntryReadinessSnapshot(entry),
+    {
+      explicitOpenPending: false,
+      sessionBindingPending: false,
+      backgroundTaskCount: 0,
+      renderCommitCount: 0,
+      metricTaskCount: 0,
+      directoryRequestCount: 0,
+      requestEpoch: 1,
+      visibleRemoteCommitted: true,
+      firstReadyCommitted: true,
+      fullySettled: true
+    }
+  )
+})
+
+test('rejected performance acceptance never fails an SFTP list', async () => {
+  const metricFailure = new Error('metrics unavailable')
+  const acquire = async () => ({
+    backend: { list: async () => [] },
+    release: async () => true
+  })
+  const { entry } = await createEntryHarness({
+    acquire,
+    recordPerformanceDuration: () => Promise.reject(metricFailure)
+  })
+  entry.updateRemoteList = async remote => remote
+
+  await assert.doesNotReject(entry.remoteList(false, '/root'))
+  assert.equal(entry.state.inited, true)
+  assert.equal(entry.state.remoteLoading, false)
+  assert.equal(entry.firstSftpReadyRecorded, true)
+})
+
+test('remote owner initialization waits for its render commit', async () => {
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  const committed = deferred()
+  const entry = {
+    props: { pid: 42 },
+    state: {},
+    setState (update, callback) {
+      const next = typeof update === 'function'
+        ? update(this.state)
+        : update
+      if (next) Object.assign(this.state, next)
+      committed.resolve(callback)
+    }
+  }
+  installClassField(entry, 'remoteListOwner', {
+    beginSftpEntryRenderCommit: lifecycle.beginSftpEntryRenderCommit,
+    isCurrentSftpEntryRemoteTask: () => true,
+    owner: {
+      remoteListUsers: async () => ({ root: 0 }),
+      remoteListGroups: async () => ({ root: 0 })
+    }
+  })
+  let ownerSettled = false
+  const owners = entry.remoteListOwner({ requestEpoch: 1 }).finally(() => {
+    ownerSettled = true
+  })
+
+  const callback = await committed.promise
+  await Promise.resolve()
+  assert.equal(ownerSettled, false)
+  callback()
+  await owners
+  assert.deepEqual(entry.state.remoteUidTree, { root: 0 })
+  assert.deepEqual(entry.state.remoteGidTree, { root: 0 })
+})
+
+test('remote initialization tracks owner RPC before it starts', async () => {
+  const ownerStarted = deferred()
+  const ownerFinished = deferred()
+  const { entry, lifecycle } = await createEntryHarness({
+    acquire: async () => ({
+      backend: { list: async () => [] },
+      release: async () => true
+    })
+  })
+  entry.remoteList = async () => true
+  entry.remoteListOwner = async () => {
+    ownerStarted.resolve()
+    await ownerFinished.promise
+    return true
+  }
+  installClassField(entry, 'initRemoteAll', {
+    beginSftpEntryRemoteTask: lifecycle.beginSftpEntryRemoteTask,
+    isCurrentSftpEntryRemoteTask: lifecycle.isCurrentSftpEntryRemoteTask,
+    trackSftpEntryBackgroundTask: lifecycle.trackSftpEntryBackgroundTask
+  })
+
+  const initialization = entry.initRemoteAll()
+  await ownerStarted.promise
+  assert.equal(
+    lifecycle.getSftpEntryReadinessSnapshot(entry).backgroundTaskCount,
+    1
+  )
+
+  ownerFinished.resolve()
+  await initialization
+  assert.equal(
+    lifecycle.getSftpEntryReadinessSnapshot(entry).backgroundTaskCount,
+    0
+  )
 })
 
 test('initial SSH home lookup overlaps remote capability acquisition', async () => {
