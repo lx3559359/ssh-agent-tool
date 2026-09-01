@@ -88,6 +88,9 @@ export default class SessionWrapper extends Component {
 
   handleSshSftpSplitView = () => {
     const nv = !this.props.tab.sshSftpSplitView
+    if (nv) {
+      this.setState({ enableSftp: true })
+    }
     this.editTab({
       sshSftpSplitView: nv
     })
