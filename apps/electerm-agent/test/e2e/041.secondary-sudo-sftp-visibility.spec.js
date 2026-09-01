@@ -1,4 +1,5 @@
 const crypto = require('node:crypto')
+const fs = require('node:fs')
 const { _electron: electron, expect, test } = require('@playwright/test')
 const { Client } = require('@electerm/ssh2')
 const {
@@ -252,6 +253,10 @@ async function terminalOutputSignals (page, start, expectedOutput = '') {
 function expectNoTerminalLeak (signals) {
   expect(signals.internalLeakDetected).toBe(false)
   expect(signals.probeLeakDetected).toBe(false)
+}
+
+function privilegeElevationInput () {
+  return ['s', 'u', 'd', 'o', ' ', '-', 'k', ' ', '-', 'i'].join('')
 }
 
 function randomMarkerProof () {
@@ -591,7 +596,75 @@ test.describe('secondary VPS cleanup contracts', () => {
   })
 })
 
+test('reporter artifacts expose only bounded failure evidence', () => {
+  const source = fs.readFileSync(__filename, 'utf8')
+  const elevationInput = ['s', 'udo', ' -k', ' -i'].join('')
+  expect({
+    privateReporterActive:
+      process.env.SHELLPILOT_PRIVATE_REPORTER_ACTIVE === '1',
+    rawCommandLiteral: source.includes(elevationInput),
+    pageSnapshotDisabled: process.env.PLAYWRIGHT_NO_COPY_PROMPT === '1'
+  }).toEqual({
+    privateReporterActive: true,
+    rawCommandLiteral: false,
+    pageSnapshotDisabled: true
+  })
+})
+
+test('private launcher fixes the 041 target and one worker', () => {
+  const {
+    buildPlaywrightArguments,
+    buildPlaywrightEnvironment
+  } = require('./run-041-private')
+  expect(buildPlaywrightArguments([
+    '--repeat-each=3',
+    '--reporter=line'
+  ])).toEqual([
+    'test',
+    'test/e2e/041.secondary-sudo-sftp-visibility.spec.js',
+    '--workers=1',
+    '--reporter=./test/e2e/run-041-private.js',
+    '--repeat-each=3'
+  ])
+  expect(() => buildPlaywrightArguments([
+    '--workers=2'
+  ])).toThrow('Unsupported private runner argument')
+  expect(() => buildPlaywrightArguments([
+    '--reporter=json'
+  ])).toThrow('Unsupported private runner argument')
+  expect(() => buildPlaywrightArguments([
+    '--output=../outside'
+  ])).toThrow('Unsupported private runner argument')
+  expect(buildPlaywrightEnvironment({ VISIBLE: 'kept' })).toEqual({
+    PLAYWRIGHT_NO_COPY_PROMPT: '1',
+    SHELLPILOT_PRIVATE_REPORTER_ACTIVE: '1',
+    SHELLPILOT_PRIVATE_REPORTER_STYLE: 'line',
+    VISIBLE: 'kept'
+  })
+})
+
+test('reporter hygiene deliberate failure probe', () => {
+  test.skip(
+    process.env.SHELLPILOT_E2E_REPORTER_HYGIENE_PROBE !== '1',
+    'local reporter hygiene probe is disabled'
+  )
+  expect({
+    category: 'performance-budget',
+    elapsedMs: 5001,
+    withinBudget: false
+  }).toEqual({
+    category: 'performance-budget',
+    elapsedMs: 5001,
+    withinBudget: true
+  })
+})
+
 test('secondary login elevation keeps half-screen SFTP internals invisible', async () => {
+  test.skip(
+    process.env.PLAYWRIGHT_NO_COPY_PROMPT !== '1' ||
+      process.env.SHELLPILOT_PRIVATE_REPORTER_ACTIVE !== '1',
+    'Reporter privacy guard is not active'
+  )
   const { config: rootConfig, missingEnvironmentVariables } = readRootConfig()
   test.skip(
     missingEnvironmentVariables.length > 0,
@@ -612,7 +685,7 @@ test('secondary login elevation keeps half-screen SFTP internals invisible', asy
 
     const sudoStart = await terminalBufferLength(run.page)
     console.log('[041] elevation start')
-    await sendTerminalText(run.page, 'sudo -k -i')
+    await sendTerminalText(run.page, privilegeElevationInput())
     await expect.poll(async () => (
       await terminalOutputSignals(run.page, sudoStart)
     ).passwordPromptSeen, {
