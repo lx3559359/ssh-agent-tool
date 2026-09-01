@@ -99,6 +99,18 @@ export function destroySftpEntryClientOnce (entry, client) {
   return disposal
 }
 
+function containsUncertainTeardownError (error, visited = new Set()) {
+  if (!error || visited.has(error)) return false
+  if (error?.code === 'TEARDOWN_TIMEOUT' || error?.uncertain === true) {
+    return true
+  }
+  if (typeof error !== 'object' && typeof error !== 'function') return false
+  visited.add(error)
+  return Array.isArray(error.errors) && error.errors.some(
+    nestedError => containsUncertainTeardownError(nestedError, visited)
+  )
+}
+
 function nextEpoch (value) {
   return Number.isSafeInteger(value) && value >= 0 ? value + 1 : 1
 }
@@ -300,7 +312,7 @@ export function drainRemoteFileGeneration (entry, options = {}) {
       return destroyed
     })
   const drainTail = promise.then(() => undefined, error => {
-    if (error?.code === 'TEARDOWN_TIMEOUT' || error?.uncertain === true) {
+    if (containsUncertainTeardownError(error)) {
       throw error
     }
     return undefined

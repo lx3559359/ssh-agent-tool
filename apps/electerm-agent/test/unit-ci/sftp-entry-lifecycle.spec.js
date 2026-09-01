@@ -347,6 +347,58 @@ test('uncertain transport teardown blocks reconnect and new generation startup',
   assert.equal(entry.remoteFileGeneration.accepting, false)
 })
 
+test('nested uncertain release failures keep later reconnects blocked', async () => {
+  const { reconnectSftpEntryRemote } = await loadModule()
+  const failures = [
+    Object.assign(new Error('release teardown timed out'), {
+      code: 'TEARDOWN_TIMEOUT'
+    }),
+    Object.assign(new Error('release transport state is unknown'), {
+      uncertain: true
+    })
+  ]
+
+  for (const failure of failures) {
+    const nestedFailure = new AggregateError([
+      new AggregateError([failure], 'nested capability cleanup failed')
+    ], 'capability cleanup failed')
+    const calls = []
+    const entry = {
+      sftp: {
+        async destroy () {
+          calls.push('destroy')
+        }
+      },
+      remoteFileOperations: new Set([{
+        async release () {
+          calls.push('release')
+          throw nestedFailure
+        }
+      }]),
+      remoteFileOperationSettlements: new Set(),
+      remoteFileOperationBackends: new Map(),
+      initRemoteAll: () => {
+        calls.push('init')
+        return 'ready'
+      }
+    }
+
+    let firstError
+    await assert.rejects(reconnectSftpEntryRemote(entry), error => {
+      firstError = error
+      assert.equal(error instanceof AggregateError, true)
+      assert.deepEqual(error.errors, [nestedFailure])
+      return true
+    })
+    await assert.rejects(
+      reconnectSftpEntryRemote(entry),
+      error => error === firstError
+    )
+    assert.deepEqual(calls, ['release', 'destroy'])
+    assert.equal(entry.remoteFileGeneration.accepting, false)
+  }
+})
+
 test('remote reconnect drains active root cleanup before destroy and init', async () => {
   const { reconnectSftpEntryRemote } = await loadModule()
   const releaseGate = deferred()
