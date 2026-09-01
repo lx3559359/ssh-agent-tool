@@ -347,10 +347,11 @@ test('round 1 - terminal and operations recover without internal echo', async ()
     const system = await page.evaluate(async () => {
       const task = await window.__shellpilotResponsivenessSystemTask
       return {
-        error: task.error || '',
-        status: task.status,
-        outputs: task.steps.map(step => Boolean(step.output)),
-        exitCodes: task.steps.map(step => step.exitCode)
+        completed: task.status === 'completed',
+        hasError: Boolean(task.error),
+        stepCount: task.steps.length,
+        outputStepCount: task.steps.filter(step => Boolean(step.output)).length,
+        zeroExitCodeCount: task.steps.filter(step => step.exitCode === 0).length
       }
     })
     await expectTerminalMarker(
@@ -364,25 +365,26 @@ test('round 1 - terminal and operations recover without internal echo', async ()
         .runOperationsTool('runbook.health.baseline')
         .completion
       return {
-        error: task.error || '',
-        status: task.status,
-        outputs: task.steps.map(step => Boolean(step.output)),
-        exitCodes: task.steps.map(step => step.exitCode)
+        completed: task.status === 'completed',
+        hasError: Boolean(task.error),
+        stepCount: task.steps.length,
+        outputStepCount: task.steps.filter(step => Boolean(step.output)).length,
+        zeroExitCodeCount: task.steps.filter(step => step.exitCode === 0).length
       }
     })
     const tasks = [system, baseline]
-    const taskSummary = JSON.stringify(tasks)
+    const taskEvidence = JSON.stringify(tasks)
     expect(
-      tasks.every(task => task.status === 'completed'),
-      taskSummary
+      tasks.every(task => task.completed && !task.hasError),
+      taskEvidence
     ).toBe(true)
     expect(
-      tasks.every(task => task.outputs.every(Boolean)),
-      taskSummary
+      tasks.every(task => task.outputStepCount === task.stepCount),
+      taskEvidence
     ).toBe(true)
     expect(
-      tasks.every(task => task.exitCodes.every(code => code === 0)),
-      taskSummary
+      tasks.every(task => task.zeroExitCodeCount === task.stepCount),
+      taskEvidence
     )
       .toBe(true)
 
