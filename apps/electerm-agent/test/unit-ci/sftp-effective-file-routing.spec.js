@@ -226,6 +226,7 @@ function createEntryHarness ({
   client,
   beginProbe,
   reportBackgroundError = () => {},
+  reportOperationError = () => {},
   recordPerformanceDuration = () => true
 } = {}) {
   const stateWrites = []
@@ -290,7 +291,8 @@ function createEntryHarness ({
   installClassField(entry, 'withRemoteFileOperation', {
     abortRemoteFileOperation,
     initializeRemoteFileGeneration,
-    remoteFileOperationUnmounted
+    remoteFileOperationUnmounted,
+    window: { store: { onError: reportOperationError } }
   })
   installClassField(entry, 'sftpList', {
     abortRemoteFileOperation,
@@ -872,6 +874,107 @@ test('remote list waits for committed paint and metric acceptance', async () => 
   )
 })
 
+test('authoritative SSH list paints before capability release while readiness stays pending', async () => {
+  const listStarted = deferred()
+  const listFinished = deferred()
+  const releaseStarted = deferred()
+  const releaseFinished = deferred()
+  const metricNames = []
+  const acquire = async () => ({
+    backend: {
+      async list () {
+        listStarted.resolve()
+        await listFinished.promise
+        return [{ name: 'authoritative', type: '-', size: 0 }]
+      }
+    },
+    async release () {
+      releaseStarted.resolve()
+      await releaseFinished.promise
+      return true
+    }
+  })
+  const { entry, lifecycle } = await createEntryHarness({
+    acquire,
+    recordPerformanceDuration: name => {
+      metricNames.push(name)
+      return true
+    }
+  })
+  entry.updateRemoteList = async remote => remote
+  let listingSettled = false
+  const listing = entry.remoteList(false, '/root', undefined, {
+    rethrow: true
+  }).finally(() => { listingSettled = true })
+
+  await listStarted.promise
+  assert.equal(entry.state.inited, undefined)
+  assert.deepEqual(metricNames, [])
+  listFinished.resolve(true)
+  await releaseStarted.promise
+  assert.equal(entry.state.inited, true)
+  assert.deepEqual(entry.state.remote.map(file => file.name), [
+    'authoritative'
+  ])
+  assert.deepEqual(metricNames, [
+    'sftp_refresh_ms',
+    'first_sftp_ready_ms'
+  ])
+  assert.equal(listingSettled, false)
+  assert.equal(
+    lifecycle.getSftpEntryReadinessSnapshot(entry).fullySettled,
+    false
+  )
+
+  releaseFinished.resolve(true)
+  await listing
+  assert.equal(
+    lifecycle.getSftpEntryReadinessSnapshot(entry).fullySettled,
+    true
+  )
+})
+
+test('post-paint release failure stays observable and blocks settled readiness', async () => {
+  const releaseError = new Error('visible list release failed')
+  const reports = []
+  const acquire = async ({ onLeaseState }) => {
+    onLeaseState({
+      state: 'acquired',
+      operationId: 'visible-list'
+    })
+    return {
+      backend: { list: async () => [] },
+      async release () {
+        onLeaseState({
+          state: 'release-failed',
+          operationId: 'visible-list',
+          error: releaseError
+        })
+        throw releaseError
+      }
+    }
+  }
+  const harness = await createEntryHarness({
+    acquire,
+    reportOperationError: error => reports.push(error)
+  })
+  const { entry } = harness
+  entry.updateRemoteList = async remote => remote
+
+  await assert.doesNotReject(entry.remoteList(false, '/root', undefined, {
+    rethrow: true
+  }))
+  assert.equal(entry.state.inited, true)
+  assert.deepEqual(reports, [releaseError])
+  assert.equal(entry.state.remoteRefreshError, '')
+  assert.equal(entry.state.remoteFileStatus, 'uncertain')
+  assert.deepEqual([...entry.uncertainRemoteFileLeases], ['visible-list'])
+  assert.equal(
+    harness.lifecycle.getSftpEntryReadinessSnapshot(entry).fullySettled,
+    false
+  )
+})
+
 test('rejected performance acceptance never fails an SFTP list', async () => {
   const metricFailure = new Error('metrics unavailable')
   const acquire = async () => ({
@@ -924,6 +1027,58 @@ test('remote owner initialization waits for its render commit', async () => {
   assert.equal(ownerSettled, false)
   callback()
   await owners
+  assert.deepEqual(entry.state.remoteUidTree, { root: 0 })
+  assert.deepEqual(entry.state.remoteGidTree, { root: 0 })
+})
+
+test('remote owner user and group RPCs overlap before either settles', async () => {
+  const usersFinished = deferred()
+  const groupsFinished = deferred()
+  const calls = []
+  const entry = {
+    props: { pid: 42 },
+    state: {},
+    setState (update, callback) {
+      const next = typeof update === 'function'
+        ? update(this.state)
+        : update
+      if (next) Object.assign(this.state, next)
+      callback?.()
+    }
+  }
+  installClassField(entry, 'remoteListOwner', {
+    beginSftpEntryRenderCommit: () => ({
+      promise: Promise.resolve(true),
+      settle: () => true
+    }),
+    isCurrentSftpEntryRemoteTask: () => true,
+    owner: {
+      remoteListUsers: async () => {
+        calls.push('users')
+        await usersFinished.promise
+        return { root: 0 }
+      },
+      remoteListGroups: async () => {
+        calls.push('groups')
+        await groupsFinished.promise
+        return { root: 0 }
+      }
+    }
+  })
+  const owners = entry.remoteListOwner({ requestEpoch: 1 })
+  await Promise.resolve()
+  await Promise.resolve()
+  let overlapError
+  try {
+    assert.deepEqual(calls, ['users', 'groups'])
+  } catch (error) {
+    overlapError = error
+  } finally {
+    usersFinished.resolve()
+    groupsFinished.resolve()
+  }
+  await owners
+  if (overlapError) throw overlapError
   assert.deepEqual(entry.state.remoteUidTree, { root: 0 })
   assert.deepEqual(entry.state.remoteGidTree, { root: 0 })
 })

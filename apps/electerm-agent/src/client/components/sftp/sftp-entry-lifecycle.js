@@ -159,6 +159,16 @@ export function getSftpEntryReadinessSnapshot (entry) {
   const readiness = initializeSftpEntryReadiness(entry)
   const refreshState = String(entry.state?.remoteRefreshState || '')
   const directoryRequestCount = safeDirectoryRequestCount(entry)
+  const remoteFileSettlementCount = Math.max(0, Number(
+    entry.remoteFileGeneration?.settlements?.size ||
+    entry.remoteFileOperationSettlements?.size || 0
+  ))
+  const activeRemoteFileLeaseCount = Math.max(0, Number(
+    entry.activeRemoteFileLeases?.size || 0
+  ))
+  const uncertainRemoteFileLeaseCount = Math.max(0, Number(
+    entry.uncertainRemoteFileLeases?.size || 0
+  ))
   const snapshot = {
     explicitOpenPending: Boolean(entry.sftpExplicitInitialization),
     sessionBindingPending: Boolean(entry.sftpSessionBinding),
@@ -183,6 +193,9 @@ export function getSftpEntryReadinessSnapshot (entry) {
       snapshot.backgroundTaskCount === 0 &&
       snapshot.renderCommitCount === 0 &&
       snapshot.metricTaskCount === 0 &&
+      remoteFileSettlementCount === 0 &&
+      activeRemoteFileLeaseCount === 0 &&
+      uncertainRemoteFileLeaseCount === 0 &&
       snapshot.directoryRequestCount === 0
   })
 }

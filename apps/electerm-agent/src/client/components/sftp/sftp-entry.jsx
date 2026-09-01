@@ -2598,13 +2598,10 @@ export default class Sftp extends Component {
   }
 
   remoteListOwner = async (task) => {
-    const remoteUidTree = await owner.remoteListUsers(
-      this.props.pid
-    )
-    if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
-    const remoteGidTree = await owner.remoteListGroups(
-      this.props.pid
-    )
+    const [remoteUidTree, remoteGidTree] = await Promise.all([
+      owner.remoteListUsers(this.props.pid),
+      owner.remoteListGroups(this.props.pid)
+    ])
     if (task && !isCurrentSftpEntryRemoteTask(this, task)) return
     const commit = beginSftpEntryRenderCommit(this)
     let prepared = false
@@ -3497,6 +3494,123 @@ export default class Sftp extends Component {
         }
       }
 
+      const commitRemoteResult = async remote => {
+        assertCurrentGeneration()
+        if (!isCurrentSftpEntryRemoteTask(this, task)) return false
+        if (cacheKey) {
+          this.remoteDirectoryCache.set(cacheKey, remote)
+        }
+        const update = {
+          remote,
+          remoteFileTree: this.buildTree(remote, typeMap.remote),
+          inited: true,
+          remoteLoading: false,
+          remoteRefreshState: 'idle',
+          remoteRefreshError: ''
+        }
+        if (!noPathInit) {
+          update.remotePath = remotePath
+          update.remotePathTemp = remotePath
+        }
+        if (!returnList) {
+          update.onEditFile = false
+        }
+        if (oldPath) {
+          update.remotePathHistory = uniq([
+            oldPath,
+            ...this.state.remotePathHistory
+          ]).slice(0, maxSftpHistory)
+        }
+        assertCurrentGeneration()
+        const renderCommit = beginSftpEntryRenderCommit(this)
+        let remoteStatePrepared = false
+        this.setState(prevState => {
+          if (!generation.accepting ||
+            !isCurrentRemoteFileGeneration(this, generation) ||
+            !isCurrentSftpEntryRemoteTask(this, task)) return null
+          remoteStatePrepared = true
+          const nextRemote = preserveSftpDraftItems(prevState.remote, remote)
+          const nextUpdate = nextRemote === remote
+            ? update
+            : {
+                ...update,
+                remote: nextRemote,
+                remoteFileTree: this.buildTree(nextRemote, typeMap.remote)
+              }
+          return prevState.selectedType === typeMap.remote
+            ? {
+                ...nextUpdate,
+                selectedFiles: reconcileSelectedFileIds(
+                  prevState.remote,
+                  nextRemote,
+                  prevState.selectedFiles
+                )
+              }
+            : nextUpdate
+        }, () => {
+          Promise.resolve().then(async () => {
+            if (!remoteStatePrepared ||
+              !generation.accepting ||
+              !isCurrentRemoteFileGeneration(this, generation) ||
+              !isCurrentSftpEntryRemoteTask(this, task)) {
+              renderCommit.settle(false)
+              return
+            }
+            const renderedAt =
+              globalThis.performance?.now?.() ?? Date.now()
+            const acceptMetric = (name, duration, outcome) => {
+              let acceptance
+              try {
+                acceptance = recordPerformanceDuration(
+                  name,
+                  duration,
+                  { outcome }
+                )
+              } catch (error) {
+                acceptance = Promise.reject(error)
+              }
+              return trackSftpEntryMetric(this, acceptance)
+            }
+            const metricAcceptances = [acceptMetric(
+              'sftp_refresh_ms',
+              renderedAt - refreshStartedAt,
+              cachedRemote ? 'cache-refreshed' : 'completed'
+            )]
+            if (!this.firstSftpReadyRecorded) {
+              this.firstSftpReadyRecorded = true
+              metricAcceptances.push(acceptMetric(
+                'first_sftp_ready_ms',
+                renderedAt - this.sftpReadyStartedAt,
+                'completed'
+              ))
+            }
+            try {
+              this.props.editTab(tab.id, {
+                sftpCreated: true
+              })
+            } catch (error) {
+              metricAcceptances.push(trackSftpEntryMetric(
+                this,
+                Promise.reject(error)
+              ))
+            }
+            await Promise.allSettled(metricAcceptances)
+            renderCommit.settle({
+              committed: true,
+              visibleRemoteCommitted: true,
+              firstReadyCommitted: this.firstSftpReadyRecorded
+            })
+          })
+        })
+        const committed = await renderCommit.promise
+        if (!committed) {
+          assertCurrentGeneration()
+          if (!isCurrentSftpEntryRemoteTask(this, task)) return false
+          throw remoteFileOperationStale()
+        }
+        return true
+      }
+
       let remote
       if (this.type === 'ftp') {
         assertCurrentGeneration()
@@ -3522,7 +3636,7 @@ export default class Sftp extends Component {
           signal: options.signal,
           preparedProbe,
           lifecycleTask: task
-        }, async (backend, capability) => {
+        }, async (backend, capability, mutation) => {
           if (remotePathPromise) {
             remotePath = await remotePathPromise
             assertCurrentGeneration()
@@ -3533,13 +3647,18 @@ export default class Sftp extends Component {
             signal: options.signal
           })
           if (!isCurrentSftpEntryRemoteTask(this, task)) return
-          return await this.updateRemoteList(
+          const updated = await this.updateRemoteList(
             listed,
             remotePath,
             backend,
             task,
             options.signal
           )
+          if (!returnList || options.commitList) {
+            if (!await commitRemoteResult(updated)) return
+            mutation.commit()
+          }
+          return updated
         })
         assertCurrentGeneration()
         if (!isCurrentSftpEntryRemoteTask(this, task)) return
@@ -3550,121 +3669,10 @@ export default class Sftp extends Component {
           generation
         )) return
       }
-      assertCurrentGeneration()
-      if (!isCurrentSftpEntryRemoteTask(this, task)) return
-      if (cacheKey) {
-        this.remoteDirectoryCache.set(cacheKey, remote)
-      }
-      const update = {
-        remote,
-        remoteFileTree: this.buildTree(remote, typeMap.remote),
-        inited: true,
-        remoteLoading: false,
-        remoteRefreshState: 'idle',
-        remoteRefreshError: ''
-      }
-      if (!noPathInit) {
-        update.remotePath = remotePath
-        update.remotePathTemp = remotePath
-      }
       if (returnList && !options.commitList) {
         return remote
-      } else if (!returnList) {
-        update.onEditFile = false
       }
-      if (oldPath) {
-        update.remotePathHistory = uniq([
-          oldPath,
-          ...this.state.remotePathHistory
-        ]).slice(0, maxSftpHistory)
-      }
-      assertCurrentGeneration()
-      const renderCommit = beginSftpEntryRenderCommit(this)
-      let remoteStatePrepared = false
-      this.setState(prevState => {
-        if (!generation.accepting ||
-          !isCurrentRemoteFileGeneration(this, generation) ||
-          !isCurrentSftpEntryRemoteTask(this, task)) return null
-        remoteStatePrepared = true
-        const nextRemote = preserveSftpDraftItems(prevState.remote, remote)
-        const nextUpdate = nextRemote === remote
-          ? update
-          : {
-              ...update,
-              remote: nextRemote,
-              remoteFileTree: this.buildTree(nextRemote, typeMap.remote)
-            }
-        return prevState.selectedType === typeMap.remote
-          ? {
-              ...nextUpdate,
-              selectedFiles: reconcileSelectedFileIds(
-                prevState.remote,
-                nextRemote,
-                prevState.selectedFiles
-              )
-            }
-          : nextUpdate
-      }, () => {
-        Promise.resolve().then(async () => {
-          if (!remoteStatePrepared ||
-            !generation.accepting ||
-            !isCurrentRemoteFileGeneration(this, generation) ||
-            !isCurrentSftpEntryRemoteTask(this, task)) {
-            renderCommit.settle(false)
-            return
-          }
-          const renderedAt =
-            globalThis.performance?.now?.() ?? Date.now()
-          const acceptMetric = (name, duration, outcome) => {
-            let acceptance
-            try {
-              acceptance = recordPerformanceDuration(
-                name,
-                duration,
-                { outcome }
-              )
-            } catch (error) {
-              acceptance = Promise.reject(error)
-            }
-            return trackSftpEntryMetric(this, acceptance)
-          }
-          const metricAcceptances = [acceptMetric(
-            'sftp_refresh_ms',
-            renderedAt - refreshStartedAt,
-            cachedRemote ? 'cache-refreshed' : 'completed'
-          )]
-          if (!this.firstSftpReadyRecorded) {
-            this.firstSftpReadyRecorded = true
-            metricAcceptances.push(acceptMetric(
-              'first_sftp_ready_ms',
-              renderedAt - this.sftpReadyStartedAt,
-              'completed'
-            ))
-          }
-          try {
-            this.props.editTab(tab.id, {
-              sftpCreated: true
-            })
-          } catch (error) {
-            metricAcceptances.push(trackSftpEntryMetric(
-              this,
-              Promise.reject(error)
-            ))
-          }
-          await Promise.allSettled(metricAcceptances)
-          renderCommit.settle({
-            committed: true,
-            visibleRemoteCommitted: true,
-            firstReadyCommitted: this.firstSftpReadyRecorded
-          })
-        })
-      })
-      const committed = await renderCommit.promise
-      if (!committed) {
-        assertCurrentGeneration()
-        if (!isCurrentSftpEntryRemoteTask(this, task)) return
-        throw remoteFileOperationStale()
-      }
+      if (this.type === 'ftp') await commitRemoteResult(remote)
     } catch (error) {
       if (!generation.accepting ||
         !isCurrentRemoteFileGeneration(this, generation) ||
