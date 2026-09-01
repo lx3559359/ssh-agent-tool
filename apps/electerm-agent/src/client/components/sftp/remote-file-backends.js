@@ -531,6 +531,8 @@ export async function createPrivilegedFileBackend ({
 } = {}) {
   let closed = false
   let staging
+  let stagingPromise
+  let lateStagingReleaseError
   let releasePromise
   let rootIdentity
   let normalizedCapabilities
@@ -574,6 +576,38 @@ export async function createPrivilegedFileBackend ({
     return result
   }
 
+  async function ensureStaging () {
+    if (staging) return staging
+    if (closed) throw new Error('root 文件后端已经释放')
+    if (stagingPromise) return stagingPromise
+
+    const initialization = (async () => {
+      const created = await createPrivilegedStagingSession({
+        sftp,
+        execute: request => queueLeaseExecute({ protocol, request }),
+        ...(createToken ? { createToken } : {})
+      })
+      if (closed) {
+        const closeError = new Error('root 文件后端已经释放')
+        try {
+          await created.release()
+        } catch (error) {
+          lateStagingReleaseError ||= error
+          closeError.cleanupError = error
+        }
+        throw closeError
+      }
+      staging = created
+      return created
+    })()
+    stagingPromise = initialization
+    try {
+      return await initialization
+    } finally {
+      if (stagingPromise === initialization) stagingPromise = undefined
+    }
+  }
+
   try {
     if (!sftp) throw new Error('root 文件后端缺少 SFTP')
     if (typeof lease?.execute !== 'function' || !canReleaseLease) {
@@ -582,11 +616,6 @@ export async function createPrivilegedFileBackend ({
     rootIdentity = requireIdentity(identity)
     normalizedCapabilities = normalizeCapabilities(capabilities)
     protocol = createPrivilegedFileProtocol()
-    staging = await createPrivilegedStagingSession({
-      sftp,
-      execute: request => queueLeaseExecute({ protocol, request }),
-      ...(createToken ? { createToken } : {})
-    })
   } catch (error) {
     closed = true
     if (canReleaseLease) await releaseLeaseAfterFailure(error)
@@ -670,6 +699,8 @@ export async function createPrivilegedFileBackend ({
   }
 
   async function boundDigest (stream, operation, offset, maxBytes, signal) {
+    throwIfAborted(signal)
+    await ensureStaging()
     const scratch = staging.allocate('download')
     pendingDigestCleanups.add(scratch.objectName)
     try {
@@ -706,6 +737,8 @@ export async function createPrivilegedFileBackend ({
   }
 
   async function readStreamChunk (stream, maxBytes, signal) {
+    throwIfAborted(signal)
+    await ensureStaging()
     const stage = staging.allocate('download')
     let hasProof = false
     let primaryError
@@ -1516,12 +1549,13 @@ export async function createPrivilegedFileBackend ({
   }
 
   async function copyFileFromManifest (entry, targetPath, parentBinding, signal) {
+    throwIfAborted(signal)
+    await ensureStaging()
     const stage = staging.allocate('download')
     let hasProof = false
     let targetCreated = false
     let operationError
     try {
-      throwIfAborted(signal)
       const exported = digestResult(await executeRequest('stage-export', {
         ...staging.rootBinding,
         objectName: stage.objectName,
@@ -2039,7 +2073,8 @@ export async function createPrivilegedFileBackend ({
     return wrapped
   }
 
-  function createOwnedTransferStage (direction) {
+  async function createOwnedTransferStage (direction) {
+    await ensureStaging()
     const stage = staging.allocate(direction)
     let proof
     let cleaned = false
@@ -2568,7 +2603,7 @@ export async function createPrivilegedFileBackend ({
     } = {}) {
       const targetPath = canonicalFilePath(remotePath, 'upload targetPath')
       throwIfAborted(signal)
-      const ownedStage = createOwnedTransferStage('upload')
+      const ownedStage = await createOwnedTransferStage('upload')
       let transferred = 0
       const proxy = createPrivilegedTransferProxy({
         onData: value => {
@@ -2818,7 +2853,7 @@ export async function createPrivilegedFileBackend ({
       if (source.type !== 'file' || source.size > copyLimits.maxTotalBytes) {
         throw new Error('root 文件后端 download source 必须为有界普通文件')
       }
-      const ownedStage = createOwnedTransferStage('download')
+      const ownedStage = await createOwnedTransferStage('download')
       try {
         const exported = ownedStage.remember(await executeRequest('stage-export', {
           ...staging.rootBinding,
@@ -2905,6 +2940,7 @@ export async function createPrivilegedFileBackend ({
       )
       const targetUid = 0
       const targetGid = 0
+      await ensureStaging()
       const stage = staging.allocate('upload')
       let operationError
       let cleanStage = true
@@ -3188,7 +3224,7 @@ export async function createPrivilegedFileBackend ({
     runtimeIdentity,
     sftp: facade,
     backend: facade,
-    staging,
+    get staging () { return staging },
     capabilities: normalizedCapabilities,
     release () {
       if (releasePromise) return releasePromise
@@ -3196,27 +3232,30 @@ export async function createPrivilegedFileBackend ({
       releasePromise = (async () => {
         let firstError
         await Promise.allSettled([...activePublicOperations])
+        firstError ||= lateStagingReleaseError
         await executeTail.catch(() => {})
-        for (const record of [...pendingImportCleanups.values()]) {
-          try {
-            await cleanupImportResidual(record)
-          } catch (error) {
-            firstError ||= error
+        if (staging) {
+          for (const record of [...pendingImportCleanups.values()]) {
+            try {
+              await cleanupImportResidual(record)
+            } catch (error) {
+              firstError ||= error
+            }
           }
-        }
-        for (const objectName of [...pendingDigestCleanups]) {
-          try {
-            staging.assertCurrent()
-            await executeRequest('digest-cleanup', {
-              ...staging.rootBinding,
-              objectName
-            })
-            pendingDigestCleanups.delete(objectName)
-          } catch (error) {
-            firstError ||= error
+          for (const objectName of [...pendingDigestCleanups]) {
+            try {
+              staging.assertCurrent()
+              await executeRequest('digest-cleanup', {
+                ...staging.rootBinding,
+                objectName
+              })
+              pendingDigestCleanups.delete(objectName)
+            } catch (error) {
+              firstError ||= error
+            }
           }
+          try { await staging.release() } catch (error) { firstError ||= error }
         }
-        try { await staging.release() } catch (error) { firstError ||= error }
         try {
           const released = await lease.release()
           if (released !== true) throw new Error('root 文件后端 PTY lease 释放失败')
