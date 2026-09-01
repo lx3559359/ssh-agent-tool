@@ -1417,9 +1417,14 @@ test('real VPS responsiveness gate is credential-safe, read-only and fixed to th
   assert.match(source, /remoteRoot !== '\/tmp'/)
   assert.match(
     source,
-    /script: "printf 'shellpilot-round-three-sleep-started\\\\n'; sleep 10"/
+    /'shellpilot-round-three-cancellation-target-started' \| " \+/
   )
-  assert.match(source, /__shellpilotResponsivenessSleepStarted/)
+  assert.match(source, /"tr '\[:lower:\]' '\[:upper:\]'; sleep 10"/)
+  assert.match(
+    source,
+    /const cancellationTargetMarker =\s*'SHELLPILOT-ROUND-THREE-CANCELLATION-TARGET-STARTED'/
+  )
+  assert.match(source, /__shellpilotResponsivenessTargetStarted/)
   assert.doesNotMatch(source, /await page\.waitForTimeout\(200\)/)
   assert.match(source, /acquireOperationsPtyTask/)
   assert.match(source, /onReconnect\(\)/)
