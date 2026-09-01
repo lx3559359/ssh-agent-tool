@@ -106,9 +106,15 @@ function containsUncertainTeardownError (error, visited = new Set()) {
   }
   if (typeof error !== 'object' && typeof error !== 'function') return false
   visited.add(error)
-  return Array.isArray(error.errors) && error.errors.some(
-    nestedError => containsUncertainTeardownError(nestedError, visited)
-  )
+  const nestedErrors = [
+    ...(Array.isArray(error.errors) ? error.errors : []),
+    ...(Array.isArray(error.cleanupErrors) ? error.cleanupErrors : []),
+    error.releaseError,
+    error.cause
+  ]
+  return nestedErrors.some(nestedError => (
+    containsUncertainTeardownError(nestedError, visited)
+  ))
 }
 
 function nextEpoch (value) {

@@ -399,6 +399,51 @@ test('nested uncertain release failures keep later reconnects blocked', async ()
   }
 })
 
+test('cleanup release and cause error shapes keep reconnects blocked', async () => {
+  const { reconnectSftpEntryRemote } = await loadModule()
+  const uncertainError = Object.assign(new Error('transport state unknown'), {
+    uncertain: true
+  })
+  const causedError = new Error('cleanup cause failed')
+  causedError.cause = uncertainError
+  const releaseError = new Error('prepared release failed')
+  releaseError.releaseError = causedError
+  const primaryError = new Error('native connection failed')
+  primaryError.cleanupErrors = [releaseError]
+  const calls = []
+  const entry = {
+    sftp: {
+      async destroy () { calls.push('destroy') }
+    },
+    remoteFileOperations: new Set([{
+      async release () {
+        calls.push('release')
+        throw primaryError
+      }
+    }]),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationBackends: new Map(),
+    initRemoteAll: () => {
+      calls.push('init')
+      return 'ready'
+    }
+  }
+
+  let firstError
+  await assert.rejects(reconnectSftpEntryRemote(entry), error => {
+    firstError = error
+    assert.equal(error instanceof AggregateError, true)
+    assert.deepEqual(error.errors, [primaryError])
+    return true
+  })
+  await assert.rejects(
+    reconnectSftpEntryRemote(entry),
+    error => error === firstError
+  )
+  assert.deepEqual(calls, ['release', 'destroy'])
+  assert.equal(entry.remoteFileGeneration.accepting, false)
+})
+
 test('remote reconnect drains active root cleanup before destroy and init', async () => {
   const { reconnectSftpEntryRemote } = await loadModule()
   const releaseGate = deferred()

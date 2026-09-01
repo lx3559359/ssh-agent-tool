@@ -1038,6 +1038,85 @@ test('explicit probe release settles before failed candidate destroy', async () 
   assert.deepEqual(calls, ['abort-start', 'abort-end', 'destroy'])
 })
 
+test('native connect failure keeps uncertain prepared abort sticky', async () => {
+  const connectError = new Error('native connect failed')
+  const abortError = Object.assign(new Error('prepared abort timed out'), {
+    code: 'TEARDOWN_TIMEOUT',
+    uncertain: true
+  })
+  let clientCount = 0
+  let probeCount = 0
+  let abortCount = 0
+  let destroyCount = 0
+  let abortPromise
+  const release = () => {
+    abortCount += 1
+    abortPromise ||= Promise.reject(abortError)
+    return abortPromise
+  }
+  const prepared = Object.freeze({
+    consume: async () => { throw new Error('unexpected consume') },
+    abort: release,
+    release
+  })
+  const candidate = {
+    sshSessionGeneration: 'generation-1',
+    sshTerminalPid: 4242,
+    async connect () { throw connectError },
+    async destroy () {
+      destroyCount += 1
+      return true
+    }
+  }
+  const { entry, lifecycle } = await createEntryHarness({
+    client: async () => {
+      clientCount += 1
+      return candidate
+    },
+    beginProbe: () => {
+      probeCount += 1
+      return prepared
+    },
+    acquire: async () => { throw new Error('unexpected acquire') }
+  })
+  entry.sftp = null
+  entry.initRemoteAll = () => entry.remoteList(
+    false,
+    '/root',
+    undefined,
+    { explicitOpen: true, rethrow: true }
+  )
+
+  await assert.rejects(
+    entry.remoteList(false, '/root', undefined, {
+      explicitOpen: true,
+      rethrow: true
+    }),
+    error => {
+      assert.equal(error, connectError)
+      assert.equal(error.cleanupErrors.length, 1)
+      assert.equal(error.cleanupErrors[0], abortError)
+      return true
+    }
+  )
+  let stickyError
+  await assert.rejects(lifecycle.reconnectSftpEntryRemote(entry), error => {
+    stickyError = error
+    assert.equal(error instanceof AggregateError, true)
+    assert.deepEqual(error.errors, [abortError])
+    return true
+  })
+  await assert.rejects(
+    lifecycle.reconnectSftpEntryRemote(entry),
+    error => error === stickyError
+  )
+  assert.equal(clientCount, 1)
+  assert.equal(probeCount, 1)
+  assert.equal(abortCount, 2)
+  assert.equal(destroyCount, 1)
+  assert.equal(entry.remoteFileGeneration.accepting, false)
+})
+
 test('generation drain and stale remoteList share one prepared release before destroy', async () => {
   const connectGate = deferred()
   const connectStarted = deferred()
@@ -1837,6 +1916,58 @@ test('unmount destroys the detached transport after rejected and synchronous rel
     error => error === observedError
   )
   assert.equal(destroyCount, 1)
+})
+
+test('React-style unmount observes and reports disposal rejection', async () => {
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  const rejectedRelease = deferred()
+  const releaseError = new Error('unmount release failed')
+  const reports = []
+  const unhandled = []
+  let destroyCount = 0
+  const entry = {
+    id: 'sftp-tab-1',
+    sftp: { destroy: async () => { destroyCount += 1 } },
+    remoteFileUnmounted: false,
+    remoteFileOperations: new Set([{
+      release: () => rejectedRelease.promise
+    }]),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationBackends: new Map(),
+    sftpSafetyProgressHandlers: { clear: () => {} },
+    sftpSafetyAdapter: { discardAllPreparedProofs: () => {} },
+    _sortCache: { clear: () => {} },
+    runSftpBackgroundTask: task => lifecycle.runSftpBackgroundTask(task, {
+      reportError: error => reports.push(error)
+    })
+  }
+  installClassMethod(entry, 'componentWillUnmount', {
+    refs: { remove: () => {} },
+    drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
+    disposeSftpEntryScheduling: () => {}
+  })
+  const onUnhandled = error => unhandled.push(error)
+  process.on('unhandledRejection', onUnhandled)
+
+  try {
+    const disposal = entry.componentWillUnmount()
+    rejectedRelease.reject(releaseError)
+    await new Promise(resolve => setImmediate(resolve))
+
+    assert.deepEqual(unhandled, [])
+    assert.equal(reports.length, 1)
+    await assert.rejects(disposal, error => {
+      assert.equal(error, reports[0])
+      assert.equal(error instanceof AggregateError, true)
+      assert.deepEqual(error.errors, [releaseError])
+      return true
+    })
+    assert.equal(destroyCount, 1)
+  } finally {
+    process.removeListener('unhandledRejection', onUnhandled)
+  }
 })
 
 test('overlapping reloads drain the old generation and only latest initializes', async () => {

@@ -395,6 +395,7 @@ export default class Sftp extends Component {
       if (primaryError) throw primaryError
       return result
     })()
+    this.runSftpBackgroundTask?.(() => this.remoteFileDisposalPromise)
     refs.remove(this.id)
     this.sftpSafetyProgressHandlers.clear()
     this.sftpSafetyAdapter.discardAllPreparedProofs()
@@ -3259,13 +3260,14 @@ export default class Sftp extends Component {
     const abortPreparedProbe = async primaryError => {
       const handle = preparedProbe
       if (!handle) return true
-      preparedProbe = null
-      generation.capabilities.delete(handle)
-      if (this.preparedRemoteFileCapabilityProbe?.handle === handle) {
-        this.preparedRemoteFileCapabilityProbe = null
-      }
       try {
-        return await handle.abort()
+        const result = await handle.abort()
+        preparedProbe = null
+        generation.capabilities.delete(handle)
+        if (this.preparedRemoteFileCapabilityProbe?.handle === handle) {
+          this.preparedRemoteFileCapabilityProbe = null
+        }
+        return result
       } catch (cleanupError) {
         if (primaryError && Object.isExtensible(primaryError)) {
           const cleanupErrors = Array.isArray(primaryError.cleanupErrors)
