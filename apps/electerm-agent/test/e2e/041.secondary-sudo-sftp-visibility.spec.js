@@ -334,6 +334,9 @@ async function sftpCleanupSnapshot (page) {
       busy: terminal?.operationsPtyTaskController?.isBusy?.() === true,
       refreshIdle,
       activeLeaseCount: Math.max(generationLeaseCount, legacyLeaseCount),
+      authoritativeActiveLeaseCount: Number(
+        entry?.activeRemoteFileLeases?.size || 0
+      ),
       uncertainLeaseCount: Number(entry?.uncertainRemoteFileLeases?.size || 0),
       outputSuppressed: Boolean(
         addon?.outputSuppressed ||
@@ -352,6 +355,7 @@ function isSftpCleanupSnapshot (snapshot) {
     snapshot.busy === false &&
     snapshot.refreshIdle === true &&
     snapshot.activeLeaseCount === 0 &&
+    snapshot.authoritativeActiveLeaseCount === 0 &&
     snapshot.uncertainLeaseCount === 0 &&
     snapshot.outputSuppressed === false &&
     snapshot.suppressionBufferCount === 0 &&
@@ -384,6 +388,7 @@ function expectSftpCleanupSnapshot (snapshot) {
   expect(snapshot.busy).toBe(false)
   expect(snapshot.refreshIdle).toBe(true)
   expect(snapshot.activeLeaseCount).toBe(0)
+  expect(snapshot.authoritativeActiveLeaseCount).toBe(0)
   expect(snapshot.uncertainLeaseCount).toBe(0)
   expect(snapshot.outputSuppressed).toBe(false)
   expect(snapshot.suppressionBufferCount).toBe(0)
