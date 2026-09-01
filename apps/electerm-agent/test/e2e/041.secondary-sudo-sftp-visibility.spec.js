@@ -85,9 +85,15 @@ function execRemote (client, command, input = '') {
   })
 }
 
-async function createTemporarySudoUser (rootConfig) {
-  const username = `spqa${crypto.randomBytes(3).toString('hex')}`
-  const password = `Sp!${crypto.randomBytes(18).toString('base64url')}9`
+function createTemporarySudoIdentity () {
+  return {
+    username: `spqa${crypto.randomBytes(3).toString('hex')}`,
+    password: `Sp!${crypto.randomBytes(18).toString('base64url')}9`
+  }
+}
+
+async function createTemporarySudoUser (rootConfig, identity) {
+  const { username, password } = identity
   const client = await connectSsh(rootConfig)
   try {
     console.log('[041] provisioning prerequisite check')
@@ -107,31 +113,96 @@ async function createTemporarySudoUser (rootConfig) {
     )
     console.log('[041] provisioning credential setup')
     await execRemote(client, '/usr/sbin/chpasswd', `${username}:${password}\n`)
-    return { username, password }
-  } catch (error) {
-    await execRemote(
-      client,
-      `/usr/sbin/userdel -r ${username} >/dev/null 2>&1 || true`
-    ).catch(() => {})
-    throw error
+    return identity
   } finally {
     client.end()
   }
 }
 
-async function removeTemporarySudoUser (rootConfig, username) {
+async function removeTemporarySudoUser (
+  rootConfig,
+  username,
+  dependencies = {}
+) {
   if (!/^spqa[a-f0-9]{6}$/.test(username)) {
     throw new Error('Temporary account cleanup identity is invalid')
   }
-  const client = await connectSsh(rootConfig)
+  const connect = dependencies.connect || connectSsh
+  const execute = dependencies.execute || execRemote
+  let client
   try {
-    await execRemote(
-      client,
-      `pkill -KILL -u ${username} >/dev/null 2>&1 || true; ` +
-      `/usr/sbin/userdel -r ${username} >/dev/null 2>&1 || true`
-    )
-  } finally {
+    client = await connect(rootConfig)
+  } catch {
+    throw new Error('Temporary account cleanup connection failed')
+  }
+
+  const failures = []
+  let absenceVerificationFailed = false
+  const runCleanupPhase = async (command, safeMessage, verifiesAbsence) => {
+    try {
+      await execute(client, command)
+    } catch {
+      failures.push(new Error(safeMessage))
+      absenceVerificationFailed ||= verifiesAbsence
+    }
+  }
+
+  await runCleanupPhase(
+    `pkill -KILL -u '${username}' >/dev/null 2>&1; ` +
+      '__spqa_status=$?; [ "$__spqa_status" -eq 0 ] || ' +
+      '[ "$__spqa_status" -eq 1 ]',
+    'Temporary account session cleanup failed',
+    false
+  )
+  await runCleanupPhase(
+    `getent passwd '${username}' >/dev/null 2>&1; ` +
+      '__spqa_status=$?; if [ "$__spqa_status" -eq 0 ]; then ' +
+      `/usr/sbin/userdel -r -- '${username}' >/dev/null 2>&1; ` +
+      'else [ "$__spqa_status" -eq 2 ]; fi',
+    'Temporary account deletion failed',
+    false
+  )
+  await runCleanupPhase(
+    `getent passwd '${username}' >/dev/null 2>&1; [ "$?" -eq 2 ]`,
+    'Temporary account absence verification failed',
+    true
+  )
+  try {
     client.end()
+  } catch {
+    failures.push(new Error('Temporary account maintenance close failed'))
+  }
+
+  if (failures.length) {
+    const message = absenceVerificationFailed && failures.length === 1
+      ? 'Temporary account absence could not be verified'
+      : 'Temporary account cleanup failed'
+    throw new AggregateError(failures, message)
+  }
+}
+
+async function cleanupSecondaryVpsRun ({
+  run,
+  rootConfig,
+  secondary,
+  cleanupApp = cleanupQualityApp,
+  removeUser = removeTemporarySudoUser
+}) {
+  const failures = []
+  if (run) {
+    try {
+      await cleanupApp(run.electronApp, run.profileRoot)
+    } catch {
+      failures.push(new Error('Secondary VPS app cleanup failed'))
+    }
+  }
+  try {
+    await removeUser(rootConfig, secondary.username)
+  } catch {
+    failures.push(new Error('Secondary VPS account cleanup failed'))
+  }
+  if (failures.length) {
+    throw new AggregateError(failures, 'Secondary VPS cleanup failed')
   }
 }
 
@@ -420,17 +491,118 @@ function expectSftpCleanupSnapshot (snapshot) {
   expect(snapshot.pendingInputCount).toBe(0)
 }
 
+test.describe('secondary VPS cleanup contracts', () => {
+  const rootConfig = Object.freeze({})
+  const secondary = Object.freeze({ username: 'spqaabcdef' })
+  const errorMessages = error => [
+    error?.message,
+    ...(Array.isArray(error?.errors)
+      ? error.errors.map(item => item?.message)
+      : [])
+  ].filter(Boolean).join(' ')
+
+  test('account cleanup still runs when app cleanup fails', async () => {
+    let accountCleanupCalls = 0
+    let failure
+    try {
+      await cleanupSecondaryVpsRun({
+        run: { electronApp: {}, profileRoot: 'redacted-profile' },
+        rootConfig,
+        secondary,
+        cleanupApp: async () => { throw new Error('sensitive app detail') },
+        removeUser: async () => {
+          accountCleanupCalls += 1
+          throw new Error('sensitive account detail')
+        }
+      })
+    } catch (error) {
+      failure = error
+    }
+    expect(accountCleanupCalls).toBe(1)
+    expect(failure).toBeInstanceOf(AggregateError)
+    expect(failure.message).toBe('Secondary VPS cleanup failed')
+    expect(failure.errors).toHaveLength(2)
+    expect(errorMessages(failure)).not.toContain('sensitive app detail')
+    expect(errorMessages(failure)).not.toContain('sensitive account detail')
+    expect(errorMessages(failure)).not.toContain('redacted-profile')
+  })
+
+  test('account deletion failure rejects with a sanitized error', async () => {
+    const commands = []
+    let failure
+    try {
+      await removeTemporarySudoUser(rootConfig, secondary.username, {
+        connect: async () => ({ end () {} }),
+        execute: async (_client, command) => {
+          commands.push(command)
+          if (commands.length === 2) {
+            throw new Error('sensitive deletion detail')
+          }
+        }
+      })
+    } catch (error) {
+      failure = error
+    }
+    expect(commands).toHaveLength(3)
+    expect(failure).toBeInstanceOf(AggregateError)
+    expect(failure.message).toBe('Temporary account cleanup failed')
+    expect(errorMessages(failure)).not.toContain('sensitive deletion detail')
+    expect(errorMessages(failure)).not.toContain(secondary.username)
+  })
+
+  test('account presence verification failure rejects', async () => {
+    const commands = []
+    let failure
+    try {
+      await removeTemporarySudoUser(rootConfig, secondary.username, {
+        connect: async () => ({ end () {} }),
+        execute: async (_client, command) => {
+          commands.push(command)
+          if (commands.length === 3) {
+            throw new Error('sensitive presence detail')
+          }
+        }
+      })
+    } catch (error) {
+      failure = error
+    }
+    expect(commands).toHaveLength(3)
+    expect(failure).toBeInstanceOf(AggregateError)
+    expect(failure.message).toBe(
+      'Temporary account absence could not be verified'
+    )
+    expect(errorMessages(failure)).not.toContain('sensitive presence detail')
+    expect(errorMessages(failure)).not.toContain(secondary.username)
+  })
+
+  test('account cleanup succeeds only after exact absence verification', async () => {
+    const commands = []
+    await removeTemporarySudoUser(rootConfig, secondary.username, {
+      connect: async () => ({ end () {} }),
+      execute: async (_client, command) => { commands.push(command) }
+    })
+    expect(commands).toHaveLength(3)
+    expect({
+      exactLookup: commands[2].includes(
+        `getent passwd '${secondary.username}'`
+      ),
+      acceptsOnlyMissing: commands[2].includes('[ "$?" -eq 2 ]')
+    }).toEqual({ exactLookup: true, acceptsOnlyMissing: true })
+  })
+})
+
 test('secondary login elevation keeps half-screen SFTP internals invisible', async () => {
   const { config: rootConfig, missingEnvironmentVariables } = readRootConfig()
   test.skip(
     missingEnvironmentVariables.length > 0,
     `缺少真实服务器测试环境变量：${missingEnvironmentVariables.join(', ')}`
   )
-  console.log('[041] provisioning start')
-  const secondary = await createTemporarySudoUser(rootConfig)
-  console.log('[041] provisioning complete')
+  const secondary = createTemporarySudoIdentity()
   let run
   try {
+    console.log('[041] provisioning start')
+    await createTemporarySudoUser(rootConfig, secondary)
+    console.log('[041] provisioning complete')
     console.log('[041] login app start')
     run = await launchQualityApp(electron)
     console.log('[041] login connection start')
@@ -531,10 +703,12 @@ test('secondary login elevation keeps half-screen SFTP internals invisible', asy
     })
     console.log('[041] login keyboard marker verified')
   } finally {
-    console.log('[041] cleanup app start')
-    if (run) await cleanupQualityApp(run.electronApp, run.profileRoot)
-    console.log('[041] cleanup identity start')
-    await removeTemporarySudoUser(rootConfig, secondary.username)
+    console.log('[041] cleanup start')
+    await cleanupSecondaryVpsRun({
+      run,
+      rootConfig,
+      secondary
+    })
     console.log('[041] cleanup complete')
   }
 })
