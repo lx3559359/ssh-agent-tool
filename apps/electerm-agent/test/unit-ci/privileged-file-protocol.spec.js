@@ -735,37 +735,42 @@ test('list binds one real directory and propagates producer status before glob e
     token: '81'.repeat(24),
     request: { operation: 'list', args: { path: '/root' } }
   })
-  const bind = command.indexOf('__sp_listReal=')
+  const bind = command.indexOf('r="$(realpath -- "$p")"')
   const producerCheck = command.indexOf('find . -mindepth 1')
   const firstGlob = command.indexOf('./.[!.]*')
 
   assert.equal(bind >= 0 && bind < producerCheck && producerCheck < firstGlob, true)
-  assert.match(command, /__sp_listReal=.*realpath -- "\$__sp_path"/)
-  assert.match(command, /\[ ! -L "\$__sp_path" \].*\[ -d "\$__sp_path" \]/)
-  assert.match(command, /cd -- "\$__sp_path"/)
-  assert.match(command, /__sp_requestedDevice=.*stat -c %d -- "\$__sp_path"/)
-  assert.match(command, /__sp_requestedInode=.*stat -c %i -- "\$__sp_path"/)
-  assert.match(command, /__sp_listPwd=.*pwd -P/)
-  assert.match(command, /__sp_listPwd="\$\(pwd -P && printf \.\)" \|\| return \$\?/)
-  assert.match(command, /__sp_pwdSentinel="\$\(printf "\\n\."\)" \|\| return \$\?/)
-  assert.match(command, /case "\$__sp_listPwd" in \*"\$__sp_pwdSentinel"\)/)
-  assert.match(command, /__sp_listPwd=\$\{__sp_listPwd%"\$__sp_pwdSentinel"\}/)
-  assert.match(command, /__sp_listCwdReal=.*realpath -- \./)
-  assert.match(command, /"\$__sp_listCwdReal" = "\$__sp_listPwd"/)
-  assert.match(command, /__sp_listDevice=.*stat -c %d -- \./)
-  assert.match(command, /__sp_listInode=.*stat -c %i -- \./)
-  assert.doesNotMatch(command, /find "\$__sp_path"/)
-  assert.match(command, /find \. -mindepth 1 -maxdepth 1 -print >\/dev\/null 2>&1 \|\| return/)
-  assert.match(command, /find \. -mindepth 1 -maxdepth 1 -printf x 2>\/dev\/null; __sp_findStatus=\$\?/)
-  assert.match(command, /head -c 20001/)
-  assert.match(command, /__sp_preflightEntries=.*__sp_preflight%\?/)
-  assert.match(command, /__sp_preflightCount=\$\{#__sp_preflightEntries\}/)
-  assert.match(command, /"\$__sp_preflightCount" -le 20000/)
-  assert.match(command, /"\$__sp_seq" -le "\$__sp_total".*"\$__sp_seq" -le 20000/)
-  assert.match(command, /__sp_metadataBytes=0/)
-  assert.match(command, /__sp_metadataBytes=.*#__sp_name64.*#__sp_stat64/)
-  assert.match(command, /"\$__sp_metadataBytes" -le 4194304/)
-  assert.match(command, /__sp_emit_entry[^;]+\|\| return/)
+  const required = [
+    'p="$__sp_path"',
+    'r="$(realpath -- "$p")" || return $?',
+    '[ "$r" = "$p" ] && [ ! -L "$p" ] && [ -d "$p" ]',
+    'd="$(stat -c %d -- "$p")" || return $?',
+    'i="$(stat -c %i -- "$p")" || return $?',
+    'cd -- "$p" || return $?',
+    'w="$(pwd -P && printf .)" || return $?',
+    'z="$(printf "\\n.")" || return $?',
+    'case "$w" in *"$z") w=$' + '{w%"$z"}',
+    'r="$(realpath -- .)" || return $?',
+    '[ "$(stat -c %d -- .)" = "$d" ] && [ "$(stat -c %i -- .)" = "$i" ]',
+    '[ "$(stat -c %d -- "$p")" = "$d" ] && [ "$(stat -c %i -- "$p")" = "$i" ]',
+    'find . -mindepth 1 -maxdepth 1 -print >/dev/null 2>&1 || return $?',
+    'find . -mindepth 1 -maxdepth 1 -printf x 2>/dev/null; y=$?',
+    '[ "$y" -eq 0 ] && printf 0 || printf 1',
+    'head -c 20001',
+    'case "$x" in *0) x=$' + '{x%?}',
+    'case "$x" in *[!x]*) return 1',
+    '[ "$' + '{#x}" -le 20000 ]',
+    't=0; for e in ./.[!.]* ./..?* ./*',
+    '[ "$j" -le "$t" ] && [ "$j" -le 20000 ]',
+    'b=0; for e in ./.[!.]* ./..?* ./*',
+    'b=$((b + $' + '{#n} + $' + '{#v} + 128))',
+    '[ "$b" -le 4194304 ]',
+    'E "$j" "$t" "$n" "$v" || return $?'
+  ]
+  for (const snippet of required) {
+    assert.equal(command.includes(snippet), true, snippet)
+  }
+  assert.doesNotMatch(command, /find "\$p"/)
 })
 
 test('list ignores inherited GLOBIGNORE and startup environment pollution', {
@@ -870,7 +875,7 @@ test('probe ignores exported functions and reports its clean shell boundary', {
   }
 })
 
-test('capabilities use functional probes before pathname wrappers', {
+test('capabilities use functional probes without pathname wrappers', {
   skip: !bashAvailable
 }, async () => {
   const {
@@ -883,16 +888,16 @@ test('capabilities use functional probes before pathname wrappers', {
   const command = buildPrivilegedFileCommand({ token, request })
 
   assert.doesNotMatch(command, /command -v/)
-  assert.match(command, /__sp_base64_cap=.*base64.*base64 -d/)
-  assert.match(command, /__sp_gnu_stat_cap=.*stat -c/)
-  assert.match(command, /__sp_sha256_cap=.*(?:sha256sum|shasum)/)
-  assert.match(command, /__sp_realpath_cap=.*realpath -- \/|realpath \/ /)
-  assert.match(command, /__sp_find_cap=.*find /)
-  assert.match(command, /__sp_head_cap=.*head /)
-  assert.match(command, /__sp_wc_cap=.*wc /)
-  assert.match(command, /__sp_proc_fd_cap=.*\/proc\/\$\$\/fd/)
-  assert.match(command, /__sp_noclobber_cap=.*set -C/)
-  assert.equal(command.indexOf('__sp_base64_cap=') < command.indexOf('realpath() {'), true)
+  assert.match(command, /B=0;.*base64.*base64 -d/)
+  assert.match(command, /S=0;.*stat -c/)
+  assert.match(command, /A=0;.*(?:sha256sum|shasum)/)
+  assert.match(command, /R=0;.*realpath -- \//)
+  assert.match(command, /F=0;.*find /)
+  assert.match(command, /J=0;.*head /)
+  assert.match(command, /W=0;.*wc /)
+  assert.match(command, /D=0;.*\/proc\/\$\$\/fd/)
+  assert.match(command, /O=0;.*set -C/)
+  assert.doesNotMatch(command, /realpath\(\) \{/)
 
   const execution = runBash(command)
   assert.equal(execution.status, 0, execution.stdout + execution.stderr)
@@ -905,6 +910,438 @@ test('capabilities use functional probes before pathname wrappers', {
   ]) {
     assert.equal(capabilities[name], true, name)
   }
+})
+
+test('interactive probe and list commands stay below the PTY latency budget', async () => {
+  const {
+    buildPrivilegedFileCommand,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const token = 'b4'.repeat(24)
+  const requests = [
+    createPrivilegedFileRequest({ operation: 'probe' }),
+    createPrivilegedFileRequest({
+      operation: 'list',
+      args: { path: '/root' }
+    }),
+    createPrivilegedFileRequest({
+      operation: 'list-bound',
+      args: sourceEntryBinding({ path: '/root/source' })
+    })
+  ]
+
+  for (const request of requests) {
+    const command = buildPrivilegedFileCommand({ token, request })
+    assert.ok(
+      Buffer.byteLength(command, 'utf8') <= 3840,
+      `${request.operation} command exceeded the interactive PTY budget`
+    )
+    assert.match(command, /command \/usr\/bin\/env -i/)
+    assert.match(command, /SHELLPILOT_TOKEN=/)
+    assert.doesNotMatch(command, /command -v/)
+  }
+})
+
+test('privileged execution plans bound every frame for deep Unicode paths', async () => {
+  const {
+    buildPrivilegedFileExecutionPlan,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const token = 'c5'.repeat(24)
+  const segment = '深'.repeat(80)
+  const segments = []
+  while (Buffer.byteLength(`/${[...segments, segment].join('/')}`, 'utf8') <=
+    4080) {
+    segments.push(segment)
+  }
+  const path = `/${segments.join('/')}`
+  assert.ok(Buffer.byteLength(path, 'utf8') >= 3800)
+  assert.ok(Buffer.byteLength(path, 'utf8') <= 4095)
+  assert.ok(segments.every(value => Buffer.byteLength(value, 'utf8') <= 255))
+
+  const requests = [
+    createPrivilegedFileRequest({
+      operation: 'list',
+      args: { path }
+    }),
+    createPrivilegedFileRequest({
+      operation: 'lstat',
+      args: { path }
+    }),
+    createPrivilegedFileRequest({
+      operation: 'readlink',
+      args: { path }
+    })
+  ]
+
+  for (const request of requests) {
+    const plan = buildPrivilegedFileExecutionPlan({ token, request })
+    assert.equal(plan.kind, 'managed-pty-command-plan')
+    assert.equal(plan.version, 1)
+    assert.equal(plan.token, token)
+    assert.match(plan.digest, /^[a-f0-9]{64}$/)
+    assert.equal(Object.isFrozen(plan), true)
+    assert.equal(Object.isFrozen(plan.frames), true)
+    assert.ok(plan.frames.length > 1)
+    assert.ok(plan.frames.length <= 128)
+    assert.deepEqual(
+      plan.frames.map(frame => frame.sequence),
+      plan.frames.map((frame, index) => index)
+    )
+    for (const frame of plan.frames) {
+      assert.equal(Object.isFrozen(frame), true)
+      assert.equal(typeof frame.command, 'string')
+      assert.ok(Buffer.byteLength(frame.command, 'utf8') <= 3840)
+      assert.equal(frame.command.includes(path), false)
+      assert.match(frame.acknowledgement, new RegExp(
+        `^\\u001b\\]698;SHELLPILOT_FILE_FRAME;${token};` +
+        `${frame.sequence};ok\\u0007$`
+      ))
+    }
+    assert.equal(plan.frames.at(-1).executesOperation, true)
+    assert.ok(Buffer.byteLength(plan.cleanup.command, 'utf8') <= 3840)
+    assert.equal(plan.cleanup.command.includes(path), false)
+  }
+})
+
+test('privileged execution plan authenticates ordered chunks before execution', {
+  skip: !bashAvailable
+}, async () => {
+  const {
+    buildPrivilegedFileExecutionPlan,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const token = 'c6'.repeat(24)
+  const request = createPrivilegedFileRequest({
+    operation: 'lstat',
+    args: { path: '/' }
+  })
+  const plan = buildPrivilegedFileExecutionPlan({ token, request })
+  assert.ok(plan.frames.length > 1)
+
+  const ordered = runBash(plan.frames.map(frame => frame.command).join('\n'))
+  assert.equal(ordered.status, 0, ordered.stderr)
+  for (const frame of plan.frames) {
+    assert.equal(
+      ordered.stdout.includes(frame.acknowledgement),
+      true,
+      `missing frame acknowledgement ${frame.sequence}`
+    )
+  }
+  assert.equal(ordered.stdout.includes(
+    `\u001b]698;SHELLPILOT_FILE;${token};start;`
+  ), true)
+  assert.equal(ordered.stdout.includes(fileMarker(token, 'end', '0')), true)
+
+  const chunkFrame = plan.frames.find(frame =>
+    frame.sequence > 0 && !frame.executesOperation)
+  assert.ok(chunkFrame)
+  const tamperedFrames = plan.frames.map(frame => frame === chunkFrame
+    ? frame.command.replace(
+      '__sp_pf_b="$' + '{__sp_pf_b}',
+      '__sp_pf_b="$' + '{__sp_pf_b}X'
+    )
+    : frame.command)
+  const tampered = runBash(tamperedFrames.join('\n'))
+  const finalFrame = plan.frames.at(-1)
+  assert.equal(tampered.stdout.includes(finalFrame.acknowledgement), false)
+  assert.equal(tampered.stdout.includes(fileMarker(
+    token,
+    'end',
+    '0'
+  )), false)
+  assert.equal(tampered.stdout.includes(
+    finalFrame.acknowledgement.replace(';ok\u0007', ';error\u0007')
+  ), true)
+
+  const firstChunk = plan.frames[1]
+  const secondChunk = plan.frames[2]
+  assert.ok(firstChunk && secondChunk)
+  const outOfOrder = runBash([
+    plan.frames[0].command,
+    secondChunk.command,
+    firstChunk.command,
+    finalFrame.command
+  ].join('\n'))
+  assert.equal(outOfOrder.stdout.includes(
+    secondChunk.acknowledgement.replace(';ok\u0007', ';error\u0007')
+  ), true)
+  assert.equal(outOfOrder.stdout.includes(finalFrame.acknowledgement), false)
+})
+
+test('privileged execution plan preserves the short single-frame fast path', async () => {
+  const {
+    buildPrivilegedFileCommand,
+    buildPrivilegedFileExecutionPlan
+  } = await importModule(protocolModule)
+  const token = 'c7'.repeat(24)
+  const request = { operation: 'probe', args: {} }
+  const command = buildPrivilegedFileCommand({ token, request })
+  const plan = buildPrivilegedFileExecutionPlan({ token, request })
+  assert.equal(plan.frames.length, 1)
+  assert.equal(plan.frames[0].command, command)
+  assert.equal(plan.frames[0].acknowledgement, null)
+  assert.equal(plan.cleanup, null)
+  assert.ok(Buffer.byteLength(command, 'utf8') <= 3840)
+})
+
+test('every privileged operation fits the bounded plan at PATH_MAX', async () => {
+  const {
+    buildPrivilegedFileExecutionPlan,
+    createPrivilegedFileRequest
+  } = await importModule(protocolModule)
+  const segment = '深'.repeat(80)
+  const parentSegments = []
+  while (Buffer.byteLength(
+    `/${[...parentSegments, segment].join('/')}`,
+    'utf8'
+  ) <= 3800) parentSegments.push(segment)
+  const parent = `/${parentSegments.join('/')}`
+  const sourcePath = `${parent}/${'源'.repeat(80)}`
+  const targetPath = `${parent}/${'目'.repeat(80)}`
+  const peerPath = `${parent}/${'伴'.repeat(80)}`
+  const tempPath = `${parent}/${'临'.repeat(80)}`
+  for (const path of [sourcePath, targetPath, peerPath, tempPath]) {
+    assert.ok(Buffer.byteLength(path, 'utf8') >= 3800)
+    assert.ok(Buffer.byteLength(path, 'utf8') <= 4095)
+  }
+  const root = {
+    rootPath: parent,
+    rootRealPath: parent,
+    rootDevice: '2049',
+    rootInode: '12345',
+    rootUid: '1000',
+    rootGid: '1000',
+    rootMode: '700',
+    objectName: 'operation-token'
+  }
+  const source = {
+    sourcePath,
+    sourceParentRealPath: parent,
+    sourceParentDevice: '3001',
+    sourceParentInode: '3002',
+    sourceDevice: '3003',
+    sourceInode: '3004'
+  }
+  const targetParent = {
+    targetPath,
+    targetParentRealPath: parent,
+    targetParentDevice: '4001',
+    targetParentInode: '4002',
+    targetParentUid: '0',
+    targetParentMode: '755'
+  }
+  const target = {
+    ...targetParent,
+    targetDevice: '4003',
+    targetInode: '4004',
+    targetType: 'file'
+  }
+  const peer = {
+    peerPath,
+    peerParentRealPath: parent,
+    peerParentDevice: '5001',
+    peerParentInode: '5002',
+    peerDevice: '5003',
+    peerInode: '5004',
+    peerType: 'file',
+    peerMode: '640',
+    peerUid: '21',
+    peerGid: '22',
+    peerSha256: 'e'.repeat(64),
+    peerSize: '12'
+  }
+  const operations = [
+    ['probe', {}],
+    ['list', { path: parent }],
+    ['list-bound', {
+      path: sourcePath,
+      sourceParentRealPath: parent,
+      sourceParentDevice: '3001',
+      sourceParentInode: '3002',
+      sourceDevice: '3003',
+      sourceInode: '3004'
+    }],
+    ['lstat', { path: sourcePath }],
+    ['lstat-bound', {
+      path: sourcePath,
+      sourceParentRealPath: parent,
+      sourceParentDevice: '3001',
+      sourceParentInode: '3002'
+    }],
+    ['stat', { path: sourcePath }],
+    ['readlink', { path: sourcePath }],
+    ['realpath', { path: sourcePath }],
+    ['mkdir-bound', {
+      ...targetParent,
+      targetMode: '700',
+      targetUid: '0',
+      targetGid: '0'
+    }],
+    ['metadata-bound', {
+      ...target,
+      targetMode: '750',
+      targetUid: '21',
+      targetGid: '22'
+    }],
+    ['touch-bound', target],
+    ['rename-bound', {
+      ...source,
+      sourceParentUid: '0',
+      sourceParentMode: '755',
+      sourceType: 'file',
+      ...targetParent
+    }],
+    ['remove-bound', {
+      targetPath,
+      targetParentRealPath: parent,
+      targetParentDevice: '4001',
+      targetParentInode: '4002',
+      targetDevice: '4003',
+      targetInode: '4004',
+      targetType: 'file',
+      targetMode: '640',
+      targetUid: '21',
+      targetGid: '22',
+      sha256: 'd'.repeat(64),
+      size: '12'
+    }],
+    ['remove-peer-bound', {
+      targetPath,
+      targetParentRealPath: parent,
+      targetParentDevice: '4001',
+      targetParentInode: '4002',
+      targetDevice: '4003',
+      targetInode: '4004',
+      targetType: 'file',
+      targetMode: '640',
+      targetUid: '21',
+      targetGid: '22',
+      sha256: 'd'.repeat(64),
+      size: '12',
+      ...peer
+    }],
+    ['stage-handshake', {
+      rootPath: parent,
+      challengeName: 'challenge-token',
+      responseName: 'response-token',
+      challenge: 'a'.repeat(64),
+      challengeSize: '48',
+      rootUid: '1000',
+      rootGid: '1000',
+      rootMode: '700'
+    }],
+    ['stage-export', {
+      ...root,
+      ...source,
+      expectedSize: '12',
+      maxSize: '12'
+    }],
+    ['stage-export-range', {
+      ...root,
+      ...source,
+      expectedSize: '12',
+      maxSize: '12',
+      offset: '0',
+      maxBytes: '12'
+    }],
+    ['stage-import', {
+      ...root,
+      ...targetParent,
+      sha256: 'b'.repeat(64),
+      size: '12',
+      targetMode: '600',
+      targetUid: '0',
+      targetGid: '0',
+      mustBeAbsent: '1',
+      targetDevice: '4003',
+      targetInode: '4004'
+    }],
+    ['stage-import-cleanup', {
+      ...root,
+      tempPath,
+      tempParentRealPath: parent,
+      tempParentDevice: '4001',
+      tempParentInode: '4002',
+      tempParentUid: '0',
+      tempParentMode: '755',
+      ...target,
+      sha256: 'b'.repeat(64),
+      size: '12',
+      maxSize: '12',
+      initialMode: '600',
+      initialUid: '0',
+      initialGid: '0',
+      targetMode: '600',
+      targetUid: '0',
+      targetGid: '0'
+    }],
+    ['stage-cleanup', {
+      ...root,
+      sha256: 'c'.repeat(64),
+      size: '12'
+    }],
+    ['digest-cleanup', root],
+    ['sha256', { path: sourcePath }],
+    ['sha256-bound', {
+      ...root,
+      path: sourcePath,
+      sourceParentRealPath: parent,
+      sourceParentDevice: '3001',
+      sourceParentInode: '3002',
+      sourceDevice: '3003',
+      sourceInode: '3004',
+      expectedSize: '12',
+      maxSize: '12'
+    }],
+    ['sha256-range-bound', {
+      ...root,
+      path: sourcePath,
+      sourceParentRealPath: parent,
+      sourceParentDevice: '3001',
+      sourceParentInode: '3002',
+      sourceDevice: '3003',
+      sourceInode: '3004',
+      expectedSize: '12',
+      maxSize: '12',
+      offset: '0',
+      maxBytes: '12'
+    }]
+  ]
+  assert.equal(operations.length, 24)
+  let largestPlanBytes = 0
+  for (const [operation, args] of operations) {
+    let request
+    try {
+      request = createPrivilegedFileRequest({ operation, args })
+    } catch (error) {
+      error.message = `${operation}: ${error.message}`
+      throw error
+    }
+    const plan = buildPrivilegedFileExecutionPlan({
+      token: 'c8'.repeat(24),
+      request
+    })
+    assert.ok(plan.frames.length <= 128, operation)
+    for (const frame of plan.frames) {
+      assert.ok(Buffer.byteLength(frame.command, 'utf8') <= 3840, operation)
+    }
+    largestPlanBytes = Math.max(largestPlanBytes, plan.commandBytes)
+  }
+  assert.ok(largestPlanBytes < 200 * 1024)
+})
+
+test('privileged execution plan rejects oversized envelopes without data', async () => {
+  const { buildPrivilegedFileExecutionPlan } = await importModule(protocolModule)
+  const path = `/${'x'.repeat(240 * 1024)}`
+  assert.throws(
+    () => buildPrivilegedFileExecutionPlan({
+      token: 'c9'.repeat(24),
+      request: { operation: 'lstat', args: { path } }
+    }),
+    error => error?.code === 'PRIVILEGED_FILE_PLAN_LIMIT' &&
+      !error.message.includes(path.slice(0, 64))
+  )
 })
 
 test('list parser rejects forged success when a producer capability is false', async () => {
@@ -2261,7 +2698,7 @@ test('privileged command builder exposes every fixed operation and fails closed 
     ['probe', {}, ':'],
     ['list', { path: '/x' }, './.[!.]* ./..?* ./*'],
     ['list-bound', sourceEntryBinding({ path: '/root/source' }),
-      '__sp_entry_matches "./$__sp_boundName"'],
+      '[ ! -L "./$n" ] && [ -d "./$n" ]'],
     ['lstat', { path: '/x' }, '__sp_lstatParentReal'],
     ['lstat-bound', {
       path: '/root/source',

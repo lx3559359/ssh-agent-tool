@@ -2,6 +2,7 @@ import {
   assertPtyTaskToken,
   createPtyTaskToken
 } from '../operations-toolkit/runtime/pty-task-protocol.js'
+import { createStreamingSha256 } from './streaming-sha256.js'
 
 const allowedOperations = new Set([
   'probe',
@@ -31,6 +32,10 @@ const allowedOperations = new Set([
 ])
 
 const maxPrivilegedTransferBytes = 8 * 1024 * 1024 * 1024
+export const privilegedFilePtyFrameByteLimit = 3840
+const privilegedFilePlanChunkCharacters = 2600
+const maxPrivilegedFilePlanEncodedBytes = 300 * 1024
+const maxPrivilegedFilePlanFrames = 128
 
 const requiredStageCapabilities = Object.freeze({
   'stage-handshake': Object.freeze([
@@ -1517,29 +1522,136 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     'rm -f -- "$__sp_probe_a" "$__sp_probe_b" 2>/dev/null && [ ! -e "$__sp_probe_a" ] && [ ! -L "$__sp_probe_a" ] && [ ! -e "$__sp_probe_b" ] && [ ! -L "$__sp_probe_b" ] && __sp_rm_cap=1;',
     'if [ ! -e "$__sp_probe_d" ] && [ ! -L "$__sp_probe_d" ] && mkdir -- "$__sp_probe_d" 2>/dev/null; then rmdir -- "$__sp_probe_d" 2>/dev/null && [ ! -e "$__sp_probe_d" ] && [ ! -L "$__sp_probe_d" ] && __sp_rmdir_cap=1; fi;'
   ].join(' ')
-  const innerScript = [
-    '__sp_token="$SHELLPILOT_TOKEN";',
-    functionalCapabilityProbe,
-    '__sp_decode() { printf %s "$1" | base64 -d || return $?; printf .; };',
-    '__sp_encode() { printf %s "$1" | base64 | tr -d "\\r\\n"; };',
-    'readlink() { command readlink "$@" || return $?; printf .; };',
-    'realpath() { command realpath "$@" || return $?; printf .; };',
-    '__sp_sha256_raw() { case "$__sp_sha256_tool" in sha256sum) __sp_hash="$(sha256sum -- "$1")" || return $? ;; shasum) __sp_hash="$(shasum -a 256 -- "$1")" || return $? ;; *) return 1 ;; esac; printf %s "$' + '{__sp_hash%% *}"; };',
-    '__sp_sha256_text() { case "$__sp_sha256_tool" in sha256sum) __sp_hash="$(printf %s "$1" | sha256sum)" || return $? ;; shasum) __sp_hash="$(printf %s "$1" | shasum -a 256)" || return $? ;; *) return 1 ;; esac; printf %s "$' + '{__sp_hash%% *}"; };',
-    '__sp_sha256_stdin() { case "$__sp_sha256_tool" in sha256sum) __sp_hash="$(sha256sum)" || return $? ;; shasum) __sp_hash="$(shasum -a 256)" || return $? ;; *) return 1 ;; esac; printf %s "$' + '{__sp_hash%% *}"; };',
-    '__sp_parse_dd_report_text() { __sp_ddReport="$1"; __sp_lineBreak="$(printf "\\nx")"; __sp_lineBreak="$' + '{__sp_lineBreak%x}"; __sp_ddLast="$' + '{__sp_ddReport##*"$__sp_lineBreak"}"; __sp_ddActual="$' + '{__sp_ddLast%% *}"; case "$__sp_ddActual" in ""|*[!0-9]*) return 1 ;; esac; printf %s "$__sp_ddActual"; };',
-    boundedDigestFunction,
-    '__sp_valid_name() { case "$1" in ""|"."|".."|*/*) return 1 ;; *) return 0 ;; esac; };',
-    '__sp_bind_entry_parent() { __sp_boundPath="$1"; __sp_boundExpectedParent="$2"; __sp_boundExpectedDevice="$3"; __sp_boundExpectedInode="$4"; __sp_boundParent="$' + '{__sp_boundPath%/*}"; [ -n "$__sp_boundParent" ] || __sp_boundParent=/; __sp_boundName="$' + '{__sp_boundPath##*/}"; __sp_valid_name "$__sp_boundName" || return 1; [ "$__sp_boundParent" = "$__sp_boundExpectedParent" ] || return 1; __sp_boundActualReal="$(realpath -- "$__sp_boundParent")" || return $?; __sp_boundActualReal=$' + '{__sp_boundActualReal%?}; __sp_boundActualReal=$' + '{__sp_boundActualReal%?}; [ "$__sp_boundActualReal" = "$__sp_boundExpectedParent" ] || return 1; [ ! -L "$__sp_boundParent" ] && [ -d "$__sp_boundParent" ] || return 1; cd -- "$__sp_boundParent" || return $?; [ "$(pwd -P)" = "$__sp_boundExpectedParent" ] || return 1; [ "$(stat -c %d -- .)" = "$__sp_boundExpectedDevice" ] || return 1; [ "$(stat -c %i -- .)" = "$__sp_boundExpectedInode" ] || return 1; };',
-    '__sp_entry_matches() { [ ! -L "$1" ] || return 1; case "$4" in file) [ -f "$1" ] ;; directory) [ -d "$1" ] ;; *) return 1 ;; esac && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; };',
-    '__sp_fd_entry_matches() { case "$4" in file) [ -f "$1" ] ;; directory) [ -d "$1" ] ;; *) return 1 ;; esac && [ "$(stat -L -c %d -- "$1")" = "$2" ] && [ "$(stat -L -c %i -- "$1")" = "$3" ]; };',
-    '__sp_parent_path_matches() { [ ! -L "$1" ] && [ -d "$1" ] || return 1; __sp_parentActualReal="$(realpath -- "$1")" || return $?; __sp_parentActualReal=$' + '{__sp_parentActualReal%?}; __sp_parentActualReal=$' + '{__sp_parentActualReal%?}; [ "$__sp_parentActualReal" = "$1" ] && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; };',
-    '__sp_trusted_parent_fd() { case "$5" in ""|*[!0-7]*) return 1 ;; esac; [ "$4" = 0 ] && [ "$((0$5 & 022))" -eq 0 ] && [ -d "$1" ] && [ "$(stat -L -c %d -- "$1")" = "$2" ] && [ "$(stat -L -c %i -- "$1")" = "$3" ] && [ "$(stat -L -c %u -- "$1")" = "$4" ] && [ "$(stat -L -c %a -- "$1")" = "$5" ]; };',
-    '__sp_trusted_parent_path_matches() { __sp_parent_path_matches "$1" "$2" "$3" && __sp_trusted_parent_fd "$1" "$2" "$3" "$4" "$5"; };',
-    '__sp_cleanup_created_directory() { __sp_entry_matches "./$__sp_boundName" "$__sp_createdDevice" "$__sp_createdInode" directory || return 1; rmdir -- "./$__sp_boundName"; };',
-    '__sp_bind_root() { __sp_valid_name "$__sp_objectName" || return 1; [ -d "/proc/$$/fd" ] || return 1; __sp_boundRealPath="$(realpath -- "$__sp_rootPath")" || return $?; __sp_boundRealPath=$' + '{__sp_boundRealPath%?}; __sp_boundRealPath=$' + '{__sp_boundRealPath%?}; [ "$__sp_boundRealPath" = "$__sp_rootPath" ] || return 1; [ "$__sp_boundRealPath" = "$__sp_rootRealPath" ] || return 1; [ ! -L "$__sp_rootPath" ] && [ -d "$__sp_rootPath" ] || return 1; cd -- "$__sp_rootPath" || return $?; [ "$(pwd -P)" = "$__sp_boundRealPath" ] || return 1; [ "$(stat -c %d -- .)" = "$__sp_rootDevice" ] || return 1; [ "$(stat -c %i -- .)" = "$__sp_rootInode" ] || return 1; [ "$(stat -c %a -- .)" = "$__sp_rootMode" ] || return 1; [ "$(stat -c %u -- .)" = "$__sp_rootUid" ] || return 1; [ "$(stat -c %g -- .)" = "$__sp_rootGid" ] || return 1; };',
-    '__sp_path_matches_fd() { [ ! -L "$1" ] && [ -f "$1" ] && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; };',
-    '__sp_cleanup_export() { if __sp_path_matches_fd "./$__sp_objectName" "$__sp_objectDevice" "$__sp_objectInode"; then rm -f -- "./$__sp_objectName"; fi; };',
+  let innerScript
+  if (normalized.operation === 'probe') {
+    const compactCapabilityProbe = [
+      'P=0; [ "$(printf %s x)" = x ] && P=1;',
+      'I=0; U="$(id -u 2>/dev/null)" && N="$(id -un 2>/dev/null)" && G="$(id -g 2>/dev/null)" && case "$U:$G" in *[!0-9:]*|:*) : ;; *) [ -n "$N" ] && I=1 ;; esac;',
+      'T=0; [ "$(printf x | tr x y 2>/dev/null)" = y ] && T=1;',
+      'B=0; [ "$(printf x | base64 2>/dev/null | base64 -d 2>/dev/null)" = x ] && B=1;',
+      'S=0; v="$(stat -c "%f;%s;%X;%Y;%u;%g" -- /dev/null 2>/dev/null)"; case "$v" in *";"*";"*";"*";"*";"*) S=1 ;; esac;',
+      'A=0; v="$(printf x | sha256sum 2>/dev/null)"; case "$v" in 2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881*) A=1 ;; *) v="$(printf x | shasum -a 256 2>/dev/null)"; case "$v" in 2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881*) A=1 ;; esac ;; esac;',
+      'R=0; [ "$(realpath -- / 2>/dev/null)" = / ] && R=1;',
+      'F=0; [ "$(find /dev/null -maxdepth 0 -printf x 2>/dev/null)" = x ] && F=1;',
+      'J=0; [ "$(printf abc | head -c 1 2>/dev/null)" = a ] && J=1;',
+      'W=0; [ "$(printf x | wc -c 2>/dev/null | tr -d " \\r\\n")" = 1 ] && W=1;',
+      'D=0; L=0; if exec 9</dev/null; then [ -r "/proc/$$/fd/9" ] && stat -L -c %i -- "/proc/$$/fd/9" >/dev/null 2>&1 && [ -r "/dev/fd/9" ] && stat -L -c %i -- "/dev/fd/9" >/dev/null 2>&1 && D=1; [ -n "$(readlink -- "/proc/$$/fd/9" 2>/dev/null)" ] && L=1; exec 9<&-; fi;',
+      'O=0; C=0; V=0; H=0; M=0; X=0; Y=0; Q=0; K=0; Z=0;',
+      'q="$SHELLPILOT_TOKEN"; a="/tmp/.sp-$q-$$-a"; b="/tmp/.sp-$q-$$-b"; d="/tmp/.sp-$q-$$-d"; f="/tmp/.sp-$q-$$-f";',
+      'dd if=/dev/null of=/dev/null bs=1 iflag=skip_bytes,count_bytes skip=0 count=0 status=none 2>/dev/null && Q=1;',
+      'if [ ! -e "$f" ] && [ ! -L "$f" ] && mkfifo -m 600 -- "$f" 2>/dev/null; then [ -p "$f" ] && [ "$(stat -c %a -- "$f" 2>/dev/null)" = 600 ] && K=1; fi; rm -f -- "$f" 2>/dev/null;',
+      'if [ ! -e "$a" ] && [ ! -L "$a" ] && [ ! -e "$b" ] && [ ! -L "$b" ] && ( umask 077; set -C; printf x > "$a" ) 2>/dev/null; then',
+      '  if ! ( set -C; : > "$a" ) 2>/dev/null; then O=1; fi; [ "$(cat -- "$a" 2>/dev/null)" = x ] && C=1; touch -c -- "$a" 2>/dev/null && Z=1; chmod -- 600 "$a" 2>/dev/null && [ "$(stat -c %a -- "$a" 2>/dev/null)" = 600 ] && M=1; chown -- "$U:$G" "$a" 2>/dev/null && [ "$(stat -c %u:%g -- "$a" 2>/dev/null)" = "$U:$G" ] && H=1;',
+      '  if mv -T -- "$a" "$b" 2>/dev/null && [ -f "$b" ] && ( umask 077; set -C; printf yy > "$a" ) 2>/dev/null; then mv -nT -- "$a" "$b" 2>/dev/null && [ -f "$a" ] && [ "$(stat -c %s -- "$a" 2>/dev/null)" = 2 ] && [ "$(stat -c %s -- "$b" 2>/dev/null)" = 1 ] && V=1; fi;',
+      'fi; rm -f -- "$a" "$b" 2>/dev/null && [ ! -e "$a" ] && [ ! -L "$a" ] && [ ! -e "$b" ] && [ ! -L "$b" ] && X=1; if [ ! -e "$d" ] && [ ! -L "$d" ] && mkdir -- "$d" 2>/dev/null; then rmdir -- "$d" 2>/dev/null && [ ! -e "$d" ] && [ ! -L "$d" ] && Y=1; fi;'
+    ].join(' ')
+    innerScript = [
+      compactCapabilityProbe,
+      'e() { printf %s "$1" | base64 | tr -d "\\r\\n"; };',
+      'c="sh=1,cleanShell=1,printf=$P,id=$I,tr=$T,stat=$S,base64=$B,sha256=$A,procFd=$D,noclobber=$O,cat=$C,gnuStat=$S,gnuMv=$V,realpath=$R,readlink=$L,chown=$H,chmod=$M,rm=$X,rmdir=$Y,find=$F,head=$J,wc=$W,gnuDd=$Q,mkfifo=$K,touch=$Z";',
+      's=125; if [ "$P$I$T$B" = 1111 ]; then',
+      `  printf '${marker};start;%s;%s;%s\\007' "$q" "$(e "$U")" "$(e "$N")" "$(e "$c")";`,
+      '  s=0;',
+      `  printf '${marker};end;%s\\007' "$q" "$s";`,
+      'else printf "root 文件操作参数或有效身份无效\\n"; fi; exit "$s"'
+    ].join(' ')
+  } else if (normalized.operation === 'list' || normalized.operation === 'list-bound') {
+    const compactEnumerationBody = [
+      'find . -mindepth 1 -maxdepth 1 -print >/dev/null 2>&1 || return $?;',
+      'x="$( ( find . -mindepth 1 -maxdepth 1 -printf x 2>/dev/null; y=$?; [ "$y" -eq 0 ] && printf 0 || printf 1 ) | head -c 20001 )" || return $?;',
+      'case "$x" in *0) x=$' + '{x%?} ;; *) return 1 ;; esac; case "$x" in *[!x]*) return 1 ;; esac; [ "$' + '{#x}" -le 20000 ] || return 1;',
+      't=0; for e in ./.[!.]* ./..?* ./*; do [ -e "$e" ] || [ -L "$e" ] || continue; t=$((t + 1)); [ "$t" -le 20000 ] || return 1; done;',
+      'j=0; b=0; for e in ./.[!.]* ./..?* ./*; do [ -e "$e" ] || [ -L "$e" ] || continue; j=$((j + 1)); [ "$j" -le "$t" ] && [ "$j" -le 20000 ] || return 1; n=$' + '{e##*/}; v="$(stat -c "%f;%s;%X;%Y;%u;%g" -- "$e")" || return $?; E "$j" "$t" "$n" "$v" || return $?; done'
+    ].join(' ')
+    const compactListBody = [
+      'p="$__sp_path";',
+      'r="$(realpath -- "$p")" || return $?; r=$' + '{r%?}; r=$' + '{r%?};',
+      '[ "$r" = "$p" ] && [ ! -L "$p" ] && [ -d "$p" ] || return 1;',
+      'd="$(stat -c %d -- "$p")" || return $?; i="$(stat -c %i -- "$p")" || return $?;',
+      'cd -- "$p" || return $?;',
+      'w="$(pwd -P && printf .)" || return $?; z="$(printf "\\n.")" || return $?;',
+      'case "$w" in *"$z") w=$' + '{w%"$z"} ;; *) return 1 ;; esac;',
+      'r="$(realpath -- .)" || return $?; r=$' + '{r%?}; r=$' + '{r%?}; [ "$r" = "$w" ] || return 1;',
+      '[ "$(stat -c %d -- .)" = "$d" ] && [ "$(stat -c %i -- .)" = "$i" ] || return 1;',
+      '[ "$(stat -c %d -- "$p")" = "$d" ] && [ "$(stat -c %i -- "$p")" = "$i" ] || return 1;',
+      compactEnumerationBody
+    ].join(' ')
+    const compactBoundListBody = [
+      'a=$' + '{p%/*}; [ -n "$a" ] || a=/; n=$' + '{p##*/};',
+      'case "$n" in ""|"."|".."|*/*) return 1 ;; esac;',
+      '[ "$a" = "$u" ] || return 1;',
+      'r="$(realpath -- "$a")" || return $?; r=$' + '{r%?}; r=$' + '{r%?}; [ "$r" = "$a" ] || return 1;',
+      '[ ! -L "$a" ] && [ -d "$a" ] || return 1; cd -- "$a" || return $?;',
+      '[ "$(pwd -P)" = "$a" ] && [ "$(stat -c %d -- .)" = "$d" ] && [ "$(stat -c %i -- .)" = "$i" ] || return 1;',
+      '[ ! -L "./$n" ] && [ -d "./$n" ] && [ "$(stat -c %d -- "./$n")" = "$o" ] && [ "$(stat -c %i -- "./$n")" = "$k" ] || return 1;',
+      'cd -- "./$n" || return $?; [ "$(pwd -P)" = "$p" ] || return 1;',
+      '[ "$(stat -c %d -- .)" = "$o" ] && [ "$(stat -c %i -- .)" = "$k" ] || return 1;',
+      compactEnumerationBody
+    ].join(' ')
+    const browseCapabilityProbe = [
+      'P=0; [ "$(printf %s x)" = x ] && P=1;',
+      'I=0; U="$(id -u 2>/dev/null)" && N="$(id -un 2>/dev/null)" && G="$(id -g 2>/dev/null)" && case "$U:$G" in *[!0-9:]*|:*) : ;; *) [ -n "$N" ] && I=1 ;; esac;',
+      'T=0; [ "$(printf x | tr x y 2>/dev/null)" = y ] && T=1;',
+      'B=0; [ "$(printf x | base64 2>/dev/null | base64 -d 2>/dev/null)" = x ] && B=1;',
+      'S=0; v="$(stat -c "%f;%s;%X;%Y;%u;%g" -- /dev/null 2>/dev/null)"; case "$v" in *";"*";"*";"*";"*";"*) S=1 ;; esac;',
+      'R=0; [ "$(realpath -- / 2>/dev/null)" = / ] && R=1;',
+      'F=0; [ "$(find /dev/null -maxdepth 0 -printf x 2>/dev/null)" = x ] && F=1;',
+      'J=0; [ "$(printf abc | head -c 1 2>/dev/null)" = a ] && J=1;',
+      'W=0; [ "$(printf x | wc -c 2>/dev/null | tr -d " \\r\\n")" = 1 ] && W=1;'
+    ].join(' ')
+    const selectedListBody = normalized.operation === 'list-bound'
+      ? compactBoundListBody
+      : compactListBody
+    const selectedPrepare = normalized.operation === 'list-bound'
+      ? [
+          'p="$(__sp_decode "$A0")" && p=$' + '{p%?}',
+          'u="$(__sp_decode "$A1")" && u=$' + '{u%?}',
+          'd="$(__sp_decode "$A2")" && d=$' + '{d%?}',
+          'i="$(__sp_decode "$A3")" && i=$' + '{i%?}',
+          'o="$(__sp_decode "$A4")" && o=$' + '{o%?}',
+          'k="$(__sp_decode "$A5")" && k=$' + '{k%?}'
+        ].join(' && ')
+      : decodeArguments
+    innerScript = [
+      'q="$SHELLPILOT_TOKEN";',
+      browseCapabilityProbe,
+      '__sp_decode() { printf %s "$1" | base64 -d || return $?; printf .; };',
+      'e() { printf %s "$1" | base64 | tr -d "\\r\\n"; };',
+      'realpath() { command realpath "$@" || return $?; printf .; };',
+      `D() { printf '${marker};data;%s;%s;%s;%s;%s\\007' "$q" "$1" "$2" "$3" "$4" "$5"; };`,
+      'E() { n="$(e "$3")" || return $?; v="$(e "$4")" || return $?; b=$((b + $' + '{#n} + $' + '{#v} + 128)); [ "$b" -le 4194304 ] || return 1; D "$1" "$2" entry "$n" "$v"; };',
+      `L() { ${selectedListBody}; };`,
+      `s=125; if [ "$P$I$T$B$S$R$F$J$W" = 111111111 ] && ${selectedPrepare} && :; then`,
+      '  c="sh=1,cleanShell=1,printf=$P,id=$I,tr=$T,stat=$S,base64=$B,gnuStat=$S,realpath=$R,find=$F,head=$J,wc=$W";',
+      `  printf '${marker};start;%s;%s;%s\\007' "$q" "$(e "$U")" "$(e "$N")" "$(e "$c")";`,
+      '  L; s=$?;',
+      `  printf '${marker};end;%s\\007' "$q" "$s";`,
+      'else printf "root 文件操作参数或有效身份无效\\n"; fi; exit "$s"'
+    ].join(' ')
+  } else {
+    innerScript = [
+      '__sp_token="$SHELLPILOT_TOKEN";',
+      functionalCapabilityProbe,
+      '__sp_decode() { printf %s "$1" | base64 -d || return $?; printf .; };',
+      '__sp_encode() { printf %s "$1" | base64 | tr -d "\\r\\n"; };',
+      'readlink() { command readlink "$@" || return $?; printf .; };',
+      'realpath() { command realpath "$@" || return $?; printf .; };',
+      '__sp_sha256_raw() { case "$__sp_sha256_tool" in sha256sum) __sp_hash="$(sha256sum -- "$1")" || return $? ;; shasum) __sp_hash="$(shasum -a 256 -- "$1")" || return $? ;; *) return 1 ;; esac; printf %s "$' + '{__sp_hash%% *}"; };',
+      '__sp_sha256_text() { case "$__sp_sha256_tool" in sha256sum) __sp_hash="$(printf %s "$1" | sha256sum)" || return $? ;; shasum) __sp_hash="$(printf %s "$1" | shasum -a 256)" || return $? ;; *) return 1 ;; esac; printf %s "$' + '{__sp_hash%% *}"; };',
+      '__sp_sha256_stdin() { case "$__sp_sha256_tool" in sha256sum) __sp_hash="$(sha256sum)" || return $? ;; shasum) __sp_hash="$(shasum -a 256)" || return $? ;; *) return 1 ;; esac; printf %s "$' + '{__sp_hash%% *}"; };',
+      '__sp_parse_dd_report_text() { __sp_ddReport="$1"; __sp_lineBreak="$(printf "\\nx")"; __sp_lineBreak="$' + '{__sp_lineBreak%x}"; __sp_ddLast="$' + '{__sp_ddReport##*"$__sp_lineBreak"}"; __sp_ddActual="$' + '{__sp_ddLast%% *}"; case "$__sp_ddActual" in ""|*[!0-9]*) return 1 ;; esac; printf %s "$__sp_ddActual"; };',
+      boundedDigestFunction,
+      '__sp_valid_name() { case "$1" in ""|"."|".."|*/*) return 1 ;; *) return 0 ;; esac; };',
+      '__sp_bind_entry_parent() { __sp_boundPath="$1"; __sp_boundExpectedParent="$2"; __sp_boundExpectedDevice="$3"; __sp_boundExpectedInode="$4"; __sp_boundParent="$' + '{__sp_boundPath%/*}"; [ -n "$__sp_boundParent" ] || __sp_boundParent=/; __sp_boundName="$' + '{__sp_boundPath##*/}"; __sp_valid_name "$__sp_boundName" || return 1; [ "$__sp_boundParent" = "$__sp_boundExpectedParent" ] || return 1; __sp_boundActualReal="$(realpath -- "$__sp_boundParent")" || return $?; __sp_boundActualReal=$' + '{__sp_boundActualReal%?}; __sp_boundActualReal=$' + '{__sp_boundActualReal%?}; [ "$__sp_boundActualReal" = "$__sp_boundExpectedParent" ] || return 1; [ ! -L "$__sp_boundParent" ] && [ -d "$__sp_boundParent" ] || return 1; cd -- "$__sp_boundParent" || return $?; [ "$(pwd -P)" = "$__sp_boundExpectedParent" ] || return 1; [ "$(stat -c %d -- .)" = "$__sp_boundExpectedDevice" ] || return 1; [ "$(stat -c %i -- .)" = "$__sp_boundExpectedInode" ] || return 1; };',
+      '__sp_entry_matches() { [ ! -L "$1" ] || return 1; case "$4" in file) [ -f "$1" ] ;; directory) [ -d "$1" ] ;; *) return 1 ;; esac && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; };',
+      '__sp_fd_entry_matches() { case "$4" in file) [ -f "$1" ] ;; directory) [ -d "$1" ] ;; *) return 1 ;; esac && [ "$(stat -L -c %d -- "$1")" = "$2" ] && [ "$(stat -L -c %i -- "$1")" = "$3" ]; };',
+      '__sp_parent_path_matches() { [ ! -L "$1" ] && [ -d "$1" ] || return 1; __sp_parentActualReal="$(realpath -- "$1")" || return $?; __sp_parentActualReal=$' + '{__sp_parentActualReal%?}; __sp_parentActualReal=$' + '{__sp_parentActualReal%?}; [ "$__sp_parentActualReal" = "$1" ] && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; };',
+      '__sp_trusted_parent_fd() { case "$5" in ""|*[!0-7]*) return 1 ;; esac; [ "$4" = 0 ] && [ "$((0$5 & 022))" -eq 0 ] && [ -d "$1" ] && [ "$(stat -L -c %d -- "$1")" = "$2" ] && [ "$(stat -L -c %i -- "$1")" = "$3" ] && [ "$(stat -L -c %u -- "$1")" = "$4" ] && [ "$(stat -L -c %a -- "$1")" = "$5" ]; };',
+      '__sp_trusted_parent_path_matches() { __sp_parent_path_matches "$1" "$2" "$3" && __sp_trusted_parent_fd "$1" "$2" "$3" "$4" "$5"; };',
+      '__sp_cleanup_created_directory() { __sp_entry_matches "./$__sp_boundName" "$__sp_createdDevice" "$__sp_createdInode" directory || return 1; rmdir -- "./$__sp_boundName"; };',
+      '__sp_bind_root() { __sp_valid_name "$__sp_objectName" || return 1; [ -d "/proc/$$/fd" ] || return 1; __sp_boundRealPath="$(realpath -- "$__sp_rootPath")" || return $?; __sp_boundRealPath=$' + '{__sp_boundRealPath%?}; __sp_boundRealPath=$' + '{__sp_boundRealPath%?}; [ "$__sp_boundRealPath" = "$__sp_rootPath" ] || return 1; [ "$__sp_boundRealPath" = "$__sp_rootRealPath" ] || return 1; [ ! -L "$__sp_rootPath" ] && [ -d "$__sp_rootPath" ] || return 1; cd -- "$__sp_rootPath" || return $?; [ "$(pwd -P)" = "$__sp_boundRealPath" ] || return 1; [ "$(stat -c %d -- .)" = "$__sp_rootDevice" ] || return 1; [ "$(stat -c %i -- .)" = "$__sp_rootInode" ] || return 1; [ "$(stat -c %a -- .)" = "$__sp_rootMode" ] || return 1; [ "$(stat -c %u -- .)" = "$__sp_rootUid" ] || return 1; [ "$(stat -c %g -- .)" = "$__sp_rootGid" ] || return 1; };',
+      '__sp_path_matches_fd() { [ ! -L "$1" ] && [ -f "$1" ] && [ "$(stat -c %d -- "$1")" = "$2" ] && [ "$(stat -c %i -- "$1")" = "$3" ]; };',
+      '__sp_cleanup_export() { if __sp_path_matches_fd "./$__sp_objectName" "$__sp_objectDevice" "$__sp_objectInode"; then rm -f -- "./$__sp_objectName"; fi; };',
     `__sp_emit_data1() { printf '${marker};data;%s;%s;%s;%s\\007' "$__sp_token" "$1" "$2" "$3" "$4"; };`,
     `__sp_emit_data2() { printf '${marker};data;%s;%s;%s;%s;%s\\007' "$__sp_token" "$1" "$2" "$3" "$4" "$5"; };`,
     `__sp_emit_data3() { printf '${marker};data;%s;%s;%s;%s;%s;%s\\007' "$__sp_token" "$1" "$2" "$3" "$4" "$5" "$6"; };`,
@@ -1564,11 +1676,17 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     `  printf '${marker};end;%s\\007' "$__sp_token" "$__sp_status";`,
     'else printf "root 文件操作参数或有效身份无效\\n"; fi;',
     'exit "$__sp_status"'
-  ].join(' ')
-  const argumentEnvironment = operationArguments[normalized.operation].map(key =>
-    `${argumentEnvironmentVariables[key]}=${shellQuote(
-      encodeUtf8Base64(normalized.args[key])
-    )}`)
+    ].join(' ')
+  }
+  const argumentEnvironment = normalized.operation === 'list-bound'
+    ? operationArguments[normalized.operation].map((key, index) =>
+        `A${index}=${shellQuote(
+          encodeUtf8Base64(normalized.args[key])
+        )}`)
+    : operationArguments[normalized.operation].map(key =>
+        `${argumentEnvironmentVariables[key]}=${shellQuote(
+          encodeUtf8Base64(normalized.args[key])
+        )}`)
   // `command` bypasses a shell function named /usr/bin/env. An effective-root
   // shell that replaces `command` or forges OSC is outside this PTY trust model.
   return [
@@ -1582,6 +1700,182 @@ export function buildPrivilegedFileCommand ({ token: providedToken, request }) {
     '-c',
     shellQuote(innerScript)
   ].join(' ')
+}
+
+function privilegedFilePlanError (message, code) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
+function sha256HexUtf8 (value) {
+  return createStreamingSha256()
+    .update(new TextEncoder().encode(value))
+    .digestHex()
+}
+
+function fileFrameAcknowledgement (token, sequence, status = 'ok') {
+  return `\u001b]698;SHELLPILOT_FILE_FRAME;${token};${sequence};${status}\u0007`
+}
+
+function fileFrameAcknowledgementCommand (token, sequence, status = 'ok') {
+  return `printf '\\033]698;SHELLPILOT_FILE_FRAME;${token};${sequence};${status}\\007'`
+}
+
+function freezePrivilegedFileFrame ({
+  token,
+  sequence,
+  command,
+  executesOperation = false
+}) {
+  if (utf8ByteLength(command) > privilegedFilePtyFrameByteLimit) {
+    throw privilegedFilePlanError(
+      'root 文件协议 PTY 帧超过安全上限',
+      'PRIVILEGED_FILE_PTY_FRAME_LIMIT'
+    )
+  }
+  return Object.freeze({
+    sequence,
+    command,
+    acknowledgement: fileFrameAcknowledgement(token, sequence),
+    executesOperation
+  })
+}
+
+function frameStateCleanupCommand () {
+  return [
+    'unset __sp_pf_t __sp_pf_h __sp_pf_n __sp_pf_i',
+    '__sp_pf_z __sp_pf_b __sp_pf_c __sp_pf_v'
+  ].join(' ')
+}
+
+export function buildPrivilegedFileExecutionPlan ({
+  token: providedToken,
+  request
+}) {
+  const token = assertPtyTaskToken(providedToken)
+  const command = buildPrivilegedFileCommand({ token, request })
+  const encodedCommand = encodeUtf8Base64(command)
+  const digest = sha256HexUtf8(encodedCommand)
+  if (utf8ByteLength(command) <= privilegedFilePtyFrameByteLimit) {
+    return Object.freeze({
+      kind: 'managed-pty-command-plan',
+      version: 1,
+      token,
+      digest,
+      commandBytes: utf8ByteLength(command),
+      frames: Object.freeze([Object.freeze({
+        sequence: 0,
+        command,
+        acknowledgement: null,
+        executesOperation: true
+      })]),
+      cleanup: null
+    })
+  }
+  if (encodedCommand.length > maxPrivilegedFilePlanEncodedBytes) {
+    throw privilegedFilePlanError(
+      'root 文件协议执行计划超过安全上限',
+      'PRIVILEGED_FILE_PLAN_LIMIT'
+    )
+  }
+  const chunks = []
+  for (let offset = 0; offset < encodedCommand.length;
+    offset += privilegedFilePlanChunkCharacters) {
+    chunks.push(encodedCommand.slice(
+      offset,
+      offset + privilegedFilePlanChunkCharacters
+    ))
+  }
+  if (chunks.length + 2 > maxPrivilegedFilePlanFrames) {
+    throw privilegedFilePlanError(
+      'root 文件协议执行计划超过安全上限',
+      'PRIVILEGED_FILE_PLAN_LIMIT'
+    )
+  }
+  const cleanupState = frameStateCleanupCommand()
+  const frames = []
+  frames.push(freezePrivilegedFileFrame({
+    token,
+    sequence: 0,
+    command: [
+      cleanupState + ';',
+      `__sp_pf_t=${shellQuote(token)};`,
+      `__sp_pf_h=${shellQuote(digest)};`,
+      `__sp_pf_n=${chunks.length};`,
+      '__sp_pf_i=0;',
+      `__sp_pf_z=${encodedCommand.length};`,
+      "__sp_pf_b='';",
+      fileFrameAcknowledgementCommand(token, 0)
+    ].join(' ')
+  }))
+  for (const [index, chunk] of chunks.entries()) {
+    const sequence = index + 1
+    frames.push(freezePrivilegedFileFrame({
+      token,
+      sequence,
+      command: [
+        `if [ "$__sp_pf_t" = ${shellQuote(token)} ] &&`,
+        `[ "$__sp_pf_h" = ${shellQuote(digest)} ] &&`,
+        `[ "$__sp_pf_n" -eq ${chunks.length} ] &&`,
+        `[ "$__sp_pf_i" -eq ${index} ]; then`,
+        '__sp_pf_b="$' + '{__sp_pf_b}' + chunk + '";',
+        `__sp_pf_i=${sequence};`,
+        fileFrameAcknowledgementCommand(token, sequence) + ';',
+        'else',
+        cleanupState + ';',
+        fileFrameAcknowledgementCommand(token, sequence, 'error') + ';',
+        'fi'
+      ].join(' ')
+    }))
+  }
+  const finalSequence = chunks.length + 1
+  frames.push(freezePrivilegedFileFrame({
+    token,
+    sequence: finalSequence,
+    executesOperation: true,
+    command: [
+      `if [ "$__sp_pf_t" = ${shellQuote(token)} ] &&`,
+      `[ "$__sp_pf_h" = ${shellQuote(digest)} ] &&`,
+      `[ "$__sp_pf_i" -eq ${chunks.length} ] &&`,
+      '[ "$__sp_pf_z" -eq "$' + '{#__sp_pf_b}" ]; then',
+      '__sp_pf_v="$(printf %s "$__sp_pf_b" | sha256sum 2>/dev/null)" ||',
+      '__sp_pf_v="$(printf %s "$__sp_pf_b" | shasum -a 256 2>/dev/null)";',
+      '__sp_pf_v=$' + '{__sp_pf_v%% *};',
+      `if [ "$__sp_pf_v" = ${shellQuote(digest)} ] &&`,
+      '__sp_pf_c="$(printf %s "$__sp_pf_b" | base64 -d)"; then',
+      cleanupState.replace(' __sp_pf_c', '') + ';',
+      fileFrameAcknowledgementCommand(token, finalSequence) + ';',
+      'eval "$__sp_pf_c"; __sp_pf_s=$?; unset __sp_pf_c; (exit "$__sp_pf_s");',
+      'else',
+      cleanupState + ';',
+      fileFrameAcknowledgementCommand(token, finalSequence, 'error') + ';',
+      'fi; else',
+      cleanupState + ';',
+      fileFrameAcknowledgementCommand(token, finalSequence, 'error') + ';',
+      'fi'
+    ].join(' ')
+  }))
+  const cleanupSequence = finalSequence + 1
+  const cleanup = freezePrivilegedFileFrame({
+    token,
+    sequence: cleanupSequence,
+    command: [
+      'if [ "$' + '{__sp_pf_t-}" = ' + shellQuote(token) + ' ]; then',
+      cleanupState + ';',
+      'fi;',
+      fileFrameAcknowledgementCommand(token, cleanupSequence)
+    ].join(' ')
+  })
+  return Object.freeze({
+    kind: 'managed-pty-command-plan',
+    version: 1,
+    token,
+    digest,
+    commandBytes: utf8ByteLength(command),
+    frames: Object.freeze(frames),
+    cleanup
+  })
 }
 
 function parseUnsignedInteger (value, label) {
@@ -2128,6 +2422,7 @@ export function createPrivilegedFileProtocol () {
   return Object.freeze({
     createToken: createPtyTaskToken,
     buildCommand: buildPrivilegedFileCommand,
+    buildExecutionPlan: buildPrivilegedFileExecutionPlan,
     createParser: createPrivilegedFileParser,
     readResult: parser => parser.result()
   })

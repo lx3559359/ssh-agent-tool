@@ -167,10 +167,11 @@ class Term extends Component {
       ),
       prepareSubmissionOutputRecovery: () => this.attachAddon?.prepareManagedPtyEchoRecovery(),
       cancelSubmissionOutput: () => this.attachAddon?.cancelManagedPtyEchoSuppression(),
-      submitCommand: command => (
+      submitCommand: (command, options) => (
         this.attachAddon?.submitManagedPtyCommand(
           command,
-          this.cmdAddon?.getSessionNonce()
+          this.cmdAddon?.getSessionNonce(),
+          options
         )
       ),
       interrupt: () => (
@@ -1576,6 +1577,10 @@ class Term extends Component {
     return handled
   }
 
+  handleTerminalCommandInputStarted = () => {
+    return this.operationsPtyTaskController.handleCommandInputStarted()
+  }
+
   loadRenderer = async (term, config) => {
     // xterm 6.x: only the built-in DOM renderer and the WebGL addon exist
     // (the canvas renderer addon was removed in 6.x). 'dom' = no addon loaded
@@ -1682,6 +1687,7 @@ class Term extends Component {
       }
     })
     this.cmdAddon.onPromptStarted(this.handleTerminalPromptStarted)
+    this.cmdAddon.onCommandInputStarted(this.handleTerminalCommandInputStarted)
     this.cmdAddon.onCommandFinished(this.handleTerminalCommandFinished)
     this.cmdAddon.onCwdChanged((cwd) => {
       this.setCwd(cwd)

@@ -27,6 +27,13 @@ async function importCommandTracker () {
   )))
 }
 
+async function importManagedPtyController () {
+  return import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/terminal/managed-pty-task-controller.js'
+  )))
+}
+
 async function importShellIntegration () {
   return import(pathToFileURL(path.resolve(
     __dirname,
@@ -177,7 +184,20 @@ test('AttachAddon exposes controller-only managed submit and interrupt methods',
   await addon.stopOutputSuppression(true)
 })
 
-test('managed PTY submission hides command echo and republishes the lifecycle remainder', async () => {
+test('AttachAddon rejects an oversized UTF-8 managed frame before transport', async () => {
+  const { addon, sent } = await createDirectAttachHarness()
+  const oversized = '深'.repeat(1281)
+  assert.ok(Buffer.byteLength(oversized, 'utf8') > 3840)
+  assert.throws(
+    () => addon.submitManagedPtyCommand(oversized, testTrackerNonce),
+    error => error?.code === 'MANAGED_PTY_FRAME_LIMIT' &&
+      !error.message.includes(oversized.slice(0, 32))
+  )
+  assert.deepEqual(sent, [])
+  assert.equal(addon.outputSuppressed, false)
+})
+
+test('managed PTY hides command output while streaming it to the task parser', async () => {
   const { addon, sent, term } = await createDirectAttachHarness()
   const writes = []
   const output = []
@@ -189,6 +209,9 @@ test('managed PTY submission hides command echo and republishes the lifecycle re
   const remainder =
     `\u001b]633;C;${testTrackerNonce}\u0007` +
     '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+  const prompt =
+    `\u001b]633;A;${testTrackerNonce}\u0007fixture:# ` +
+    `\u001b]633;B;${testTrackerNonce}\u0007`
 
   assert.equal(addon.submitManagedPtyCommand(command, testTrackerNonce), true)
   assert.equal(addon.outputSuppressed, true)
@@ -202,14 +225,326 @@ test('managed PTY submission hides command echo and republishes the lifecycle re
   assert.deepEqual(output, [])
 
   addon.writeToTerminal(commandRecord + remainder)
+  assert.equal(addon.outputSuppressed, true)
+  assert.deepEqual(writes, [`\u001b]633;C;${testTrackerNonce}\u0007`])
+  assert.deepEqual(output, [remainder])
+
+  addon.writeToTerminal(prompt)
   assert.equal(addon.outputSuppressed, false)
   assert.equal(addon.managedPtySessionNonce, '')
   assert.equal(addon.prepareManagedPtyEchoRecovery(), false)
-  assert.deepEqual(writes, [remainder])
-  assert.deepEqual(output, [remainder])
+  assert.deepEqual(writes, [`\u001b]633;C;${testTrackerNonce}\u0007`, prompt])
+  assert.deepEqual(output, [remainder, prompt])
 })
 
-test('managed PTY consumes an oversized authenticated E record before xterm', async () => {
+test('managed PTY holds suppression across command-plan prompts', async () => {
+  const { addon, sent, term } = await createDirectAttachHarness()
+  const writes = []
+  const output = []
+  term.write = value => writes.push(value)
+  addon.onRemoteOutput(chunk => output.push(chunk))
+  const first = 'frame-init-safe'
+  const final = 'frame-final-safe'
+  const firstRecord =
+    `\u001b]633;E;${testTrackerNonce};${first}\u0007`
+  const firstOutput = [
+    `\u001b]633;C;${testTrackerNonce}\u0007`,
+    '\u001b]698;SHELLPILOT_FILE_FRAME;token;0;ok\u0007',
+    `\u001b]633;D;${testTrackerNonce};0\u0007`
+  ].join('')
+  const firstPrompt =
+    `\u001b]633;A;${testTrackerNonce}\u0007fixture:# ` +
+    `\u001b]633;B;${testTrackerNonce}\u0007`
+
+  assert.equal(addon.submitManagedPtyCommand(
+    first,
+    testTrackerNonce,
+    { holdSuppression: true }
+  ), true)
+  addon.writeToTerminal(firstRecord + firstOutput)
+  addon.sendToServer('queued-user-input')
+  addon.writeToTerminal(firstPrompt)
+
+  assert.equal(addon.outputSuppressed, true)
+  assert.equal(writes.join('').includes('fixture:#'), false)
+  assert.equal(writes.join('').includes(
+    `\u001b]633;B;${testTrackerNonce}\u0007`
+  ), true)
+  assert.equal(writes.join('').includes(first), false)
+  assert.deepEqual(sent, [terminalControlMessage('managed-input', {
+    requestId: testTrackerNonce,
+    command: first
+  })])
+
+  const finalRecord =
+    `\u001b]633;E;${testTrackerNonce};${final}\u0007`
+  const finalOutput = [
+    `\u001b]633;C;${testTrackerNonce}\u0007`,
+    '\u001b]698;SHELLPILOT_FILE_FRAME;token;1;ok\u0007',
+    '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007',
+    `\u001b]633;D;${testTrackerNonce};0\u0007`
+  ].join('')
+  assert.equal(addon.submitManagedPtyCommand(
+    final,
+    testTrackerNonce,
+    { holdSuppression: false }
+  ), true)
+  addon.writeToTerminal(finalRecord + finalOutput)
+  addon.writeToTerminal(firstPrompt)
+  await Promise.resolve()
+
+  assert.equal(addon.outputSuppressed, false)
+  assert.equal(writes.join('').includes(first), false)
+  assert.equal(writes.join('').includes(final), false)
+  assert.equal(writes.join('').includes('fixture:#'), true)
+  assert.deepEqual(sent, [
+    terminalControlMessage('managed-input', {
+      requestId: testTrackerNonce,
+      command: first
+    }),
+    terminalControlMessage('managed-input', {
+      requestId: testTrackerNonce,
+      command: final
+    }),
+    'queued-user-input'
+  ])
+  assert.equal(output.join('').includes('SHELLPILOT_FILE_FRAME'), true)
+})
+
+test('real tracker attach and controller advance a held command plan only after B', async () => {
+  const AttachAddon = await importAttachAddon()
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const { createManagedPtyTaskController } = await importManagedPtyController()
+  const trackerHarness = createTrackerTerminal()
+  const lifecycleWrites = []
+  const submissions = []
+  let rejectNextChunk = false
+  let blockedChunk = null
+  const planToken = 'd'.repeat(48)
+  const commands = ['frame-init', 'frame-chunk', 'frame-final']
+  const parent = {}
+  const term = trackerHarness.terminal
+  term.parent = parent
+  term.write = value => {
+    lifecycleWrites.push(String(value))
+    const escape = String.fromCharCode(27)
+    const bell = String.fromCharCode(7)
+    const pattern = new RegExp(
+      `${escape}\\]633;([^${bell}]+)${bell}`, 'g')
+    let match = pattern.exec(String(value))
+    while (match) {
+      trackerHarness.osc(match[1])
+      match = pattern.exec(String(value))
+    }
+  }
+  const tracker = new CommandTrackerAddon()
+  tracker.activate(term)
+  tracker.beginSession(testTrackerNonce)
+  const addon = new AttachAddon(term, {}, false)
+  addon.managedPtyTransport = {
+    submit: command => {
+      submissions.push(command)
+      const accepted = rejectNextChunk && command === 'frame-chunk'
+        ? (() => {
+            blockedChunk = deferred()
+            return blockedChunk.promise
+          })()
+        : Promise.resolve(true)
+      return Object.freeze({
+        accepted,
+        written: Promise.resolve(true)
+      })
+    },
+    interrupt: () => true,
+    ready: () => Promise.resolve(true),
+    handleControlMessage: () => false,
+    dispose: () => true
+  }
+  const protocol = {
+    createToken: () => planToken,
+    buildCommand: () => commands.at(-1),
+    buildExecutionPlan: () => Object.freeze({
+      kind: 'managed-pty-command-plan',
+      version: 1,
+      token: planToken,
+      digest: 'a'.repeat(64),
+      frames: Object.freeze(commands.map((command, sequence) => Object.freeze({
+        sequence,
+        command,
+        acknowledgement:
+          `\u001b]698;SHELLPILOT_FILE_FRAME;${planToken};${sequence};ok\u0007`,
+        executesOperation: sequence === commands.length - 1
+      }))),
+      cleanup: Object.freeze({
+        sequence: commands.length,
+        command: 'frame-cleanup',
+        acknowledgement:
+          `\u001b]698;SHELLPILOT_FILE_FRAME;${planToken};3;ok\u0007`,
+        executesOperation: false
+      })
+    }),
+    createParser: () => {
+      let output = ''
+      return {
+        push: chunk => {
+          output += String(chunk || '')
+          return { output: [] }
+        },
+        identity: () => output.includes('PLAN_START')
+          ? { uid: '0', username: 'root' }
+          : null,
+        started: () => output.includes('PLAN_START'),
+        ended: () => output.includes('PLAN_END'),
+        exitCode: () => output.includes('PLAN_END') ? 0 : null
+      }
+    },
+    readResult: () => ({ ok: true })
+  }
+  const controller = createManagedPtyTaskController({
+    ensureReady: async () => true,
+    getTerminalState: () => ({
+      alternateBuffer: false,
+      passwordPrompt: false,
+      shellIntegrationActive: tracker.hasShellIntegration(),
+      commandInputActive: tracker.isCommandInputActive(),
+      currentInput: tracker.getCurrentCommandInput()
+    }),
+    expectSubmission: command => tracker.expectExternalSubmission(command),
+    armSubmission: token => tracker.markExpectedSubmissionReleased(token),
+    cancelSubmission: token => tracker.cancelExpectedSubmission(token),
+    prepareSubmissionOutputRecovery: () => addon.prepareManagedPtyEchoRecovery(),
+    cancelSubmissionOutput: () => addon.cancelManagedPtyEchoSuppression(),
+    submitCommand: (command, options) => addon.submitManagedPtyCommand(
+      command,
+      tracker.getSessionNonce(),
+      options
+    ),
+    interrupt: () => addon.interruptManagedPtyCommand(),
+    subscribeOutput: listener => addon.onRemoteOutput(listener),
+    createToken: () => planToken
+  })
+  parent.handleManagedPtyCommandObserved = (command, nonce) =>
+    tracker.observeManagedExternalSubmission(command, nonce)
+  tracker.onPromptStarted(() => controller.handlePromptStarted())
+  tracker.onCommandInputStarted(() => controller.handleCommandInputStarted())
+  tracker.onCommandFinished(event => controller.handleCommandFinished(event))
+  trackerHarness.osc(`A;${testTrackerNonce}`)
+  trackerHarness.osc(`B;${testTrackerNonce}`)
+
+  const lease = await controller.acquire('real-framed-plan')
+  const running = lease.execute({
+    request: { operation: 'probe' },
+    protocol,
+    timeoutMs: 1000
+  })
+  await Promise.resolve()
+  assert.deepEqual(submissions, ['frame-init'])
+
+  const completeFrame = (index, result = '') => {
+    const promptText = index < commands.length - 1
+      ? 'intermediate-hidden:# '
+      : 'final-visible:# '
+    addon.writeToTerminal([
+      `\u001b]633;E;${testTrackerNonce};${commands[index]}\u0007`,
+      `\u001b]633;C;${testTrackerNonce}\u0007`,
+      `\u001b]698;SHELLPILOT_FILE_FRAME;${planToken};${index};ok\u0007`,
+      result,
+      `\u001b]633;D;${testTrackerNonce};0\u0007`
+    ].join(''))
+    addon.writeToTerminal(
+      `\u001b]633;A;${testTrackerNonce}\u0007${promptText}` +
+      `\u001b]633;B;${testTrackerNonce}\u0007`
+    )
+  }
+  completeFrame(0)
+  await Promise.resolve()
+  assert.deepEqual(submissions, ['frame-init', 'frame-chunk'])
+  completeFrame(1)
+  await Promise.resolve()
+  assert.deepEqual(submissions, commands)
+  completeFrame(2, 'PLAN_START\nPLAN_END\n')
+  assert.deepEqual(await running, {
+    exitCode: 0,
+    identity: { uid: '0', username: 'root' },
+    ok: true
+  })
+  assert.equal(lifecycleWrites.join('').includes('intermediate-hidden:#'), false)
+  assert.equal(lifecycleWrites.join('').includes('final-visible:#'), true)
+  assert.equal(addon.outputSuppressed, false)
+  assert.equal(await lease.release(), true)
+
+  rejectNextChunk = true
+  const signalController = new AbortController()
+  const cleanupLease = await controller.acquire('real-framed-cleanup')
+  const cancelled = cleanupLease.execute({
+    request: { operation: 'probe' },
+    protocol,
+    timeoutMs: 1000,
+    signal: signalController.signal
+  }).catch(error => error)
+  await Promise.resolve()
+  completeFrame(0)
+  await Promise.resolve()
+  assert.equal(submissions.at(-1), 'frame-chunk')
+  signalController.abort()
+  const rejection = new Error('definitive transport rejection')
+  rejection.name = 'AbortError'
+  blockedChunk.reject(rejection)
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(submissions.at(-1), 'frame-cleanup')
+  assert.equal(submissions.filter(command => command === 'frame-final').length, 1)
+  addon.writeToTerminal([
+    `\u001b]633;E;${testTrackerNonce};frame-cleanup\u0007`,
+    `\u001b]633;C;${testTrackerNonce}\u0007`,
+    `\u001b]698;SHELLPILOT_FILE_FRAME;${planToken};3;ok\u0007`,
+    `\u001b]633;D;${testTrackerNonce};0\u0007`
+  ].join(''))
+  addon.writeToTerminal(
+    `\u001b]633;A;${testTrackerNonce}\u0007cleanup:# ` +
+    `\u001b]633;B;${testTrackerNonce}\u0007`
+  )
+  assert.equal((await cancelled).name, 'AbortError')
+  assert.equal(await cleanupLease.release(), true)
+})
+
+test('managed PTY keeps privileged probe output hidden until authenticated prompt', async () => {
+  const { addon, term } = await createDirectAttachHarness()
+  const writes = []
+  const output = []
+  term.write = value => writes.push(value)
+  addon.onRemoteOutput(chunk => output.push(chunk))
+  const command = 'command /usr/bin/env SHELLPILOT_FILE=1 __sp_probe=hidden'
+  const commandRecord =
+    `\u001b]633;E;${testTrackerNonce};${command}\u0007`
+  const hiddenOutput = [
+    `\u001b]633;C;${testTrackerNonce}\u0007`,
+    '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007',
+    'shellpilot root one read\r\n',
+    `\u001b]633;D;${testTrackerNonce};0\u0007`
+  ].join('')
+  const prompt =
+    `\u001b]633;A;${testTrackerNonce}\u0007` +
+    'user@fixture:$ ' +
+    `\u001b]633;B;${testTrackerNonce}\u0007`
+
+  assert.equal(addon.submitManagedPtyCommand(command, testTrackerNonce), true)
+  addon.writeToTerminal(`${command}\r\n`)
+  addon.writeToTerminal(commandRecord + hiddenOutput)
+
+  assert.equal(addon.outputSuppressed, true)
+  assert.equal(writes.join('').includes('shellpilot root one read'), false)
+  assert.equal(output.join('').includes('shellpilot root one read'), true)
+
+  addon.writeToTerminal(prompt)
+
+  assert.equal(addon.outputSuppressed, false)
+  assert.equal(writes.join('').includes('shellpilot root one read'), false)
+  assert.equal(writes.join('').includes('user@fixture:$ '), true)
+  assert.equal(addon.managedPtySessionNonce, '')
+})
+
+test('managed PTY consumes a maximum-budget authenticated E record before xterm', async () => {
   const { addon, sent, parent, term } = await createDirectAttachHarness()
   const writes = []
   const output = []
@@ -222,7 +557,7 @@ test('managed PTY consumes an oversized authenticated E record before xterm', as
   addon.onRemoteOutput(chunk => output.push(chunk))
   const command = [
     '__sp_secret=hidden',
-    `__sp_payload=${'x'.repeat(24 * 1024)}`,
+    `__sp_payload=${'x'.repeat(3000)}`,
     "printf '\\007'"
   ].join('; ')
   const escapedCommand = command
@@ -233,21 +568,28 @@ test('managed PTY consumes an oversized authenticated E record before xterm', as
   const visibleRemainder =
     `\u001b]633;C;${testTrackerNonce}\u0007` +
     '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+  const prompt =
+    `\u001b]633;A;${testTrackerNonce}\u0007fixture:# ` +
+    `\u001b]633;B;${testTrackerNonce}\u0007`
 
   assert.equal(addon.submitManagedPtyCommand(command, testTrackerNonce), true)
-  addon.writeToTerminal(`${command}\r\n${commandRecord.slice(0, 8192)}`)
+  addon.writeToTerminal(`${command}\r\n${commandRecord.slice(0, 1024)}`)
   assert.equal(addon.outputSuppressed, true)
   assert.deepEqual(writes, [])
   assert.deepEqual(output, [])
 
-  addon.writeToTerminal(commandRecord.slice(8192) + visibleRemainder)
+  addon.writeToTerminal(commandRecord.slice(1024) + visibleRemainder)
 
-  assert.equal(addon.outputSuppressed, false)
+  assert.equal(addon.outputSuppressed, true)
   assert.deepEqual(observed, [{ command, nonce: testTrackerNonce }])
-  assert.deepEqual(writes, [visibleRemainder])
   assert.deepEqual(output, [visibleRemainder])
   assert.equal(writes.join('').includes('__sp_secret'), false)
   assert.equal(output.join('').includes('__sp_secret'), false)
+
+  addon.writeToTerminal(prompt)
+  assert.equal(addon.outputSuppressed, false)
+  assert.equal(writes.join('').includes('fixture:# '), true)
+  assert.deepEqual(output, [visibleRemainder, prompt])
   addon.sendToServer('x')
   assert.deepEqual(sent, [
     terminalControlMessage('managed-input', {
@@ -271,6 +613,9 @@ test('managed PTY suppression ignores a wrong nonce and finds a split authentica
   const remainder =
     `\u001b]633;C;${testTrackerNonce}\u0007` +
     '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+  const prompt =
+    `\u001b]633;A;${testTrackerNonce}\u0007fixture:# ` +
+    `\u001b]633;B;${testTrackerNonce}\u0007`
 
   assert.equal(addon.submitManagedPtyCommand(command, testTrackerNonce), true)
   addon.writeToTerminal(
@@ -283,11 +628,15 @@ test('managed PTY suppression ignores a wrong nonce and finds a split authentica
   addon.writeToTerminal(
     (commandRecord + remainder).slice('\u001b]63'.length)
   )
+  assert.equal(addon.outputSuppressed, true)
+  assert.deepEqual(output, [remainder])
+
+  addon.writeToTerminal(prompt)
   assert.equal(addon.outputSuppressed, false)
   assert.equal(addon.managedPtySessionNonce, '')
   assert.equal(addon.prepareManagedPtyEchoRecovery(), false)
-  assert.deepEqual(writes, [remainder])
-  assert.deepEqual(output, [remainder])
+  assert.equal(writes.join('').includes('fixture:# '), true)
+  assert.deepEqual(output, [remainder, prompt])
 })
 
 test('managed PTY suppression finds an authenticated marker split across binary chunks', async () => {
@@ -302,6 +651,9 @@ test('managed PTY suppression finds an authenticated marker split across binary 
   const remainder =
     `\u001b]633;C;${testTrackerNonce}\u0007` +
     '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+  const prompt =
+    `\u001b]633;A;${testTrackerNonce}\u0007fixture:# ` +
+    `\u001b]633;B;${testTrackerNonce}\u0007`
   const bytes = new TextEncoder().encode(commandRecord + remainder)
 
   assert.equal(addon.submitManagedPtyCommand(command, testTrackerNonce), true)
@@ -309,11 +661,15 @@ test('managed PTY suppression finds an authenticated marker split across binary 
   assert.equal(addon.outputSuppressed, true)
   addon.writeToTerminal(bytes.slice(4))
 
+  assert.equal(addon.outputSuppressed, true)
+  assert.deepEqual(output, [remainder])
+
+  addon.writeToTerminal(new TextEncoder().encode(prompt))
   assert.equal(addon.outputSuppressed, false)
   assert.equal(addon.managedPtySessionNonce, '')
   assert.equal(addon.prepareManagedPtyEchoRecovery(), false)
-  assert.deepEqual(writes, [remainder])
-  assert.deepEqual(output, [remainder])
+  assert.equal(writes.join('').includes('fixture:# '), true)
+  assert.deepEqual(output, [remainder, prompt])
 })
 
 test('managed PTY command echo stays hidden past the legacy deadline', async () => {

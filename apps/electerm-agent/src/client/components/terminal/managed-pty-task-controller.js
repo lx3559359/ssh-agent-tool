@@ -5,6 +5,9 @@ import {
 
 const defaultCommandTimeoutMs = 60 * 1000
 const defaultRecoveryTimeoutMs = 5 * 1000
+const managedPtyFrameByteLimit = 3840
+const managedPtyPlanFrameLimit = 128
+const managedPtyPlanByteLimit = 512 * 1024
 
 function createNamedError (name, message, cause) {
   const error = new Error(message)
@@ -34,6 +37,14 @@ function cancellationUnknownError (cause) {
     '取消结果未知；终端尚未恢复到可确认的提示符',
     cause
   )
+}
+
+function cancellationCleanupUnknownError (cancelError, cleanupError) {
+  const cleanupFailure = cleanupError || new Error('受控 PTY 执行计划清理失败')
+  return cancellationUnknownError(new AggregateError(
+    [cancelError, cleanupFailure].filter(Boolean),
+    '受控 PTY 执行计划取消后的清理失败'
+  ))
 }
 
 function disconnectedError (reason) {
@@ -104,6 +115,95 @@ function requireManagedCommand (value) {
     throw new Error('受控 PTY 命令无效')
   }
   return value
+}
+
+function managedPtyByteLength (value) {
+  return new TextEncoder().encode(value).byteLength
+}
+
+function requireManagedFrame (value, token, sequence, allowNoAck = false) {
+  const command = requireManagedCommand(value?.command)
+  if (value?.sequence !== sequence ||
+    managedPtyByteLength(command) > managedPtyFrameByteLimit) {
+    throw new Error('受控 PTY 命令帧超过安全上限或顺序无效')
+  }
+  const acknowledgement = value?.acknowledgement
+  if (acknowledgement === null && allowNoAck) {
+    return Object.freeze({
+      sequence,
+      command,
+      acknowledgement: null,
+      executesOperation: true
+    })
+  }
+  if (typeof acknowledgement !== 'string' ||
+    acknowledgement.length > 512 ||
+    !acknowledgement.includes(token) ||
+    !acknowledgement.includes(`;${sequence};ok\u0007`)) {
+    throw new Error('受控 PTY 命令帧确认合同无效')
+  }
+  return Object.freeze({
+    sequence,
+    command,
+    acknowledgement,
+    executesOperation: value.executesOperation === true
+  })
+}
+
+function requireManagedExecutionPlan (protocol, token, request) {
+  if (typeof protocol.buildExecutionPlan !== 'function') {
+    const command = requireManagedCommand(
+      protocol.buildCommand({ token, request })
+    )
+    if (managedPtyByteLength(command) > managedPtyFrameByteLimit) {
+      throw new Error('受控 PTY 命令帧超过安全上限')
+    }
+    return Object.freeze({
+      kind: 'managed-pty-command-plan',
+      version: 1,
+      token,
+      digest: '',
+      frames: Object.freeze([Object.freeze({
+        sequence: 0,
+        command,
+        acknowledgement: null,
+        executesOperation: true
+      })]),
+      cleanup: null
+    })
+  }
+  const source = protocol.buildExecutionPlan({ token, request })
+  if (source?.kind !== 'managed-pty-command-plan' || source.version !== 1 ||
+    source.token !== token || !Array.isArray(source.frames) ||
+    source.frames.length < 1 ||
+    source.frames.length > managedPtyPlanFrameLimit) {
+    throw new Error('受控 PTY 命令计划无效')
+  }
+  const singleFrame = source.frames.length === 1
+  const frames = source.frames.map((frame, sequence) =>
+    requireManagedFrame(frame, token, sequence, singleFrame))
+  if (frames.filter(frame => frame.executesOperation).length !== 1 ||
+    frames.at(-1).executesOperation !== true) {
+    throw new Error('受控 PTY 命令计划执行边界无效')
+  }
+  const totalBytes = frames.reduce(
+    (total, frame) => total + managedPtyByteLength(frame.command),
+    0
+  )
+  if (totalBytes > managedPtyPlanByteLimit) {
+    throw new Error('受控 PTY 命令计划超过安全上限')
+  }
+  const cleanup = singleFrame || source.cleanup === null
+    ? null
+    : requireManagedFrame(source.cleanup, token, frames.length)
+  return Object.freeze({
+    kind: source.kind,
+    version: source.version,
+    token,
+    digest: String(source.digest || ''),
+    frames: Object.freeze(frames),
+    cleanup
+  })
 }
 
 function requireManagedParser (value) {
@@ -250,12 +350,55 @@ export function createManagedPtyTaskController ({
   function settleIfCompleteUnsafe (execution) {
     if (execution.settled) return
     if (execution.cancelRequested) {
-      if (execution.promptReturned) {
+      if (!execution.promptReturned) return
+      if (execution.planCleanupStarted) {
+        clearTimer(execution.recoveryHandle)
+        if (execution.frameError || !execution.frameAcknowledged ||
+          execution.commandExitCode !== 0) {
+          recoveryLocked = true
+          rejectExecution(
+            execution,
+            cancellationCleanupUnknownError(
+              execution.cancelError,
+              execution.frameError
+            ),
+            { preserveSubmissionOutput: true }
+          )
+          return
+        }
         rejectExecution(execution, execution.cancelError)
+        return
       }
+      const currentFrame = execution.plan.frames[execution.frameIndex]
+      if (execution.plan.cleanup && currentFrame?.executesOperation !== true) {
+        if (!execution.commandInputReady) return
+        beginPlanCleanup(execution)
+        return
+      }
+      rejectExecution(execution, execution.cancelError)
       return
     }
     if (!execution.commandFinished || !execution.promptReturned) return
+    if (execution.frameError) {
+      rejectExecution(execution, execution.frameError)
+      return
+    }
+    if (execution.frame?.acknowledgement && !execution.frameAcknowledged) {
+      rejectExecution(execution, new Error('受控 PTY 命令帧确认缺失'))
+      return
+    }
+    if (execution.frameIndex < execution.plan.frames.length - 1) {
+      if (!execution.commandInputReady) return
+      if (execution.commandExitCode !== 0) {
+        rejectExecution(execution, new Error('受控 PTY 命令帧执行失败'))
+        return
+      }
+      submitExecutionFrame(
+        execution,
+        execution.plan.frames[execution.frameIndex + 1]
+      )
+      return
+    }
     if (!execution.parser.started()) {
       rejectExecution(execution, new Error('PTY 运维任务开始边界缺失'))
       return
@@ -371,6 +514,190 @@ export function createManagedPtyTaskController ({
     return true
   }
 
+  function pushParserOutput (execution, chunk) {
+    if (!chunk) return
+    const parsed = execution.parser.push(chunk)
+    if (!validateIdentity(execution)) return
+    for (const output of parsed?.output || []) execution.onChunk?.(output)
+  }
+
+  function consumeExecutionOutput (execution, chunk) {
+    if (execution.planCleanupStarted) {
+      consumeFrameAcknowledgement(execution, chunk)
+      return
+    }
+    if (!execution.frame?.acknowledgement || execution.frameAcknowledged) {
+      if (execution.frame?.executesOperation) {
+        pushParserOutput(execution, chunk)
+      }
+      return
+    }
+    consumeFrameAcknowledgement(execution, chunk)
+  }
+
+  function consumeFrameAcknowledgement (execution, chunk) {
+    execution.frameAckBuffer += String(chunk || '')
+    const prefix = `\u001b]698;SHELLPILOT_FILE_FRAME;${execution.plan.token};`
+    const start = execution.frameAckBuffer.indexOf(prefix)
+    if (start === -1) {
+      execution.frameAckBuffer = execution.frameAckBuffer.slice(-1024)
+      return
+    }
+    const end = execution.frameAckBuffer.indexOf('\u0007', start)
+    if (end === -1) {
+      if (execution.frameAckBuffer.length > 2048) {
+        execution.frameError = new Error('受控 PTY 命令帧确认超过安全上限')
+      }
+      return
+    }
+    const acknowledgement = execution.frameAckBuffer.slice(start, end + 1)
+    if (acknowledgement !== execution.frame.acknowledgement) {
+      execution.frameError = new Error('受控 PTY 命令帧确认顺序或认证无效')
+      return
+    }
+    execution.frameAcknowledged = true
+    const remainder = execution.frameAckBuffer.slice(end + 1)
+    execution.frameAckBuffer = ''
+    if (execution.frame.executesOperation && remainder) {
+      pushParserOutput(execution, remainder)
+    }
+  }
+
+  function submitExecutionFrame (execution, frame, options = {}) {
+    const submissionToken = expectSubmission(frame.command)
+    if (!submissionToken) {
+      throw new Error('无法建立 PTY 运维命令追踪，命令尚未发送')
+    }
+    execution.frameGeneration += 1
+    const frameGeneration = execution.frameGeneration
+    execution.frame = frame
+    execution.frameIndex = options.cleanup === true
+      ? execution.plan.frames.length
+      : frame.sequence
+    execution.command = frame.command
+    execution.submissionToken = submissionToken
+    execution.transport = null
+    execution.transportAccepted = false
+    execution.submitted = false
+    execution.commandFinished = false
+    execution.commandExitCode = null
+    execution.commandFinishedPromptSequence = 0
+    execution.promptReturned = false
+    execution.commandInputReady = false
+    execution.frameAcknowledged = frame.acknowledgement === null
+    execution.frameAckBuffer = ''
+    execution.frameError = null
+    execution.preAcceptInterruptSent = false
+    execution.recoveryInterruptSent = false
+    execution.cancellationRecoveryArmed = options.cleanup === true
+    if (armSubmission(submissionToken) !== true) {
+      throw new Error('无法锁定 PTY 运维命令追踪，命令尚未发送')
+    }
+    if (execution.settled || active !== execution) return
+    const transport = submitCommand(frame.command, {
+      holdSuppression: execution.plan.frames.length > 1 &&
+        frame.executesOperation !== true && options.cleanup !== true,
+      cleanup: options.cleanup === true
+    })
+    if (!transport || typeof transport.accepted?.then !== 'function' ||
+      typeof transport.written?.then !== 'function') {
+      throw new Error('PTY 运维命令未能发送')
+    }
+    execution.transport = transport
+    Promise.resolve(transport.accepted).then(() => {
+      if (execution.frameGeneration !== frameGeneration) return
+      if (execution.settled && execution.cancelRequested && recoveryLocked &&
+        lateRecovery?.owner === execution.owner) {
+        execution.transportAccepted = true
+        armAcceptedCancellationRecovery(execution)
+        return
+      }
+      if (active !== execution || execution.settled) return
+      execution.submitted = true
+      execution.transportAccepted = true
+      if (execution.cancelRequested && !execution.planCleanupStarted) {
+        armAcceptedCancellationRecovery(execution)
+        if (!execution.settled) settleIfComplete(execution)
+        return
+      }
+      if (!execution.timeoutHandle && !execution.planCleanupStarted) {
+        execution.timeoutHandle = setTimer(
+          () => requestCancellation(execution, 'timeout'),
+          execution.timeoutMs
+        )
+      }
+    }).catch(error => {
+      if (execution.frameGeneration !== frameGeneration) return
+      if (execution.settled) {
+        if (execution.cancelRequested &&
+          isDefinitivePreAcceptRejection(error) &&
+          recoveryLocked && lateRecovery?.owner === execution.owner) {
+          const recoveryOwner = lateRecovery.owner
+          lateRecovery = null
+          recoveryLocked = false
+          if (leaseOwner === recoveryOwner) {
+            leaseOwner = ''
+            safeNotifyIdle()
+          }
+          firstIdentity = null
+          safeCancelSubmissionOutput()
+        }
+        return
+      }
+      if (execution.planCleanupStarted) {
+        execution.frameError = error
+        recoveryLocked = true
+        rejectExecution(
+          execution,
+          cancellationCleanupUnknownError(execution.cancelError, error),
+          { cancelExpected: true, preserveSubmissionOutput: true }
+        )
+        return
+      }
+      if (execution.cancelRequested) {
+        if (isDefinitivePreAcceptRejection(error)) {
+          const currentFrame = execution.plan.frames[execution.frameIndex]
+          if (execution.plan.cleanup && execution.frameIndex > 0 &&
+            currentFrame?.executesOperation !== true) {
+            safeCancelSubmission(execution.submissionToken)
+            beginPlanCleanup(execution)
+            return
+          }
+          rejectExecution(execution, execution.cancelError, {
+            cancelExpected: true
+          })
+        }
+        return
+      }
+      rejectExecution(execution, error, { cancelExpected: true })
+    })
+    Promise.resolve(transport.written).catch(error => {
+      if (execution.frameGeneration !== frameGeneration) return
+      if (!execution.settled && !execution.cancelRequested) {
+        requestCancellation(execution, error)
+      }
+    })
+  }
+
+  function beginPlanCleanup (execution) {
+    clearTimer(execution.recoveryHandle)
+    clearTimer(execution.timeoutHandle)
+    execution.timeoutHandle = null
+    execution.planCleanupStarted = true
+    execution.cancelRequestedPromptSequence = promptSequence
+    try {
+      submitExecutionFrame(execution, execution.plan.cleanup, { cleanup: true })
+      beginRecoveryDeadline(execution)
+    } catch (error) {
+      recoveryLocked = true
+      rejectExecution(
+        execution,
+        cancellationCleanupUnknownError(execution.cancelError, error),
+        { cancelExpected: true, preserveSubmissionOutput: true }
+      )
+    }
+  }
+
   async function execute (owner, options = {}) {
     if (!leaseOwner || leaseOwner !== owner) {
       throw new Error('PTY 运维任务租约已经失效')
@@ -383,25 +710,29 @@ export function createManagedPtyTaskController ({
     const protocol = requireManagedProtocol(options.protocol, defaultProtocol)
     const token = protocol.createToken()
     const request = options.request || { script: options.script }
-    const command = requireManagedCommand(
-      protocol.buildCommand({ token, request })
-    )
+    const plan = requireManagedExecutionPlan(protocol, token, request)
     const parser = requireManagedParser(
       protocol.createParser({ token, request })
     )
-    const submissionToken = expectSubmission(command)
-    if (!submissionToken) {
-      throw new Error('无法建立 PTY 运维命令追踪，命令尚未发送')
-    }
 
     return new Promise((resolve, reject) => {
       const execution = {
         owner,
-        command,
+        command: '',
         protocol,
         request,
         parser,
-        submissionToken,
+        plan,
+        frame: null,
+        frameIndex: -1,
+        frameGeneration: 0,
+        frameAcknowledged: false,
+        frameAckBuffer: '',
+        frameError: null,
+        planCleanupStarted: false,
+        submissionToken: '',
+        timeoutMs,
+        onChunk: options.onChunk,
         signal: options.signal,
         abortHandler: null,
         outputSubscription: null,
@@ -422,6 +753,7 @@ export function createManagedPtyTaskController ({
         commandExitCode: null,
         commandFinishedPromptSequence: 0,
         promptReturned: false,
+        commandInputReady: false,
         settled: false,
         resolve,
         reject
@@ -437,69 +769,13 @@ export function createManagedPtyTaskController ({
         execution.outputSubscription = subscribeOutput(chunk => {
           if (active !== execution || execution.settled) return
           try {
-            const parsed = parser.push(chunk)
-            if (!validateIdentity(execution)) return
-            for (const output of parsed?.output || []) options.onChunk?.(output)
+            consumeExecutionOutput(execution, chunk)
             settleIfComplete(execution)
           } catch (error) {
             requestCancellation(execution, error)
           }
         })
-        if (armSubmission(submissionToken) !== true) {
-          throw new Error('无法锁定 PTY 运维命令追踪，命令尚未发送')
-        }
-        if (execution.settled) return
-        const transport = submitCommand(command)
-        if (!transport || typeof transport.accepted?.then !== 'function' ||
-          typeof transport.written?.then !== 'function') {
-          throw new Error('PTY 运维命令未能发送')
-        }
-        execution.transport = transport
-        Promise.resolve(transport.accepted).then(() => {
-          execution.submitted = true
-          execution.transportAccepted = true
-          if (execution.cancelRequested) {
-            armAcceptedCancellationRecovery(execution)
-            if (!execution.settled) settleIfComplete(execution)
-            return
-          }
-          if (execution.settled) return
-          execution.timeoutHandle = setTimer(
-            () => requestCancellation(execution, 'timeout'),
-            timeoutMs
-          )
-        }).catch(error => {
-          if (execution.settled) {
-            if (execution.cancelRequested &&
-              isDefinitivePreAcceptRejection(error) &&
-              recoveryLocked && lateRecovery?.owner === execution.owner) {
-              const recoveryOwner = lateRecovery.owner
-              lateRecovery = null
-              recoveryLocked = false
-              if (leaseOwner === recoveryOwner) {
-                leaseOwner = ''
-                safeNotifyIdle()
-              }
-              firstIdentity = null
-              safeCancelSubmissionOutput()
-            }
-            return
-          }
-          if (execution.cancelRequested) {
-            if (isDefinitivePreAcceptRejection(error)) {
-              rejectExecution(execution, execution.cancelError, {
-                cancelExpected: true
-              })
-            }
-            return
-          }
-          rejectExecution(execution, error, { cancelExpected: true })
-        })
-        Promise.resolve(transport.written).catch(error => {
-          if (!execution.settled && !execution.cancelRequested) {
-            requestCancellation(execution, error)
-          }
-        })
+        submitExecutionFrame(execution, plan.frames[0])
       } catch (error) {
         rejectExecution(execution, error, { cancelExpected: true })
       }
@@ -597,6 +873,14 @@ export function createManagedPtyTaskController ({
     return true
   }
 
+  function handleCommandInputStarted () {
+    const execution = active
+    if (!execution || !execution.promptReturned) return false
+    execution.commandInputReady = true
+    settleIfComplete(execution)
+    return true
+  }
+
   function handleUserInput (data) {
     if (pendingAcquireOwner && !leaseOwner) {
       userInputGeneration += 1
@@ -635,6 +919,7 @@ export function createManagedPtyTaskController ({
     acquire,
     handleCommandFinished,
     handlePromptStarted,
+    handleCommandInputStarted,
     handleUserInput,
     invalidate,
     isBusy: () => Boolean(leaseOwner || pendingAcquireOwner),

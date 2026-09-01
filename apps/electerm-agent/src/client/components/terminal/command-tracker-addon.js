@@ -44,6 +44,7 @@ export class CommandTrackerAddon {
 
     // Event callbacks for shell integration events
     this._onPromptStarted = null // Called when OSC 633;A is received
+    this._onCommandInputStarted = null // Called when OSC 633;B is received
     this._onCommandExecuted = null // Called when OSC 633;E is received
     this._onCommandFinished = null // Called when OSC 633;D is received
     this._onCwdChanged = null // Called when OSC 633;P;Cwd= is received
@@ -68,6 +69,10 @@ export class CommandTrackerAddon {
    */
   onPromptStarted (callback) {
     this._onPromptStarted = callback
+  }
+
+  onCommandInputStarted (callback) {
+    this._onCommandInputStarted = callback
   }
 
   /**
@@ -147,6 +152,7 @@ export class CommandTrackerAddon {
           submission => submission.inputGeneration === this._inputGeneration
         )
         this._captureInputAnchor()
+        this._onCommandInputStarted?.()
         return true
 
       case 'C': // Command execution started
