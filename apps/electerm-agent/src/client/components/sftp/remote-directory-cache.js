@@ -11,6 +11,7 @@ function cloneDirectoryValue (value) {
 export function buildRemoteDirectoryCacheKey (identity = {}) {
   return [
     identity.sshSessionGeneration,
+    identity.sshTerminalPid,
     identity.host,
     Number(identity.port || 22),
     identity.username,

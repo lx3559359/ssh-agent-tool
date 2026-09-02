@@ -39,7 +39,10 @@ import getProxy from '../../common/get-proxy'
 import { createTerm } from '../terminal/terminal-apis'
 import message from '../common/message'
 import * as ls from '../../common/safe-local-storage'
-import { isAuthoritativeRemoteMissingError } from './remote-file-errors.js'
+import {
+  classifyRemoteFileRecoveryError,
+  isAuthoritativeRemoteMissingError
+} from './remote-file-errors.js'
 import {
   assertRootSftpRecoveryBinding,
   assertSftpRecoveryIdentityProvenance,
@@ -85,6 +88,7 @@ import {
   getSftpEntryReadinessSnapshot,
   initializeSftpEntryReadiness,
   initializeRemoteFileGeneration,
+  invalidateSftpEntryRemoteSnapshot,
   isCurrentRemoteFileGeneration,
   quiesceSftpEntryTransfers,
   removeDeletedRemoteEntries,
@@ -2455,14 +2459,6 @@ export default class Sftp extends Component {
   }
 
   initData = (terminalId, port, sshSessionGeneration, sshTerminalPid) => {
-    const previousGeneration = String(this.sshSessionGeneration || '')
-    const nextGeneration = String(sshSessionGeneration || '')
-    if (previousGeneration !== nextGeneration) {
-      this.remoteDirectoryCache?.clear?.()
-      this.remoteDirectoryCachePaintEpoch =
-        (this.remoteDirectoryCachePaintEpoch || 0) + 1
-      this.visibleRemoteDirectoryCacheKey = ''
-    }
     return bindSftpEntryRemoteSession(this, {
       terminalId,
       port,
@@ -3155,6 +3151,7 @@ export default class Sftp extends Component {
     commitList
   }) => [
     String(this.sshSessionGeneration || ''),
+    String(this.sshTerminalPid || ''),
     normalizeRemotePath(remotePath || ''),
     returnList ? 'return' : 'paint',
     commitList ? 'commit' : 'no-commit'
@@ -3303,6 +3300,7 @@ export default class Sftp extends Component {
       }
       cacheKey = buildRemoteDirectoryCacheKey({
         sshSessionGeneration: String(this.sshSessionGeneration || ''),
+        sshTerminalPid: String(this.sshTerminalPid || ''),
         host: tab.host,
         port: tab.port || this.port || 22,
         username,
@@ -3729,48 +3727,11 @@ export default class Sftp extends Component {
         })
       }
       const normalizedError = this.normalizeSftpError(error)
-      const errorChain = []
-      let currentError = error
-      while (currentError && errorChain.length < 8 &&
-        !errorChain.includes(currentError)) {
-        errorChain.push(currentError)
-        currentError = currentError.cause
-      }
-      const errorCodes = errorChain.map(item => (
-        String(item?.code ?? '').trim().toUpperCase()
-      ))
-      const errorDetails = errorChain.map(item => (
-        `${String(item?.name || '')} ${String(item?.message || '')}`
-      )).join(' ')
-      const accessDenied = errorCodes.some(code => [
-        '3',
-        'EACCES',
-        'EPERM',
-        'PERMISSION_DENIED',
-        'SSH_FX_PERMISSION_DENIED',
-        'SFTP_PERMISSION_DENIED'
-      ].includes(code) || code.endsWith('_PERMISSION_DENIED')) ||
-        /permission denied|access denied|权限|拒绝/i.test(errorDetails)
-      const identityFailure = errorCodes.some(code => (
-        code.startsWith('REMOTE_FILE_IDENTITY_')
-      )) || /(?:identity|身份|端点).*(?:unavailable|unknown|mismatch|changed|switch|无法确认|不可用|未知|不一致|变化|切换)/i
-        .test(errorDetails)
-      const transientTransportFailure = errorCodes.some(code => [
-        'ECONNRESET',
-        'ECONNABORTED',
-        'EPIPE',
-        'ETIMEDOUT',
-        'ENETDOWN',
-        'ENETRESET',
-        'ENETUNREACH',
-        'EHOSTDOWN',
-        'EHOSTUNREACH',
-        'ENOTCONN'
-      ].includes(code))
+      const failure = classifyRemoteFileRecoveryError(error)
       const sameVisibleIdentity = Boolean(cacheKey) &&
         this.visibleRemoteDirectoryCacheKey === cacheKey
-      const safeIdentityFallback = !accessDenied && !identityFailure &&
-        transientTransportFailure && sameVisibleIdentity
+      const safeIdentityFallback = !failure.failClosed &&
+        failure.transientTransportFailure && sameVisibleIdentity
       const fallbackRemote = safeIdentityFallback
         ? (cachedRemoteFound ? cachedRemote : oldRemote)
         : []
@@ -3793,7 +3754,7 @@ export default class Sftp extends Component {
         update.selectedFiles = new Set()
         update.lastClickedFile = null
       }
-      if (identityFailure) {
+      if (failure.identityFailure) {
         this.remoteFileIdentityEpoch =
           (this.remoteFileIdentityEpoch || 0) + 1
         update.remoteFileIdentity = {
@@ -4011,10 +3972,7 @@ export default class Sftp extends Component {
   }
 
   handleReloadRemoteSftp = async () => {
-    this.remoteDirectoryCache?.clear?.()
-    this.remoteDirectoryCachePaintEpoch =
-      (this.remoteDirectoryCachePaintEpoch || 0) + 1
-    this.visibleRemoteDirectoryCacheKey = ''
+    invalidateSftpEntryRemoteSnapshot(this, { remoteLoading: true })
     this.invalidateRemoteFileIdentity()
     this.sftpSafetyProgressHandlers.clear()
     this.sftpSafetyAdapter.discardAllPreparedProofs()
@@ -4034,11 +3992,7 @@ export default class Sftp extends Component {
     this.clearTransferSafetySessionPins?.()
     if (settlementError) throw settlementError
     if (!activateRemoteFileGeneration(this, drain.generation)) return
-    this.setState({
-      remoteLoading: true,
-      remote: [],
-      remoteFileTree: new Map()
-    }, () => {
+    this.setState({ remoteLoading: true }, () => {
       if (isCurrentRemoteFileGeneration(this, drain.generation)) {
         this.runSftpBackgroundTask(() => this.initRemoteAll())
       }

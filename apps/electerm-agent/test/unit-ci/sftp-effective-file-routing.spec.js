@@ -342,7 +342,10 @@ function createEntryHarness ({
   installClassField(entry, 'readRemoteFile')
   installClassField(entry, 'createRemoteFile')
   return importModule('src/client/components/sftp/sftp-entry-lifecycle.js')
-    .then(lifecycle => {
+    .then(async lifecycle => {
+      const remoteFileErrors = await importModule(
+        'src/client/components/sftp/remote-file-errors.js'
+      )
       installClassField(entry, 'captureRemoteFileIdentityToken')
       installClassField(entry, 'isCurrentRemoteFileIdentityToken', {
         isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration
@@ -401,6 +404,8 @@ function createEntryHarness ({
         recordPerformanceDuration,
         remoteFileOperationUnmounted,
         remoteFileOperationStale,
+        classifyRemoteFileRecoveryError:
+          remoteFileErrors.classifyRemoteFileRecoveryError,
         replaceSftpEntryTimer: replaceTimer || (() => 1),
         unexpectedPacketErrorDesc: 'unexpected packet',
         sftpRetryInterval: 1
@@ -865,6 +870,82 @@ test('root to login refresh selects cache keys from each operation identity', as
   })), identities)
 })
 
+test('remote list request identity changes when only terminal PID changes', async () => {
+  const { entry } = await createEntryHarness({
+    acquire: async () => { throw new Error('unused') }
+  })
+  installClassField(entry, 'buildRemoteListRequestKey', {
+    normalizeRemotePath: value => value
+  })
+  entry.sshSessionGeneration = 'generation-1'
+  entry.sshTerminalPid = '100'
+  const first = entry.buildRemoteListRequestKey({
+    remotePath: '/root-only',
+    returnList: false,
+    commitList: false
+  })
+
+  entry.sshTerminalPid = '200'
+  const second = entry.buildRemoteListRequestKey({
+    remotePath: '/root-only',
+    returnList: false,
+    commitList: false
+  })
+
+  assert.notEqual(first, second)
+})
+
+test('PID-only rebind cannot recover the prior terminal cached snapshot', async () => {
+  const transient = Object.assign(new Error('transport reset'), {
+    code: 'ECONNRESET'
+  })
+  let acquisition = 0
+  const acquire = async ({ onIdentity }) => {
+    const attempt = ++acquisition
+    await onIdentity({ loginUsername: 'hik', ...rootRuntimeIdentity })
+    return {
+      runtimeIdentity: rootRuntimeIdentity,
+      backend: {
+        list: async () => {
+          if (attempt > 1) throw transient
+          return [{ name: 'app.conf', type: 'f', size: 12 }]
+        }
+      },
+      release: async () => true
+    }
+  }
+  const { entry } = await createEntryHarness({ acquire })
+  entry.sshSessionGeneration = 'generation-1'
+  entry.sshTerminalPid = '100'
+  const entries = new Map()
+  const lookupKeys = []
+  entry.remoteDirectoryCache = {
+    get: key => {
+      lookupKeys.push(key)
+      return entries.has(key)
+        ? { value: structuredClone(entries.get(key)) }
+        : null
+    },
+    set: (key, value) => entries.set(key, structuredClone(value)),
+    clear: () => entries.clear()
+  }
+
+  await entry.remoteList(false, '/root-only')
+  assert.deepEqual(entry.state.remote.map(file => file.name), ['app.conf'])
+  entry.state.selectedType = 'remote'
+  entry.state.selectedFiles = new Set([entry.state.remote[0].id])
+  entry.state.lastClickedFile = entry.state.remote[0].id
+
+  entry.sshTerminalPid = '200'
+  await assert.rejects(
+    entry.remoteList(false, '/root-only', undefined, { rethrow: true }),
+    error => error === transient
+  )
+
+  assert.notEqual(lookupKeys[0], lookupKeys[1])
+  assertRemoteSnapshotCleared(entry)
+})
+
 test('unknown identity clears a visible privileged directory snapshot', async () => {
   const unavailable = Object.assign(new Error('identity unavailable'), {
     code: 'REMOTE_FILE_IDENTITY_UNAVAILABLE'
@@ -1186,6 +1267,129 @@ test('unsafe failure invalidates a delayed cached paint callback', async () => {
     identityChannel: 'unknown',
     identityStatus: 'unavailable'
   })
+})
+
+test('deep and structured sensitive failures never recover a visible cache', async t => {
+  const deepCause = (() => {
+    let nested = Object.assign(new Error(), {
+      code: 'REMOTE_FILE_IDENTITY_UNKNOWN'
+    })
+    for (let index = 0; index < 8; index += 1) {
+      nested = Object.assign(new Error(), { cause: nested })
+    }
+    return Object.assign(new Error(), {
+      code: 'ECONNRESET',
+      cause: nested
+    })
+  })()
+  const reversedDeep = (() => {
+    let nested = Object.assign(new Error(), { code: 'ECONNRESET' })
+    for (let index = 0; index < 9; index += 1) {
+      nested = Object.assign(new Error(), { cause: nested })
+    }
+    return Object.assign(new Error(), {
+      code: 'REMOTE_FILE_IDENTITY_CHANGED',
+      cause: nested
+    })
+  })()
+  const cyclic = Object.assign(new Error(), { code: 'ECONNRESET' })
+  const cyclicCause = new Error()
+  cyclic.cause = cyclicCause
+  cyclicCause.cause = cyclic
+  cyclicCause.cleanupError = Object.assign(new Error(), {
+    code: 'SSH_FX_PERMISSION_DENIED'
+  })
+  const releaseIdentity = Object.assign(new Error(), {
+    code: 'ECONNRESET',
+    releaseError: Object.assign(new Error(), {
+      code: 'REMOTE_FILE_IDENTITY_MISMATCH'
+    })
+  })
+  const releasePermission = Object.assign(new Error(), {
+    code: 'ECONNRESET',
+    releaseError: Object.assign(new Error(), {
+      code: 'PERMISSION_DENIED'
+    })
+  })
+  const releaseUncertain = Object.assign(new Error(), {
+    code: 'ECONNRESET',
+    releaseError: Object.assign(new Error(), { code: 'ECONNRESET' })
+  })
+  const cleanupUncertain = Object.assign(new Error(), {
+    code: 'ECONNRESET',
+    cleanupAttempted: true,
+    cleanupSucceeded: false
+  })
+  const traversalOverflow = (() => {
+    let nested = new Error()
+    for (let index = 0; index < 80; index += 1) {
+      nested = Object.assign(new Error(), { cause: nested })
+    }
+    nested.code = 'ECONNRESET'
+    return nested
+  })()
+  const cases = [
+    ['depth-nine identity', deepCause, true],
+    ['reversed deep identity', reversedDeep, true],
+    ['cyclic cleanup permission', cyclic, false],
+    ['release identity', releaseIdentity, true],
+    ['release permission', releasePermission, false],
+    ['release uncertainty', releaseUncertain, false],
+    ['cleanup uncertainty', cleanupUncertain, false],
+    ['traversal overflow', traversalOverflow, false]
+  ]
+
+  for (const [name, failure, identityFailure] of cases) {
+    await t.test(name, async () => {
+      const acquire = async ({ onIdentity }) => {
+        await onIdentity({ loginUsername: 'hik', ...rootRuntimeIdentity })
+        return {
+          runtimeIdentity: rootRuntimeIdentity,
+          backend: { list: async () => { throw failure } },
+          release: async () => true
+        }
+      }
+      const { entry } = await createEntryHarness({ acquire })
+      const rootFile = {
+        id: 'root-app-conf',
+        name: 'app.conf',
+        path: '/root-only',
+        type: 'remote'
+      }
+      entry.state.remote = [rootFile]
+      entry.state.remoteFileTree = entry.buildTree(entry.state.remote)
+      entry.state.selectedType = 'remote'
+      entry.state.selectedFiles = new Set([rootFile.id])
+      entry.state.lastClickedFile = rootFile.id
+      entry.state.remoteFileIdentity = {
+        loginUsername: 'hik',
+        effectiveUid: '0',
+        effectiveUsername: 'root',
+        channel: 'pty-root'
+      }
+      const identityEpoch = entry.remoteFileIdentityEpoch +
+        (identityFailure ? 1 : 0)
+      entry.remoteDirectoryCache = {
+        get: key => {
+          entry.visibleRemoteDirectoryCacheKey = key
+          return { value: [structuredClone(rootFile)] }
+        },
+        set: () => {},
+        clear: () => {}
+      }
+
+      await assert.rejects(
+        entry.remoteList(false, '/root-only', undefined, { rethrow: true }),
+        error => error === failure
+      )
+
+      assertRemoteSnapshotCleared(entry, {
+        identityEpoch,
+        identityChannel: identityFailure ? 'unknown' : 'pty-root',
+        identityStatus: identityFailure ? 'unavailable' : 'idle'
+      })
+    })
+  }
 })
 
 test('same identity refresh can recover from its own cached snapshot', async () => {
@@ -2819,6 +3023,8 @@ test('overlapping reloads drain the old generation and only latest initializes',
   installClassField(entry, 'handleReloadRemoteSftp', {
     activateRemoteFileGeneration: lifecycle.activateRemoteFileGeneration,
     drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
+    invalidateSftpEntryRemoteSnapshot:
+      lifecycle.invalidateSftpEntryRemoteSnapshot,
     isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration
   })
 
@@ -2826,17 +3032,75 @@ test('overlapping reloads drain the old generation and only latest initializes',
   const latestReload = entry.handleReloadRemoteSftp()
   await Promise.resolve()
   assert.deepEqual(calls, [
-    'invalidate-identity', 'clear', 'discard', 'release',
-    'invalidate-identity', 'clear', 'discard'
+    ['state', true], 'invalidate-identity', 'clear', 'discard', 'release',
+    ['state', true], 'invalidate-identity', 'clear', 'discard'
   ])
   releaseGate.resolve()
   await Promise.all([firstReload, latestReload])
 
   assert.deepEqual(calls, [
-    'invalidate-identity', 'clear', 'discard', 'release',
-    'invalidate-identity', 'clear', 'discard', 'released', 'destroy',
+    ['state', true], 'invalidate-identity', 'clear', 'discard', 'release',
+    ['state', true], 'invalidate-identity', 'clear', 'discard',
+    'released', 'destroy',
     ['state', true], 'init'
   ])
+})
+
+test('reload clears the visible snapshot before a slow drain settles', async () => {
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  const releaseGate = deferred()
+  const staleFile = {
+    id: 'root-app-conf',
+    name: 'app.conf',
+    path: '/root-only',
+    type: 'remote'
+  }
+  const entry = {
+    sftp: null,
+    remoteFileUnmounted: false,
+    visibleRemoteDirectoryCacheKey: 'root-cache-key',
+    remoteDirectoryCachePaintEpoch: 7,
+    state: {
+      remote: [staleFile],
+      remoteFileTree: new Map([[staleFile.id, staleFile]]),
+      selectedFiles: new Set([staleFile.id]),
+      lastClickedFile: staleFile.id
+    },
+    remoteDirectoryCache: { clear: () => {} },
+    invalidateRemoteFileIdentity: () => {},
+    remoteFileOperations: new Set([{
+      async release () { await releaseGate.promise }
+    }]),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationBackends: new Map(),
+    sftpSafetyProgressHandlers: { clear: () => {} },
+    sftpSafetyAdapter: { discardAllPreparedProofs: () => {} },
+    setState (update, callback) {
+      const next = typeof update === 'function' ? update(this.state) : update
+      if (next) Object.assign(this.state, next)
+      callback?.()
+    },
+    initRemoteAll: () => {},
+    runSftpBackgroundTask: task => lifecycle.runSftpBackgroundTask(task)
+  }
+  installClassField(entry, 'handleReloadRemoteSftp', {
+    activateRemoteFileGeneration: lifecycle.activateRemoteFileGeneration,
+    drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
+    invalidateSftpEntryRemoteSnapshot:
+      lifecycle.invalidateSftpEntryRemoteSnapshot,
+    isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration
+  })
+
+  const reload = entry.handleReloadRemoteSftp()
+  await Promise.resolve()
+
+  assertRemoteSnapshotCleared(entry)
+  assert.equal(entry.remoteDirectoryCachePaintEpoch, 8)
+
+  releaseGate.resolve()
+  await reload
 })
 
 test('reload callback observes rejected initialization without an unhandled promise', async () => {
@@ -2863,6 +3127,8 @@ test('reload callback observes rejected initialization without an unhandled prom
   installClassField(entry, 'handleReloadRemoteSftp', {
     activateRemoteFileGeneration: lifecycle.activateRemoteFileGeneration,
     drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
+    invalidateSftpEntryRemoteSnapshot:
+      lifecycle.invalidateSftpEntryRemoteSnapshot,
     isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration
   })
 

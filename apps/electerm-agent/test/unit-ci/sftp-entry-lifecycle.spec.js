@@ -881,6 +881,54 @@ test('session rebind reports rejected cleanup after destroying the stale transpo
   ])
 })
 
+test('PID-only session rebind clears the visible snapshot before drain settles', async () => {
+  const { bindSftpEntryRemoteSession } = await loadModule()
+  const releaseGate = deferred()
+  const staleFile = { id: 'root-app-conf', name: 'app.conf' }
+  const entry = {
+    sshSessionGeneration: 'generation-1',
+    sshTerminalPid: '100',
+    visibleRemoteDirectoryCacheKey: 'root-cache-key',
+    remoteDirectoryCachePaintEpoch: 7,
+    state: {
+      remote: [staleFile],
+      remoteFileTree: new Map([[staleFile.id, staleFile]]),
+      selectedFiles: new Set([staleFile.id]),
+      lastClickedFile: staleFile.id
+    },
+    remoteDirectoryCache: { clear: () => {} },
+    setState (update) {
+      Object.assign(this.state, update)
+    },
+    remoteFileOperations: new Set([{
+      async release () { await releaseGate.promise }
+    }]),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationBackends: new Map(),
+    shouldRenderRemote: () => true,
+    shouldInitializeRemoteOnBind: () => false,
+    initLocalAll: () => {}
+  }
+
+  const binding = bindSftpEntryRemoteSession(entry, {
+    terminalId: 'tab-1',
+    port: 41001,
+    sshSessionGeneration: 'generation-1',
+    sshTerminalPid: '200'
+  })
+  await Promise.resolve()
+
+  assert.deepEqual(entry.state.remote, [])
+  assert.deepEqual(Array.from(entry.state.remoteFileTree), [])
+  assert.deepEqual(Array.from(entry.state.selectedFiles), [])
+  assert.equal(entry.state.lastClickedFile, null)
+  assert.equal(entry.visibleRemoteDirectoryCacheKey, '')
+  assert.equal(entry.remoteDirectoryCachePaintEpoch, 8)
+
+  releaseGate.resolve()
+  await binding
+})
+
 test('stale remote initialization cannot write back after dispose and new init', async () => {
   const {
     beginSftpEntryRemoteTask,
@@ -1002,11 +1050,12 @@ test('SFTP entry validates the latest lifecycle before transport and list writes
   assert.match(method, /updateRemoteList\(remote, remotePath, sftp, task\)/)
 })
 
-test('SFTP entry clears directory cache on unmount rebind and explicit reconnect', () => {
+test('SFTP entry invalidates cache for full session rebind and reconnect', () => {
   const source = fs.readFileSync(path.resolve(
     __dirname,
     '../../src/client/components/sftp/sftp-entry.jsx'
   ), 'utf8')
+  const lifecycleSource = fs.readFileSync(modulePath, 'utf8')
   const unmountStart = source.indexOf('componentWillUnmount ()')
   const unmountEnd = source.indexOf('\n  initFtpData =', unmountStart)
   const initStart = source.indexOf('initData = (')
@@ -1018,16 +1067,21 @@ test('SFTP entry clears directory cache on unmount rebind and explicit reconnect
   const reload = source.slice(reloadStart, reloadEnd)
 
   assert.match(unmount, /remoteDirectoryCache\?\.clear\?\.\(\)/)
+  assert.match(init, /sshSessionGeneration/)
+  assert.match(init, /sshTerminalPid/)
+  assert.doesNotMatch(init, /remoteDirectoryCache/)
   assert.match(
-    init,
-    /String\(this\.sshSessionGeneration \|\| ''\)/
+    lifecycleSource,
+    /String\(entry\.sshSessionGeneration \|\| ''\)\.trim\(\) !== nextGeneration[\s\S]{0,120}String\(entry\.sshTerminalPid \|\| ''\)\.trim\(\) !== nextTerminalPid/
   )
   assert.match(
-    init,
-    /String\(sshSessionGeneration \|\| ''\)/
+    lifecycleSource,
+    /if \(terminalSessionChanged\) \{\s*invalidateSftpEntryRemoteSnapshot/
   )
-  assert.match(init, /remoteDirectoryCache\?\.clear\?\.\(\)/)
-  assert.match(reload, /remoteDirectoryCache\?\.clear\?\.\(\)/)
+  assert.match(
+    reload,
+    /invalidateSftpEntryRemoteSnapshot\(this, \{ remoteLoading: true \}\)/
+  )
 })
 
 test('SFTP client disposal detaches first and absorbs destroy rejection', async () => {

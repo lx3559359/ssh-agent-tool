@@ -14,6 +14,7 @@ function identity (overrides = {}) {
     port: 22,
     username: 'root',
     sshSessionGeneration: 'session-1',
+    sshTerminalPid: '100',
     channel: 'sftp',
     effectiveUid: '0',
     effectiveUsername: 'root',
@@ -76,6 +77,7 @@ test('directory cache key isolates SSH generations and effective identities', as
   const baseline = buildRemoteDirectoryCacheKey(identity())
   const variants = [
     identity({ sshSessionGeneration: 'session-2' }),
+    identity({ sshTerminalPid: '200' }),
     identity({ host: 'other.invalid' }),
     identity({ port: 2200 }),
     identity({ username: 'login-user' }),

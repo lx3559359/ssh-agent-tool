@@ -47,6 +47,28 @@ export function initializeSftpEntryReadiness (entry) {
   return readiness
 }
 
+export function invalidateSftpEntryRemoteSnapshot (entry, options = {}) {
+  if (options.clearCache !== false) entry.remoteDirectoryCache?.clear?.()
+  entry.remoteDirectoryCachePaintEpoch =
+    (entry.remoteDirectoryCachePaintEpoch || 0) + 1
+  entry.visibleRemoteDirectoryCacheKey = ''
+  if (options.clearVisible === false || typeof entry.setState !== 'function') {
+    return false
+  }
+  const remoteLoading = options.remoteLoading === true
+  entry.setState({
+    remote: [],
+    remoteFileTree: new Map(),
+    selectedFiles: new Set(),
+    lastClickedFile: null,
+    onEditFile: false,
+    remoteLoading,
+    remoteRefreshState: remoteLoading ? 'refreshing' : 'idle',
+    remoteRefreshError: ''
+  })
+  return true
+}
+
 function trackSftpEntryPromise (entry, key, operation) {
   const readiness = initializeSftpEntryReadiness(entry)
   const tasks = readiness[key]
@@ -617,7 +639,7 @@ export function disposeSftpEntryClient (entry) {
 }
 
 export async function reconnectSftpEntryRemote (entry) {
-  entry.remoteDirectoryCache?.clear?.()
+  invalidateSftpEntryRemoteSnapshot(entry, { remoteLoading: true })
   const drain = drainRemoteFileGeneration(entry)
   await drain.promise
   if (!activateRemoteFileGeneration(entry, drain.generation)) return undefined
@@ -636,7 +658,7 @@ async function prepareSftpEntryRemoteSessionBinding (entry, binding = {}) {
     String(entry.sshSessionGeneration || '').trim() !== nextGeneration ||
     String(entry.sshTerminalPid || '').trim() !== nextTerminalPid
   if (terminalSessionChanged) {
-    entry.remoteDirectoryCache?.clear?.()
+    invalidateSftpEntryRemoteSnapshot(entry, { remoteLoading: false })
   }
   const drain = drainRemoteFileGeneration(entry)
   await drain.promise
