@@ -273,6 +273,7 @@ export default class Sftp extends Component {
     this.sftpReadyStartedAt = 0
     this.firstSftpReadyRecorded = false
     this.remoteDirectoryCache = createRemoteDirectoryCache()
+    this.visibleRemoteDirectoryCacheKey = ''
     this.remoteFileOperationBackends = new Map()
     this.remoteFileOperationBackendPins = new Map()
     this.transferSafetySessionPins = new Map()
@@ -380,6 +381,7 @@ export default class Sftp extends Component {
     this.remoteFileUnmounted = true
     this.disposeSftpReadiness?.()
     this.remoteDirectoryCache?.clear?.()
+    this.visibleRemoteDirectoryCacheKey = ''
     this.resetRemoteFileLeaseOutcome?.({ publish: false })
     const transferSettlement = this.quiesceActiveTransfers?.()
     const preparedDrain = transferSettlement
@@ -2454,6 +2456,7 @@ export default class Sftp extends Component {
     const nextGeneration = String(sshSessionGeneration || '')
     if (previousGeneration !== nextGeneration) {
       this.remoteDirectoryCache?.clear?.()
+      this.visibleRemoteDirectoryCacheKey = ''
     }
     return bindSftpEntryRemoteSession(this, {
       terminalId,
@@ -3175,7 +3178,7 @@ export default class Sftp extends Component {
     )
   }
 
-  applyCachedRemoteDirectory = (remote, generation, task) => {
+  applyCachedRemoteDirectory = (remote, generation, task, cacheKey) => {
     const startedAt = globalThis.performance?.now?.() ?? Date.now()
     let cachedPaintCommitted = false
     this.setState(prevState => {
@@ -3206,6 +3209,7 @@ export default class Sftp extends Component {
         !generation.accepting ||
         !isCurrentRemoteFileGeneration(this, generation) ||
         !isCurrentSftpEntryRemoteTask(this, task)) return
+      this.visibleRemoteDirectoryCacheKey = cacheKey
       let acceptance
       try {
         acceptance = recordPerformanceDuration(
@@ -3276,22 +3280,38 @@ export default class Sftp extends Component {
     let preparedProbe = null
     let cacheKey = ''
     let cachedRemote = null
+    let cachedRemoteFound = false
     const applyCachedDirectory = runtimeIdentity => {
+      const channel = String(runtimeIdentity?.channel || '').trim()
+      const effectiveUid = String(
+        runtimeIdentity?.effectiveUid || ''
+      ).trim()
+      const effectiveUsername = String(
+        runtimeIdentity?.effectiveUsername || ''
+      ).trim()
+      if (!channel || !effectiveUid || !effectiveUsername) {
+        throw new Error('远程目录缓存缺少本次文件操作的有效身份')
+      }
       cacheKey = buildRemoteDirectoryCacheKey({
         sshSessionGeneration: String(this.sshSessionGeneration || ''),
         host: tab.host,
         port: tab.port || this.port || 22,
         username,
-        channel: runtimeIdentity?.channel ||
-          this.state.remoteFileIdentity?.channel || 'unknown',
-        effectiveUsername: runtimeIdentity?.effectiveUsername ||
-          this.state.remoteFileIdentity?.effectiveUsername || '',
+        channel,
+        effectiveUid,
+        effectiveUsername,
         path: normalizeRemotePath(remotePath)
       })
       const cached = this.remoteDirectoryCache.get(cacheKey)
       if (cached && !returnList) {
+        cachedRemoteFound = true
         cachedRemote = cached.value
-        this.applyCachedRemoteDirectory(cachedRemote, generation, task)
+        this.applyCachedRemoteDirectory(
+          cachedRemote,
+          generation,
+          task,
+          cacheKey
+        )
       }
     }
     const abortPreparedProbe = async primaryError => {
@@ -3556,6 +3576,7 @@ export default class Sftp extends Component {
               renderCommit.settle(false)
               return
             }
+            this.visibleRemoteDirectoryCacheKey = cacheKey
             const renderedAt =
               globalThis.performance?.now?.() ?? Date.now()
             const acceptMetric = (name, duration, outcome) => {
@@ -3574,7 +3595,7 @@ export default class Sftp extends Component {
             const metricAcceptances = [acceptMetric(
               'sftp_refresh_ms',
               renderedAt - refreshStartedAt,
-              cachedRemote ? 'cache-refreshed' : 'completed'
+              cachedRemoteFound ? 'cache-refreshed' : 'completed'
             )]
             if (!this.firstSftpReadyRecorded) {
               this.firstSftpReadyRecorded = true
@@ -3616,6 +3637,7 @@ export default class Sftp extends Component {
         assertCurrentGeneration()
         applyCachedDirectory({
           channel: 'ftp',
+          effectiveUid: 'unknown',
           effectiveUsername: username
         })
         remote = await this.sftpList(sftp, remotePath)
@@ -3693,16 +3715,40 @@ export default class Sftp extends Component {
         })
       }
       const normalizedError = this.normalizeSftpError(error)
-      const fallbackRemote = cachedRemote || oldRemote
+      const accessDenied = [
+        3,
+        'EACCES',
+        'EPERM',
+        'SFTP_PERMISSION_DENIED'
+      ].includes(error?.code) ||
+        /permission denied|access denied|权限|拒绝/i.test(
+          String(error?.message || '')
+        )
+      const sameVisibleIdentity = Boolean(cacheKey) &&
+        this.visibleRemoteDirectoryCacheKey === cacheKey
+      const safeIdentityFallback = !accessDenied && Boolean(cacheKey) && (
+        cachedRemoteFound || sameVisibleIdentity
+      )
+      const fallbackRemote = safeIdentityFallback
+        ? (cachedRemoteFound ? cachedRemote : oldRemote)
+        : []
+      if (!safeIdentityFallback) {
+        this.visibleRemoteDirectoryCacheKey = ''
+      }
       const update = {
         remoteLoading: false,
         remote: fallbackRemote,
         remoteFileTree: this.buildTree(fallbackRemote, typeMap.remote),
         loadingSftp: false,
-        remoteRefreshState: cachedRemote ? 'stale-error' : 'idle',
+        remoteRefreshState: safeIdentityFallback && cachedRemoteFound
+          ? 'stale-error'
+          : 'idle',
         remoteRefreshError: normalizedError.message
       }
-      if (oldPath && !cachedRemote) {
+      if (!safeIdentityFallback) {
+        update.selectedFiles = new Set()
+      }
+      if (oldPath && !(safeIdentityFallback && cachedRemoteFound)) {
         update.remotePath = oldPath
         update.remotePathTemp = oldPath
       }
@@ -3906,6 +3952,7 @@ export default class Sftp extends Component {
 
   handleReloadRemoteSftp = async () => {
     this.remoteDirectoryCache?.clear?.()
+    this.visibleRemoteDirectoryCacheKey = ''
     this.invalidateRemoteFileIdentity()
     this.sftpSafetyProgressHandlers.clear()
     this.sftpSafetyAdapter.discardAllPreparedProofs()

@@ -101,7 +101,6 @@ function remoteFileCapabilityReleased () {
 }
 
 function projectCapabilityRuntimeIdentity (channel, identity) {
-  if (channel === 'sftp') return null
   if (!identity || typeof identity !== 'object' || Array.isArray(identity)) {
     throw new Error('远程文件 capability 运行身份无效')
   }
@@ -778,17 +777,18 @@ export function beginRemoteFileCapabilityProbe ({
         await context.assertCurrent(sftp)
         if (await verifyNativeRootSftp(sftp, context.loginUsername)) {
           await releasePreparedLease()
-          capability = createNativeSftpFileBackend(sftp)
-          capability = createGuardedRemoteFileCapability(
-            capability,
-            () => context.assertCurrent(sftp)
-          )
-          await onIdentity?.(Object.freeze({
+          const identityUpdate = Object.freeze({
             loginUsername: context.loginUsername,
             effectiveUid: '0',
             effectiveUsername: context.loginUsername,
             channel: 'sftp'
-          }))
+          })
+          capability = createNativeSftpFileBackend(sftp, identityUpdate)
+          capability = createGuardedRemoteFileCapability(
+            capability,
+            () => context.assertCurrent(sftp)
+          )
+          await onIdentity?.(identityUpdate)
           await context.assertCurrent(sftp)
           return capability
         }
@@ -809,7 +809,7 @@ export function beginRemoteFileCapabilityProbe ({
             })
         if (channel === 'sftp') {
           await releasePreparedLease()
-          capability = createNativeSftpFileBackend(sftp)
+          capability = createNativeSftpFileBackend(sftp, identityUpdate)
         } else {
           leaseOwner = 'capability'
           const backendLease = createBackendLease(pty)
@@ -909,14 +909,15 @@ export async function acquireRemoteFileCapability ({
     )
     if (await verifyNativeRootSftp(sftp, loginUsername)) {
       await assertCurrent()
-      capability = createNativeSftpFileBackend(sftp)
-      capability = createGuardedRemoteFileCapability(capability, assertCurrent)
-      await onIdentity?.(Object.freeze({
+      const identityUpdate = Object.freeze({
         loginUsername,
         effectiveUid: '0',
         effectiveUsername: loginUsername,
         channel: 'sftp'
-      }))
+      })
+      capability = createNativeSftpFileBackend(sftp, identityUpdate)
+      capability = createGuardedRemoteFileCapability(capability, assertCurrent)
+      await onIdentity?.(identityUpdate)
       await assertCurrent()
       return capability
     }
@@ -955,7 +956,7 @@ export async function acquireRemoteFileCapability ({
       const nativePty = pty
       pty = null
       await releasePty(nativePty)
-      capability = createNativeSftpFileBackend(sftp)
+      capability = createNativeSftpFileBackend(sftp, identityUpdate)
     } else {
       const backendLease = createBackendLease(pty)
       pty = null

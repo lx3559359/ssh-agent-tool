@@ -136,6 +136,12 @@ function resolveRemoteFileStatus ({
   return unavailable ? 'unavailable' : 'idle'
 }
 
+const rootRuntimeIdentity = Object.freeze({
+  channel: 'pty-root',
+  effectiveUid: '0',
+  effectiveUsername: 'root'
+})
+
 async function installRemoteFileIdentityFields (entry) {
   const lifecycle = await importModule(
     'src/client/components/sftp/sftp-entry-lifecycle.js'
@@ -329,6 +335,15 @@ function createEntryHarness ({
         task,
         { reportError: reportBackgroundError }
       )
+      installClassField(entry, 'applyCachedRemoteDirectory', {
+        isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration,
+        isCurrentSftpEntryRemoteTask: lifecycle.isCurrentSftpEntryRemoteTask,
+        preserveSftpDraftItems: (_oldRemote, remote) => remote,
+        reconcileSelectedFileIds: (_oldRemote, _remote, selected) => selected,
+        recordPerformanceDuration,
+        trackSftpEntryMetric: lifecycle.trackSftpEntryMetric,
+        typeMap
+      })
       installClassField(entry, 'remoteListUncoalesced', {
         Client: client || (async () => {
           throw new Error('unexpected SFTP client construction')
@@ -451,6 +466,11 @@ test('old client init cannot overwrite the explicitly activated next generation'
     destroy: async () => { newDestroys += 1 }
   }
   const acquire = async () => ({
+    runtimeIdentity: {
+      channel: 'pty-root',
+      effectiveUid: '0',
+      effectiveUsername: 'root'
+    },
     backend: { list: async () => [] },
     release: async () => true
   })
@@ -740,7 +760,11 @@ test('ordinary remote refresh performs one authoritative backend read', async ()
     })
     return {
       channel: 'pty-root',
-      runtimeIdentity: null,
+      runtimeIdentity: {
+        channel: 'pty-root',
+        effectiveUid: '0',
+        effectiveUsername: 'root'
+      },
       backend: capability.backend,
       sftp: capability.backend,
       release: capability.release
@@ -768,10 +792,182 @@ test('ordinary remote refresh performs one authoritative backend read', async ()
   ])
 })
 
+test('root to login refresh selects cache keys from each operation identity', async () => {
+  const identities = [{
+    channel: 'pty-root',
+    effectiveUid: '0',
+    effectiveUsername: 'root'
+  }, {
+    channel: 'sftp',
+    effectiveUid: 'unknown',
+    effectiveUsername: 'hik'
+  }]
+  let acquireIndex = 0
+  const acquire = async ({ onIdentity }) => {
+    const runtimeIdentity = identities[acquireIndex++]
+    await onIdentity({
+      loginUsername: 'hik',
+      ...runtimeIdentity
+    })
+    return {
+      runtimeIdentity,
+      backend: {
+        list: async () => [{
+          name: runtimeIdentity.effectiveUsername,
+          type: 'f',
+          size: 1
+        }]
+      },
+      release: async () => true
+    }
+  }
+  const { entry } = await createEntryHarness({ acquire })
+  const cacheKeys = []
+  entry.remoteDirectoryCache = {
+    get: () => null,
+    set: (key) => { cacheKeys.push(JSON.parse(key)) },
+    clear: () => {}
+  }
+
+  await entry.remoteList(false, '/root-only')
+  await entry.remoteList(false, '/root-only')
+
+  assert.deepEqual(cacheKeys.map(key => ({
+    channel: key.channel,
+    effectiveUid: key.effectiveUid,
+    effectiveUsername: key.effectiveUsername
+  })), identities)
+})
+
+test('unknown identity clears a visible privileged directory snapshot', async () => {
+  const unavailable = Object.assign(new Error('identity unavailable'), {
+    code: 'REMOTE_FILE_IDENTITY_UNAVAILABLE'
+  })
+  const { entry } = await createEntryHarness({
+    acquire: async () => { throw unavailable }
+  })
+  entry.state.remote = [{
+    id: 'root-app-conf',
+    name: 'app.conf',
+    path: '/root-only',
+    type: 'remote'
+  }]
+  entry.state.remoteFileIdentity = {
+    loginUsername: 'hik',
+    effectiveUid: '0',
+    effectiveUsername: 'root',
+    channel: 'pty-root'
+  }
+
+  await assert.rejects(
+    entry.remoteList(false, '/root-only', undefined, { rethrow: true }),
+    error => error === unavailable
+  )
+
+  assert.equal(entry.state.remote.length, 0)
+  assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
+  assert.equal(entry.state.remoteFileStatus, 'unavailable')
+})
+
+test('login denial after root clears stale privileged rows', async () => {
+  const rootIdentity = {
+    channel: 'pty-root',
+    effectiveUid: '0',
+    effectiveUsername: 'root'
+  }
+  const loginIdentity = {
+    channel: 'sftp',
+    effectiveUid: 'unknown',
+    effectiveUsername: 'hik'
+  }
+  const permissionError = Object.assign(new Error('permission denied'), {
+    code: 'EACCES'
+  })
+  let acquireIndex = 0
+  const acquire = async ({ onIdentity }) => {
+    const runtimeIdentity = acquireIndex++ === 0
+      ? rootIdentity
+      : loginIdentity
+    await onIdentity({ loginUsername: 'hik', ...runtimeIdentity })
+    return {
+      runtimeIdentity,
+      backend: {
+        list: async () => {
+          if (runtimeIdentity === loginIdentity) throw permissionError
+          return [
+            { name: 'app.conf', type: 'f', size: 12 },
+            { name: 'cancel.bin', type: 'f', size: 16 }
+          ]
+        }
+      },
+      release: async () => true
+    }
+  }
+  const { entry } = await createEntryHarness({ acquire })
+
+  await entry.remoteList(false, '/root-only')
+  assert.deepEqual(entry.state.remote.map(file => file.name), [
+    'app.conf', 'cancel.bin'
+  ])
+
+  await assert.rejects(
+    entry.remoteList(false, '/root-only', undefined, { rethrow: true }),
+    error => error === permissionError
+  )
+
+  assert.equal(entry.state.remote.length, 0)
+  assert.equal(entry.state.remoteFileIdentity.channel, 'sftp')
+})
+
+test('same identity refresh can recover from its own cached snapshot', async () => {
+  const runtimeIdentity = {
+    channel: 'pty-root',
+    effectiveUid: '0',
+    effectiveUsername: 'root'
+  }
+  const refreshError = Object.assign(new Error('temporary transport failure'), {
+    code: 'ECONNRESET'
+  })
+  let acquisition = 0
+  const acquire = async ({ onIdentity }) => {
+    const attempt = ++acquisition
+    await onIdentity({ loginUsername: 'hik', ...runtimeIdentity })
+    return {
+      runtimeIdentity,
+      backend: {
+        list: async () => {
+          if (attempt > 1) throw refreshError
+          return [{ name: 'app.conf', type: 'f', size: 12 }]
+        }
+      },
+      release: async () => true
+    }
+  }
+  const { entry } = await createEntryHarness({ acquire })
+  const entries = new Map()
+  entry.remoteDirectoryCache = {
+    get: key => entries.has(key)
+      ? { value: structuredClone(entries.get(key)) }
+      : null,
+    set: (key, value) => entries.set(key, structuredClone(value)),
+    clear: () => entries.clear()
+  }
+
+  await entry.remoteList(false, '/root-only')
+  await assert.rejects(
+    entry.remoteList(false, '/root-only', undefined, { rethrow: true }),
+    error => error === refreshError
+  )
+
+  assert.deepEqual(entry.state.remote.map(file => file.name), ['app.conf'])
+  assert.equal(entry.state.remoteRefreshState, 'stale-error')
+})
+
 test('ordinary remote refresh schedules no delayed compensation callback', async () => {
   const timers = []
   const reports = []
   const acquire = async () => ({
+    runtimeIdentity: rootRuntimeIdentity,
     backend: { list: async () => [] },
     release: async () => true
   })
@@ -794,6 +990,7 @@ test('remote list waits for committed paint and metric acceptance', async () => 
   const metricsAccepted = deferred()
   const metricNames = []
   const acquire = async () => ({
+    runtimeIdentity: rootRuntimeIdentity,
     backend: { list: async () => [] },
     release: async () => true
   })
@@ -881,6 +1078,7 @@ test('authoritative SSH list paints before capability release while readiness st
   const releaseFinished = deferred()
   const metricNames = []
   const acquire = async () => ({
+    runtimeIdentity: rootRuntimeIdentity,
     backend: {
       async list () {
         listStarted.resolve()
@@ -943,6 +1141,7 @@ test('post-paint release failure stays observable and blocks settled readiness',
       operationId: 'visible-list'
     })
     return {
+      runtimeIdentity: rootRuntimeIdentity,
       backend: { list: async () => [] },
       async release () {
         onLeaseState({
@@ -978,6 +1177,7 @@ test('post-paint release failure stays observable and blocks settled readiness',
 test('rejected performance acceptance never fails an SFTP list', async () => {
   const metricFailure = new Error('metrics unavailable')
   const acquire = async () => ({
+    runtimeIdentity: rootRuntimeIdentity,
     backend: { list: async () => [] },
     release: async () => true
   })
@@ -1130,6 +1330,7 @@ test('initial SSH home lookup overlaps remote capability acquisition', async () 
       backend: capability.backend,
       runtimeIdentity: {
         channel: 'sftp',
+        effectiveUid: 'unknown',
         effectiveUsername: 'hik'
       },
       release: capability.release
@@ -1172,6 +1373,7 @@ test('real entry bind chain keeps hidden SSH login lazy and initial full SFTP ea
       backend: backend.backend,
       runtimeIdentity: {
         channel: 'sftp',
+        effectiveUid: '1000',
         effectiveUsername: 'hik'
       },
       release: backend.release
@@ -1255,6 +1457,7 @@ test('explicit first open overlaps one prepared probe with native connect', asyn
         backend: backend.backend,
         runtimeIdentity: {
           channel: 'pty-root',
+          effectiveUid: '0',
           effectiveUsername: 'root'
         },
         release: backend.release
@@ -1757,6 +1960,7 @@ test('remote list forwards AbortSignal to backend list before releasing capabili
           return []
         }
       },
+      runtimeIdentity: rootRuntimeIdentity,
       release: async () => { calls.push(['release']) }
     }
   }
@@ -1920,7 +2124,7 @@ test('remote links rethrow abort capability transport protocol and permission er
   }
 })
 
-test('symlink metadata failure commits no partial remote list', async () => {
+test('symlink metadata denial commits no partial or stale remote list', async () => {
   const permissionError = Object.assign(new Error('permission denied'), {
     code: 'EACCES'
   })
@@ -1941,6 +2145,7 @@ test('symlink metadata failure commits no partial remote list', async () => {
         readlink: async () => '/root/target',
         stat: async () => { throw permissionError }
       },
+      runtimeIdentity: rootRuntimeIdentity,
       release: async () => calls.push('release')
     }
   }
@@ -1964,7 +2169,7 @@ test('symlink metadata failure commits no partial remote list', async () => {
     entry.remoteList(false, '/root', undefined, { rethrow: true }),
     error => error === permissionError
   )
-  assert.deepEqual(entry.state.remote, original)
+  assert.equal(entry.state.remote.length, 0)
   assert.deepEqual(calls, ['release'])
 })
 
@@ -2042,6 +2247,7 @@ test('unmount owns the captured remoteList transport and destroys it once', asyn
           return []
         }
       },
+      runtimeIdentity: rootRuntimeIdentity,
       release: () => {
         releasePromise ||= (async () => {
           await listGate.promise
@@ -2420,6 +2626,7 @@ test('overlapping lists release both capabilities and only the latest request co
     })
     return {
       backend: capability.backend,
+      runtimeIdentity: rootRuntimeIdentity,
       release: async () => {
         await capability.release()
         leaseActive = false

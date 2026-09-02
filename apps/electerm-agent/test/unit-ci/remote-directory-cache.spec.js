@@ -15,6 +15,7 @@ function identity (overrides = {}) {
     username: 'root',
     sshSessionGeneration: 'session-1',
     channel: 'sftp',
+    effectiveUid: '0',
     effectiveUsername: 'root',
     path: '/root',
     ...overrides
@@ -79,6 +80,7 @@ test('directory cache key isolates SSH generations and effective identities', as
     identity({ port: 2200 }),
     identity({ username: 'login-user' }),
     identity({ channel: 'pty-root' }),
+    identity({ effectiveUid: '1000' }),
     identity({ effectiveUsername: 'operator' }),
     identity({ path: '/root/other' })
   ]

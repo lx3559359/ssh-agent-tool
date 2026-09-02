@@ -15,6 +15,7 @@ export function buildRemoteDirectoryCacheKey (identity = {}) {
     Number(identity.port || 22),
     identity.username,
     identity.channel,
+    identity.effectiveUid,
     identity.effectiveUsername,
     identity.path
   ].map(value => String(value || '')).join('\u0000')
