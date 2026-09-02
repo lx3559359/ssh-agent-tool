@@ -24,6 +24,7 @@ export default class AttachAddonCustom {
     this.managedPtySessionNonce = ''
     this.managedPtyExpectedCommand = ''
     this.managedPtyHoldSuppression = false
+    this.managedPtyHidePromptText = false
     this.consumeManagedPtyCommandRecord = false
     this.managedPtyOutputStreamingActive = false
     this.suppressedData = []
@@ -148,6 +149,7 @@ export default class AttachAddonCustom {
     this.managedPtySessionNonce = ''
     this.managedPtyExpectedCommand = ''
     this.managedPtyHoldSuppression = false
+    this.managedPtyHidePromptText = false
     this.consumeManagedPtyCommandRecord = false
     this.managedPtyOutputStreamingActive = false
     this.publishSuppressionRemainder = false
@@ -175,6 +177,24 @@ export default class AttachAddonCustom {
       callback()
     }
     return this.flushPendingInput()
+  }
+
+  startCurrentShellIntegrationSuppression = (nonce, timeout, onEnd) => {
+    const sessionNonce = String(nonce || '')
+    if (!managedPtySessionNoncePattern.test(sessionNonce)) {
+      throw new Error('Shell Integration session nonce is invalid')
+    }
+    const promptFrame =
+      `${String.fromCharCode(27)}]633;A;${sessionNonce}` +
+      String.fromCharCode(7)
+    this.startOutputSuppression(timeout, onEnd, true, false, promptFrame)
+    this.managedPtyEchoSuppressionActive = true
+    this.managedPtySessionNonce = sessionNonce
+    this.managedPtyExpectedCommand = ''
+    this.managedPtyHoldSuppression = false
+    this.managedPtyHidePromptText = true
+    this.consumeManagedPtyCommandRecord = false
+    return true
   }
 
   prepareManagedPtyEchoRecovery = () => {
@@ -761,6 +781,30 @@ export default class AttachAddonCustom {
     if (promptReleaseReady) {
       this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
     }
+    let terminalReleaseData = releaseData
+    if (promptReleaseReady && this.managedPtyHidePromptText) {
+      const releaseBytes = toBytes(releaseData)
+      const inputFrameBytes = new TextEncoder().encode(inputFrame)
+      let inputFrameIndex = -1
+      for (let index = 0;
+        index <= releaseBytes.length - inputFrameBytes.length;
+        index++) {
+        let matches = true
+        for (let offset = 0; offset < inputFrameBytes.length; offset++) {
+          if (releaseBytes[index + offset] !== inputFrameBytes[offset]) {
+            matches = false
+            break
+          }
+        }
+        if (matches) {
+          inputFrameIndex = index
+          break
+        }
+      }
+      terminalReleaseData = inputFrameIndex === -1
+        ? inputFrameBytes
+        : releaseBytes.slice(inputFrameIndex)
+    }
     if (this.managedPtyHoldSuppression) {
       this.suppressionScanText = ''
       this.suppressionScanBytes = new Uint8Array()
@@ -778,11 +822,11 @@ export default class AttachAddonCustom {
       return
     }
     this.onShellIntegrationDetected()
-    if (releaseData.length > 0) {
-      if (releaseData instanceof Uint8Array) {
-        this._writeBinaryOutput(releaseData, false)
+    if (terminalReleaseData.length > 0) {
+      if (terminalReleaseData instanceof Uint8Array) {
+        this._writeBinaryOutput(terminalReleaseData, false)
       } else {
-        this.writeToTerminalDirect(releaseData)
+        this.writeToTerminalDirect(terminalReleaseData)
       }
     }
   }
@@ -1001,6 +1045,7 @@ export default class AttachAddonCustom {
 
   submitManagedPtyCommand = (command, sessionNonce, options = {}) => {
     const nonce = String(sessionNonce || '')
+    const hidePromptText = options.hidePromptText === true
     if (new TextEncoder().encode(String(command || '')).byteLength >
       managedPtyFrameByteLimit) {
       const error = new Error('受控 PTY 命令帧超过安全上限')
@@ -1009,6 +1054,7 @@ export default class AttachAddonCustom {
     }
     const continuingPlan = this.managedPtyEchoSuppressionActive &&
       this.managedPtySessionNonce === nonce &&
+      this.managedPtyHidePromptText === hidePromptText &&
       (this.managedPtyHoldSuppression || options.cleanup === true)
     if (!String(command || '').trim() ||
       !managedPtySessionNoncePattern.test(nonce) ||
@@ -1033,6 +1079,7 @@ export default class AttachAddonCustom {
     this.managedPtySessionNonce = nonce
     this.managedPtyExpectedCommand = command
     this.managedPtyHoldSuppression = options.holdSuppression === true
+    this.managedPtyHidePromptText = hidePromptText
     this.consumeManagedPtyCommandRecord = true
     try {
       if (!this.managedPtyTransport) {

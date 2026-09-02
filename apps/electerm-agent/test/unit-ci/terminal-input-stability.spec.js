@@ -247,6 +247,76 @@ test('managed PTY hides command output while streaming it to the task parser', a
   assert.deepEqual(output, [remainder, prompt])
 })
 
+test('managed PTY hides natural prompt text for root-file presentation', async () => {
+  const promptFrame = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const inputFrame = `\u001b]633;B;${testTrackerNonce}\u0007`
+  const fileMarker =
+    '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+  const postPromptOutput = 'post-prompt-output\r\n'
+
+  for (const binary of [false, true]) {
+    const { addon, term } = await createDirectAttachHarness()
+    const writes = []
+    const output = []
+    term.write = value => writes.push(value)
+    addon.onRemoteOutput(chunk => output.push(chunk))
+    const command = `root-file-presentation-${binary}`
+    const hiddenOutput =
+      `\u001b]633;E;${testTrackerNonce};${command}\u0007` +
+      `\u001b]633;C;${testTrackerNonce}\u0007` + fileMarker
+    const prompt = promptFrame + 'hik@fixture:$ ' + inputFrame +
+      postPromptOutput
+    const send = value => addon.writeToTerminal(
+      binary ? new TextEncoder().encode(value) : value
+    )
+
+    assert.equal(addon.submitManagedPtyCommand(
+      command,
+      testTrackerNonce,
+      { hidePromptText: true }
+    ), true)
+    send(hiddenOutput)
+    send(prompt)
+
+    const writtenText = writes.map(value => typeof value === 'string'
+      ? value
+      : new TextDecoder().decode(value)).join('')
+    assert.equal(addon.outputSuppressed, false)
+    assert.equal(writtenText.includes(promptFrame), true)
+    assert.equal(writtenText.includes(inputFrame), true)
+    assert.equal(writtenText.includes('hik@fixture:$ '), false)
+    assert.equal(writtenText.includes(postPromptOutput), true)
+    assert.equal(output.join('').includes(fileMarker), true)
+  }
+})
+
+test('current-child-shell reinjection hides injection echo and natural prompt', async () => {
+  const { addon, term } = await createDirectAttachHarness()
+  const writes = []
+  let suppressionEnded = false
+  term.write = value => writes.push(value)
+  const promptFrame = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const inputFrame = `\u001b]633;B;${testTrackerNonce}\u0007`
+
+  assert.equal(addon.startCurrentShellIntegrationSuppression(
+    testTrackerNonce,
+    1000,
+    () => { suppressionEnded = true }
+  ), true)
+  addon.writeToTerminal('printf hidden-integration-echo\r\n')
+  addon.writeToTerminal(
+    promptFrame + 'root@fixture:# ' + inputFrame
+  )
+
+  const writtenText = writes.join('')
+  assert.equal(suppressionEnded, true)
+  assert.equal(addon.outputSuppressed, false)
+  assert.equal(writtenText.includes(promptFrame), true)
+  assert.equal(writtenText.includes(inputFrame), true)
+  assert.equal(writtenText.includes('root@fixture:# '), false)
+  assert.equal(writtenText.includes('hidden-integration-echo'), false)
+})
+
 test('managed PTY holds suppression across command-plan prompts', async () => {
   const { addon, sent, term } = await createDirectAttachHarness()
   const writes = []
@@ -2671,6 +2741,16 @@ test('terminal invalidates managed PTY leases and can rearm the current child sh
   assert.match(source, /outputObservedSequence/)
   assert.match(source, /operationsPtyTaskController\.invalidate\(/)
   assert.match(source, /attachAddon\?\.isPasswordPromptDetected\?\.\(\)/)
+})
+
+test('terminal current child shell uses scoped suppression wiring', () => {
+  const source = readClientFile('components/terminal/terminal.jsx')
+
+  assert.match(source, /currentShellNonce/)
+  assert.match(
+    source,
+    /startCurrentShellIntegrationSuppression\(\s*currentShellNonce,\s*suppressionTimeout,/
+  )
 })
 
 test('terminal checks real password mode before tracking Enter as a command', () => {

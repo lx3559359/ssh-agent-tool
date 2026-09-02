@@ -691,7 +691,8 @@ export function createManagedPtyTaskController ({
     const transport = submitCommand(frame.command, {
       holdSuppression: execution.plan.frames.length > 1 &&
         frame.executesOperation !== true && options.cleanup !== true,
-      cleanup: options.cleanup === true
+      cleanup: options.cleanup === true,
+      hidePromptText: execution.owner.startsWith('root-file:')
     })
     if (!transport || typeof transport.accepted?.then !== 'function' ||
       typeof transport.written?.then !== 'function') {

@@ -1593,6 +1593,39 @@ test('bounded custom protocol uses its own command parser and result', async () 
   assert.equal(await lease.release(), true)
 })
 
+test('controller scopes hidden natural prompt text to root-file owners', async () => {
+  const cases = [
+    { owner: 'root-file:list:tab-a', hidePromptText: true },
+    { owner: 'operations-system-overview', hidePromptText: false }
+  ]
+
+  const observed = []
+  for (const [index, testCase] of cases.entries()) {
+    const token = String(index + 1).repeat(48)
+    const protocol = createBoundedProbeProtocol({ token })
+    const harness = await createControllerHarness()
+    const lease = await harness.controller.acquire(testCase.owner)
+    const running = lease.execute({
+      request: { operation: 'probe' },
+      protocol,
+      timeoutMs: 1000
+    })
+
+    observed.push({
+      owner: testCase.owner,
+      hidePromptText: harness.submissions[0].submitOptions.hidePromptText
+    })
+    harness.emit(`file:${token}:start:0:root\n`)
+    harness.emit(`file:${token}:result:probe:stat,base64\n`)
+    harness.emit(`file:${token}:end:0\n`)
+    assert.equal(harness.emitCommandFinished(0), true)
+    assert.equal(harness.emitPromptStarted(), true)
+    await running
+    assert.equal(await lease.release(), true)
+  }
+  assert.deepEqual(observed, cases)
+})
+
 test('custom protocol cannot override authoritative completion fields', async () => {
   const customToken = 'd'.repeat(48)
   const protocol = createBoundedProbeProtocol({
