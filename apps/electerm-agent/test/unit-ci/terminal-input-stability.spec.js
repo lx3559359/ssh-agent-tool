@@ -2770,6 +2770,74 @@ test('AttachAddon password Enter remains synchronous and resets password state',
   ])
 })
 
+test('AttachAddon clears password state for pasted terminators without retaining or exposing the payload', async () => {
+  const passwordEvents = [
+    'secret\r',
+    'secret\n',
+    'secret\x03',
+    'secret\r\n',
+    'secret\nignored-second-line'
+  ]
+
+  for (const data of passwordEvents) {
+    const { addon, calls, sent, term } = await createAttachHarness(() => {
+      throw new Error('Password paste must not enter command safety tracking')
+    })
+    const writes = []
+    term.write = value => writes.push(value)
+    addon._passwordPromptDetected = true
+
+    const result = addon.sendToServer(data)
+
+    assert.equal(result, undefined, JSON.stringify(data))
+    assert.deepEqual(sent, [data], JSON.stringify(data))
+    assert.equal(addon._passwordPromptDetected, false, JSON.stringify(data))
+    assert.equal(addon._pendingEchoCheck, null, JSON.stringify(data))
+    assert.equal(addon._echoCheckTimer, null, JSON.stringify(data))
+    assert.deepEqual(writes, [], JSON.stringify(data))
+    assert.deepEqual(calls, [{ passwordCancelled: true }], JSON.stringify(data))
+  }
+})
+
+test('AttachAddon keeps non-terminated password chunks private and in password mode', async () => {
+  const { addon, calls, sent, term } = await createAttachHarness(() => {
+    throw new Error('Password input must not enter command safety tracking')
+  })
+  const writes = []
+  term.write = value => writes.push(value)
+  addon._passwordPromptDetected = true
+
+  addon.sendToServer('secret')
+
+  assert.deepEqual(sent, ['secret'])
+  assert.equal(addon._passwordPromptDetected, true)
+  assert.equal(addon._pendingEchoCheck, null)
+  assert.equal(addon._echoCheckTimer, null)
+  assert.deepEqual(writes, [])
+  assert.deepEqual(calls, [])
+})
+
+test('AttachAddon preserves single-key password echo detection and cancellation', async () => {
+  const { addon, calls, sent } = await createAttachHarness(() => {
+    throw new Error('Password input must not enter command safety tracking')
+  })
+  addon._passwordPromptDetected = true
+
+  addon.sendToServer('s')
+
+  assert.equal(addon._passwordPromptDetected, true)
+  assert.equal(addon._pendingEchoCheck?.char, 's')
+  assert.notEqual(addon._echoCheckTimer, null)
+
+  addon.sendToServer('\x03')
+
+  assert.deepEqual(sent, ['s', '\x03'])
+  assert.equal(addon._passwordPromptDetected, false)
+  assert.equal(addon._pendingEchoCheck, null)
+  assert.equal(addon._echoCheckTimer, null)
+  assert.deepEqual(calls, [{ passwordCancelled: true }])
+})
+
 test('CommandTrackerAddon completes a released expected simple command once', async () => {
   const { CommandTrackerAddon } = await importCommandTracker()
   const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
@@ -3164,7 +3232,7 @@ test('terminal current child shell uses scoped suppression wiring', () => {
   )
 })
 
-test('terminal checks real password mode before tracking Enter as a command', () => {
+test('terminal snapshots real password mode before tracking the input event', () => {
   const source = readClientFile('components/terminal/terminal.jsx')
   const onDataStart = source.indexOf('  onData = (d) => {')
   const onDataEnd = source.indexOf('\n  runSafetyCommand =', onDataStart)
@@ -3174,14 +3242,19 @@ test('terminal checks real password mode before tracking Enter as a command', ()
   const guardedTracking = onData.indexOf(
     'if (!passwordMode) {\n      this.handleInputEvent(d)\n    }'
   )
+  const passwordEventReturn = onData.indexOf(
+    'if (passwordMode) {\n      if (d === \'\\r\' || d === \'\\n\') this.closeSuggestions()\n      return\n    }'
+  )
 
   assert.notEqual(onDataStart, -1)
   assert.notEqual(onDataEnd, -1)
   assert.notEqual(transportCheck, -1)
   assert.notEqual(passwordModeCheck, -1)
   assert.notEqual(guardedTracking, -1)
+  assert.notEqual(passwordEventReturn, -1)
   assert.equal(passwordModeCheck < transportCheck, true)
   assert.equal(transportCheck < guardedTracking, true)
+  assert.equal(guardedTracking < passwordEventReturn, true)
 })
 
 test('terminal command tracking no longer routes through the manual safety controller', () => {

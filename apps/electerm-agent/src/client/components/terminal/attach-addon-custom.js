@@ -1012,14 +1012,22 @@ export default class AttachAddonCustom {
   }
 
   _sendToServerDirect = (data) => {
-    // Start echo detection when password prompt is suspected
-    if (this._passwordPromptDetected && !this._pendingEchoCheck && data !== '\r' && data !== '\n' && data !== '\x03') {
+    const isStringInput = typeof data === 'string'
+    const passwordInputTerminated = this._passwordPromptDetected &&
+      isStringInput &&
+      ['\r', '\n', '\x03'].some(terminator => data.includes(terminator))
+    const singleKeyPasswordInput = this._passwordPromptDetected &&
+      isStringInput && data.length === 1 && !passwordInputTerminated
+
+    // Multi-character password chunks are never retained as echo diagnostics.
+    if (singleKeyPasswordInput && !this._pendingEchoCheck) {
       this._pendingEchoCheck = { char: data, time: Date.now() }
       clearTimeout(this._echoCheckTimer)
       this._echoCheckTimer = setTimeout(this._onEchoCheckTimeout, 200)
     }
-    // Reset password state on Enter or Ctrl+C
-    if (data === '\r' || data === '\n' || data === '\x03') {
+    // Treat the whole event as password input, then clear on its first terminator.
+    if (passwordInputTerminated ||
+      data === '\r' || data === '\n' || data === '\x03') {
       if (this._passwordPromptDetected) {
         this.term?.parent?.onPasswordPromptCancelled?.()
       }
