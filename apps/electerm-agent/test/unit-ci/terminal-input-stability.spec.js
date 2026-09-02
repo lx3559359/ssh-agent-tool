@@ -1798,6 +1798,16 @@ test('bash shell integration isolates an existing PROMPT_COMMAND from command tr
   assert.doesNotMatch(integration, /PROMPT_COMMAND="__e_cmd\$\{PROMPT_COMMAND:/)
 })
 
+test('bash shell integration keeps the ShellPilot prompt hook process-local', async () => {
+  const { getInlineShellIntegration } = await importShellIntegration()
+  const integration = getInlineShellIntegration('bash', testTrackerNonce)
+  const assignment = integration.indexOf('PROMPT_COMMAND="__e_cmd"')
+  const processLocal = integration.indexOf('export -n PROMPT_COMMAND')
+
+  assert.notEqual(assignment, -1)
+  assert.ok(processLocal > assignment)
+})
+
 test('terminal safety alone never makes forced-command or TUI output injectable', async () => {
   const { shouldInjectShellIntegration } = await importShellIntegration()
   const base = {
