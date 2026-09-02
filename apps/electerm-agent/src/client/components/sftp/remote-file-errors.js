@@ -32,6 +32,10 @@ const transientTransportCodes = new Set([
   'ENOTCONN'
 ])
 
+const recoveryUncertainCodes = new Set([
+  'REMOTE_FILE_RECOVERY_UNCERTAIN'
+])
+
 const structuredFailureKeys = [
   'releaseError',
   'cleanupError',
@@ -39,7 +43,9 @@ const structuredFailureKeys = [
   'teardownError',
   'destroyError',
   'abandonError',
-  'settlementError'
+  'settlementError',
+  'primaryCause',
+  'rollbackCause'
 ]
 
 const structuredFailureArrayKeys = [
@@ -540,6 +546,9 @@ function inspectRemoteFileRecoveryError (error) {
     }
     codes.push(codeText.value)
     details.push(`${nameText.value} ${messageText.value}`)
+    if (recoveryUncertainCodes.has(codeText.value)) {
+      settlementUncertain = true
+    }
 
     const cause = readErrorProperty(current, 'cause')
     if (!cause.ok) inspectionIncomplete = true

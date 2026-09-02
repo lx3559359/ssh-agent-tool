@@ -594,6 +594,23 @@ test('uncertain teardown traversal is cycle-safe bounded and preserves the stick
       })
       return { failure, iteratorCalls: () => 0 }
     }],
+    ['formal primary cause uncertainty', () => ({
+      failure: Object.assign(new Error('recovery wrapper'), {
+        primaryCause: Object.assign(new Error('primary teardown timeout'), {
+          code: 'TEARDOWN_TIMEOUT'
+        })
+      }),
+      iteratorCalls: () => 0
+    })],
+    ['cyclic rollback cause uncertainty', () => {
+      const failure = new Error('rollback wrapper')
+      const rollbackCause = Object.assign(new Error('rollback uncertain'), {
+        uncertain: true
+      })
+      failure.rollbackCause = rollbackCause
+      rollbackCause.primaryCause = failure
+      return { failure, iteratorCalls: () => 0 }
+    }],
     ['hostile infinite errors iterator', () => {
       let nextCalls = 0
       const errors = []

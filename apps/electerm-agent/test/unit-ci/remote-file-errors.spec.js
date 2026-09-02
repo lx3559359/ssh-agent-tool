@@ -126,10 +126,26 @@ test('cleanup attachment removes primary cycles and deduplicates bounded errors'
     new Error('wrapper around primary'),
     { cause: primary }
   )
+  const primaryCauseSelfReference = Object.assign(
+    new Error('primary recovery wrapper'),
+    { primaryCause: primary }
+  )
+  const rollbackCauseSelfReference = Object.assign(
+    new Error('rollback recovery wrapper'),
+    { rollbackCause: primary }
+  )
+  const cyclicRecoveryWrapper = new Error('cyclic recovery wrapper')
+  const cyclicRecoveryNested = new Error('cyclic recovery nested')
+  cyclicRecoveryWrapper.primaryCause = cyclicRecoveryNested
+  cyclicRecoveryNested.rollbackCause = cyclicRecoveryWrapper
+  cyclicRecoveryNested.primaryCause = primary
   const secondary = new Error('secondary cleanup failed')
   primary.cleanupErrors = [
     primary,
     indirectSelfReference,
+    primaryCauseSelfReference,
+    rollbackCauseSelfReference,
+    cyclicRecoveryWrapper,
     secondary,
     secondary
   ]
@@ -137,6 +153,9 @@ test('cleanup attachment removes primary cycles and deduplicates bounded errors'
   const result = appendRemoteFileCleanupErrors(primary, [
     primary,
     indirectSelfReference,
+    primaryCauseSelfReference,
+    rollbackCauseSelfReference,
+    cyclicRecoveryWrapper,
     secondary,
     secondary
   ])
@@ -144,6 +163,9 @@ test('cleanup attachment removes primary cycles and deduplicates bounded errors'
   assert.equal(result.attached, true)
   assert.equal(primary.cleanupErrors.includes(primary), false)
   assert.equal(primary.cleanupErrors.includes(indirectSelfReference), false)
+  assert.equal(primary.cleanupErrors.includes(primaryCauseSelfReference), false)
+  assert.equal(primary.cleanupErrors.includes(rollbackCauseSelfReference), false)
+  assert.equal(primary.cleanupErrors.includes(cyclicRecoveryWrapper), false)
   assert.equal(
     primary.cleanupErrors.filter(error => error === secondary).length,
     1
@@ -154,4 +176,73 @@ test('cleanup attachment removes primary cycles and deduplicates bounded errors'
     )),
     false
   )
+})
+
+test('recovery classifier follows formal primary and rollback causes', async t => {
+  const { classifyRemoteFileRecoveryError } = await import(moduleUrl)
+  const cases = [
+    ['primary identity cause', Object.assign(new Error('recovery failed'), {
+      code: 'ECONNRESET',
+      primaryCause: Object.assign(new Error('identity changed'), {
+        code: 'REMOTE_FILE_IDENTITY_CHANGED'
+      })
+    }), classification => {
+      assert.equal(classification.identityFailure, true)
+      assert.equal(classification.failClosed, true)
+    }],
+    ['rollback uncertainty', Object.assign(new Error('rollback failed'), {
+      code: 'ECONNRESET',
+      rollbackCause: Object.assign(new Error('rollback state unknown'), {
+        uncertain: true
+      })
+    }), classification => {
+      assert.equal(classification.settlementUncertain, true)
+      assert.equal(classification.failClosed, true)
+    }],
+    ['native recovery uncertainty code', Object.assign(
+      new Error('recovery state requires manual inspection'),
+      { code: 'REMOTE_FILE_RECOVERY_UNCERTAIN' }
+    ), classification => {
+      assert.equal(classification.settlementUncertain, true)
+      assert.equal(classification.failClosed, true)
+    }]
+  ]
+
+  for (const [name, failure, assertClassification] of cases) {
+    await t.test(name, () => {
+      assertClassification(classifyRemoteFileRecoveryError(failure))
+    })
+  }
+})
+
+test('formal cause overflow skips the wrapper and marks cleanup truncation', async t => {
+  const {
+    appendRemoteFileCleanupErrors,
+    remoteFileCleanupErrorsTruncatedCode
+  } = await import(moduleUrl)
+
+  for (const formalKey of ['primaryCause', 'rollbackCause']) {
+    await t.test(formalKey, () => {
+      const primary = new Error('primary operation failed')
+      let wrapper = primary
+      for (let index = 0; index < 96; index += 1) {
+        wrapper = Object.assign(new Error(`formal wrapper ${index}`), {
+          [formalKey]: wrapper
+        })
+      }
+      const outerWrapper = wrapper
+
+      const result = appendRemoteFileCleanupErrors(primary, [outerWrapper])
+
+      assert.equal(result.attached, true)
+      assert.equal(result.inspectionIncomplete, true)
+      assert.equal(primary.cleanupErrors.includes(outerWrapper), false)
+      assert.equal(primary.cleanupErrors.includes(primary), false)
+      assert.equal(primary.cleanupErrors.length, 1)
+      assert.equal(
+        primary.cleanupErrors[0]?.code,
+        remoteFileCleanupErrorsTruncatedCode
+      )
+    })
+  }
 })
