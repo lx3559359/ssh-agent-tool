@@ -51,6 +51,16 @@ const structuredFailureArrayKeys = [
 
 const recoveryErrorNodeBudget = 64
 const recoveryErrorEdgeBudget = 128
+const cleanupErrorAttachmentBudget = 32
+const cleanupErrorAdditionBudget = 8
+
+export const remoteFileCleanupErrorsTruncatedCode =
+  'REMOTE_FILE_CLEANUP_ERRORS_TRUNCATED'
+
+const cleanupErrorsTruncatedMarker = Object.freeze({
+  code: remoteFileCleanupErrorsTruncatedCode,
+  message: 'Remote file cleanup errors were truncated'
+})
 
 const incompleteRecoveryClassification = Object.freeze({
   accessDenied: false,
@@ -65,6 +75,111 @@ function isObjectLike (value) {
   return Boolean(value) && (
     typeof value === 'object' || typeof value === 'function'
   )
+}
+
+function closeErrorIterator (iterator) {
+  try {
+    const returnMethod = iterator?.return
+    if (typeof returnMethod === 'function') {
+      Reflect.apply(returnMethod, iterator, [])
+    }
+  } catch {}
+}
+
+function snapshotErrorIterable (source, limit) {
+  const values = []
+  if (source === undefined || source === null) {
+    return { values, incomplete: false, truncated: false }
+  }
+  let iterator
+  try {
+    const iteratorMethod = source[Symbol.iterator]
+    if (typeof iteratorMethod !== 'function') {
+      return { values, incomplete: true, truncated: true }
+    }
+    iterator = Reflect.apply(iteratorMethod, source, [])
+  } catch {
+    return { values, incomplete: true, truncated: true }
+  }
+  if (!isObjectLike(iterator)) {
+    return { values, incomplete: true, truncated: true }
+  }
+  let nextMethod
+  try {
+    nextMethod = iterator.next
+  } catch {
+    closeErrorIterator(iterator)
+    return { values, incomplete: true, truncated: true }
+  }
+  if (typeof nextMethod !== 'function') {
+    closeErrorIterator(iterator)
+    return { values, incomplete: true, truncated: true }
+  }
+  for (let count = 0; count < limit; count += 1) {
+    let step
+    try {
+      step = Reflect.apply(nextMethod, iterator, [])
+      if (!isObjectLike(step)) throw new TypeError('Invalid iterator result')
+      if (step.done) return { values, incomplete: false, truncated: false }
+      values.push(step.value)
+    } catch {
+      closeErrorIterator(iterator)
+      return { values, incomplete: true, truncated: true }
+    }
+  }
+  closeErrorIterator(iterator)
+  return { values, incomplete: false, truncated: true }
+}
+
+export function appendRemoteFileCleanupErrors (primaryError, additions) {
+  try {
+    const added = snapshotErrorIterable(
+      additions,
+      cleanupErrorAdditionBudget
+    )
+    let existingSource
+    let propertyIncomplete = false
+    try {
+      existingSource = primaryError?.cleanupErrors
+    } catch {
+      propertyIncomplete = true
+    }
+    const existingLimit = Math.max(
+      0,
+      cleanupErrorAttachmentBudget - added.values.length - 1
+    )
+    const existing = snapshotErrorIterable(existingSource, existingLimit)
+    const errors = []
+    for (const value of existing.values) errors.push(value)
+    for (const value of added.values) errors.push(value)
+    const truncated = propertyIncomplete || existing.incomplete ||
+      existing.truncated || added.incomplete || added.truncated
+    if (truncated) {
+      if (errors.length >= cleanupErrorAttachmentBudget) errors.pop()
+      errors.push(cleanupErrorsTruncatedMarker)
+    }
+    const frozenErrors = Object.freeze(errors)
+    let attached = false
+    try {
+      if (primaryError && Object.isExtensible(primaryError)) {
+        primaryError.cleanupErrors = frozenErrors
+        attached = true
+      }
+    } catch {}
+    return Object.freeze({
+      errors: frozenErrors,
+      attached,
+      inspectionIncomplete: truncated,
+      truncated
+    })
+  } catch {
+    return Object.freeze({
+      errors: Object.freeze([cleanupErrorsTruncatedMarker]),
+      attached: false,
+      inspectionIncomplete: true,
+      truncated: true
+    })
+  }
 }
 
 function readErrorProperty (error, key) {
