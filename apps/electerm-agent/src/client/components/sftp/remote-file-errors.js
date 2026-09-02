@@ -51,6 +51,10 @@ const structuredFailureArrayKeys = [
 
 const recoveryErrorNodeBudget = 64
 const recoveryErrorEdgeBudget = 128
+const teardownErrorNodeBudget = 64
+const teardownErrorEdgeBudget = 128
+const cleanupReferenceNodeBudget = 32
+const cleanupReferenceEdgeBudget = 64
 const cleanupErrorAttachmentBudget = 32
 const cleanupErrorAdditionBudget = 8
 
@@ -131,6 +135,171 @@ function snapshotErrorIterable (source, limit) {
   return { values, incomplete: false, truncated: true }
 }
 
+function inspectCleanupReference (root, primaryError) {
+  if (root === primaryError) {
+    return { referencesPrimary: true, inspectionIncomplete: false }
+  }
+  if (!isObjectLike(root)) {
+    return { referencesPrimary: false, inspectionIncomplete: false }
+  }
+  const pending = [root]
+  const queued = new Set([root])
+  const visited = new Set()
+  let pendingIndex = 0
+  let edgeCount = 0
+  let yieldCount = 0
+  let inspectionIncomplete = false
+
+  const enqueue = value => {
+    if (value === primaryError) return true
+    if (!isObjectLike(value) || visited.has(value) || queued.has(value)) {
+      return false
+    }
+    if (edgeCount >= cleanupReferenceEdgeBudget ||
+      visited.size + queued.size >= cleanupReferenceNodeBudget) {
+      inspectionIncomplete = true
+      return false
+    }
+    edgeCount += 1
+    queued.add(value)
+    pending.push(value)
+    return false
+  }
+
+  while (pendingIndex < pending.length) {
+    const current = pending[pendingIndex++]
+    queued.delete(current)
+    if (visited.has(current)) continue
+    if (visited.size >= cleanupReferenceNodeBudget) {
+      inspectionIncomplete = true
+      break
+    }
+    visited.add(current)
+
+    for (const key of ['cause', ...structuredFailureKeys]) {
+      const nested = readErrorProperty(current, key)
+      if (!nested.ok) {
+        inspectionIncomplete = true
+      } else if (enqueue(nested.value)) {
+        return { referencesPrimary: true, inspectionIncomplete }
+      }
+    }
+    for (const key of structuredFailureArrayKeys) {
+      const nested = readErrorProperty(current, key)
+      if (!nested.ok) {
+        inspectionIncomplete = true
+        continue
+      }
+      const value = nested.value
+      if (value === undefined || value === null) continue
+      let isArray = false
+      try {
+        isArray = Array.isArray(value)
+      } catch {
+        inspectionIncomplete = true
+        continue
+      }
+      if (!isArray) {
+        if (enqueue(value)) {
+          return { referencesPrimary: true, inspectionIncomplete }
+        }
+        continue
+      }
+      const remaining = Math.max(
+        0,
+        cleanupReferenceEdgeBudget - yieldCount
+      )
+      const snapshot = snapshotErrorIterable(value, remaining)
+      if (snapshot.incomplete || snapshot.truncated) {
+        inspectionIncomplete = true
+      }
+      for (const item of snapshot.values) {
+        yieldCount += 1
+        if (enqueue(item)) {
+          return { referencesPrimary: true, inspectionIncomplete }
+        }
+      }
+    }
+  }
+
+  return { referencesPrimary: false, inspectionIncomplete }
+}
+
+export function containsUncertainRemoteFileTeardownError (error) {
+  try {
+    if (!isObjectLike(error)) return false
+    const pending = [error]
+    const queued = new Set([error])
+    const visited = new Set()
+    let pendingIndex = 0
+    let edgeCount = 0
+    let yieldCount = 0
+
+    const enqueue = value => {
+      if (value === undefined || value === null) return false
+      if (!isObjectLike(value)) return false
+      if (visited.has(value) || queued.has(value)) return false
+      if (edgeCount >= teardownErrorEdgeBudget ||
+        visited.size + queued.size >= teardownErrorNodeBudget) {
+        return true
+      }
+      edgeCount += 1
+      queued.add(value)
+      pending.push(value)
+      return false
+    }
+
+    while (pendingIndex < pending.length) {
+      const current = pending[pendingIndex++]
+      queued.delete(current)
+      if (visited.has(current)) continue
+      if (visited.size >= teardownErrorNodeBudget) return true
+      visited.add(current)
+
+      const code = readErrorProperty(current, 'code')
+      const uncertain = readErrorProperty(current, 'uncertain')
+      if (!code.ok || !uncertain.ok) return true
+      if (code.value === 'TEARDOWN_TIMEOUT' || uncertain.value === true) {
+        return true
+      }
+
+      for (const key of ['cause', ...structuredFailureKeys]) {
+        const nested = readErrorProperty(current, key)
+        if (!nested.ok || enqueue(nested.value)) return true
+      }
+      for (const key of structuredFailureArrayKeys) {
+        const nested = readErrorProperty(current, key)
+        if (!nested.ok) return true
+        const value = nested.value
+        if (value === undefined || value === null) continue
+        let isArray = false
+        try {
+          isArray = Array.isArray(value)
+        } catch {
+          return true
+        }
+        if (!isArray) {
+          if (enqueue(value)) return true
+          continue
+        }
+        const remaining = Math.max(
+          0,
+          teardownErrorEdgeBudget - yieldCount
+        )
+        const snapshot = snapshotErrorIterable(value, remaining)
+        if (snapshot.incomplete || snapshot.truncated) return true
+        for (const item of snapshot.values) {
+          yieldCount += 1
+          if (enqueue(item)) return true
+        }
+      }
+    }
+    return false
+  } catch {
+    return true
+  }
+}
+
 export function appendRemoteFileCleanupErrors (primaryError, additions) {
   try {
     const added = snapshotErrorIterable(
@@ -150,9 +319,27 @@ export function appendRemoteFileCleanupErrors (primaryError, additions) {
     )
     const existing = snapshotErrorIterable(existingSource, existingLimit)
     const errors = []
-    for (const value of existing.values) errors.push(value)
-    for (const value of added.values) errors.push(value)
-    const truncated = propertyIncomplete || existing.incomplete ||
+    const seen = new Set()
+    let referenceInspectionIncomplete = false
+    const append = value => {
+      if (value === cleanupErrorsTruncatedMarker) {
+        referenceInspectionIncomplete = true
+        return
+      }
+      if (seen.has(value)) return
+      seen.add(value)
+      const reference = inspectCleanupReference(value, primaryError)
+      if (reference.referencesPrimary) return
+      if (reference.inspectionIncomplete) {
+        referenceInspectionIncomplete = true
+        return
+      }
+      errors.push(value)
+    }
+    for (const value of existing.values) append(value)
+    for (const value of added.values) append(value)
+    const truncated = propertyIncomplete || referenceInspectionIncomplete ||
+      existing.incomplete ||
       existing.truncated || added.incomplete || added.truncated
     if (truncated) {
       if (errors.length >= cleanupErrorAttachmentBudget) errors.pop()

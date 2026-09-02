@@ -3267,6 +3267,35 @@ export default class Sftp extends Component {
     }
     if (this.remoteFileUnmounted) throw remoteFileOperationUnmounted()
     const generation = initializeRemoteFileGeneration(this)
+    let unsafeRemoteExitInvalidated = false
+    const invalidateUnsafeRemoteExit = () => {
+      if (unsafeRemoteExitInvalidated) return false
+      unsafeRemoteExitInvalidated = true
+      this.remoteDirectoryCachePaintEpoch =
+        (this.remoteDirectoryCachePaintEpoch || 0) + 1
+      this.visibleRemoteDirectoryCacheKey = ''
+      this.remoteFileIdentityEpoch =
+        (this.remoteFileIdentityEpoch || 0) + 1
+      if (this.remoteFileUnmounted) return true
+      this.setState({
+        remote: [],
+        remoteFileTree: this.buildTree([], typeMap.remote),
+        selectedFiles: new Set(),
+        lastClickedFile: null,
+        remoteFileIdentity: {
+          loginUsername: this.props.tab?.username || '',
+          effectiveUid: '',
+          effectiveUsername: '',
+          channel: 'unknown'
+        },
+        remoteFileStatus: this.uncertainRemoteFileLeases.size > 0
+          ? 'uncertain'
+          : this.activeRemoteFileLeases.size > 0
+            ? 'busy'
+            : 'unavailable'
+      })
+      return true
+    }
     const assertCurrentGeneration = () => {
       if (this.remoteFileUnmounted) throw remoteFileOperationUnmounted()
       if (!generation.accepting ||
@@ -3277,6 +3306,7 @@ export default class Sftp extends Component {
     assertCurrentGeneration()
     const task = options.lifecycleTask || beginSftpEntryRemoteTask(this)
     if (!isCurrentSftpEntryRemoteTask(this, task)) {
+      invalidateUnsafeRemoteExit()
       throw remoteFileOperationStale()
     }
     const { tab, sessionOptions } = this.props
@@ -3307,7 +3337,6 @@ export default class Sftp extends Component {
     let candidateCommitted = false
     let preparedProbe = null
     const candidateCleanupFailures = []
-    let cleanupFailureIdentityInvalidated = false
     let cacheKey = ''
     let cachedRemote = null
     let cachedRemoteFound = false
@@ -3346,31 +3375,7 @@ export default class Sftp extends Component {
       }
     }
     const invalidateCleanupUncertainty = () => {
-      if (cleanupFailureIdentityInvalidated) return false
-      cleanupFailureIdentityInvalidated = true
-      this.remoteDirectoryCachePaintEpoch =
-        (this.remoteDirectoryCachePaintEpoch || 0) + 1
-      this.visibleRemoteDirectoryCacheKey = ''
-      this.remoteFileIdentityEpoch =
-        (this.remoteFileIdentityEpoch || 0) + 1
-      this.setState({
-        remote: [],
-        remoteFileTree: this.buildTree([], typeMap.remote),
-        selectedFiles: new Set(),
-        lastClickedFile: null,
-        remoteFileIdentity: {
-          loginUsername: this.props.tab?.username || '',
-          effectiveUid: '',
-          effectiveUsername: '',
-          channel: 'unknown'
-        },
-        remoteFileStatus: this.uncertainRemoteFileLeases.size > 0
-          ? 'uncertain'
-          : this.activeRemoteFileLeases.size > 0
-            ? 'busy'
-            : 'unavailable'
-      })
-      return true
+      return invalidateUnsafeRemoteExit()
     }
     const attachCandidateCleanupContext = primaryError => {
       const additions = []
@@ -3450,14 +3455,23 @@ export default class Sftp extends Component {
         try {
           assertCurrentGeneration()
         } catch (error) {
-          await destroyCandidate()
+          invalidateUnsafeRemoteExit()
+          await destroyCandidate({ propagateCleanup: false })
+          attachCandidateCleanupContext(error)
           throw error
         }
         if (!isCurrentSftpEntryRemoteTask(this, task)) {
-          await destroyCandidate()
+          invalidateUnsafeRemoteExit()
+          const staleError = remoteFileOperationStale()
+          await destroyCandidate({ propagateCleanup: false })
+          if (candidateCleanupFailures.length > 0) {
+            attachCandidateCleanupContext(staleError)
+            throw staleError
+          }
           return
         }
         if (!sftp) {
+          invalidateUnsafeRemoteExit()
           return
         }
         const config = deepCopy(
@@ -3537,11 +3551,19 @@ export default class Sftp extends Component {
         try {
           assertCurrentGeneration()
         } catch (error) {
-          await destroyCandidate(error)
+          invalidateUnsafeRemoteExit()
+          await destroyCandidate({ propagateCleanup: false })
+          attachCandidateCleanupContext(error)
           throw error
         }
         if (!isCurrentSftpEntryRemoteTask(this, task)) {
-          await destroyCandidate()
+          invalidateUnsafeRemoteExit()
+          const staleError = remoteFileOperationStale()
+          await destroyCandidate({ propagateCleanup: false })
+          if (candidateCleanupFailures.length > 0) {
+            attachCandidateCleanupContext(staleError)
+            throw staleError
+          }
           return
         }
         assertCurrentGeneration()
@@ -3552,8 +3574,12 @@ export default class Sftp extends Component {
           return { loadingSftp: false }
         })
         if (!r) {
+          invalidateUnsafeRemoteExit()
           await destroyCandidate()
-          if (!isCurrentSftpEntryRemoteTask(this, task)) return
+          if (!isCurrentSftpEntryRemoteTask(this, task)) {
+            invalidateUnsafeRemoteExit()
+            return
+          }
           assertCurrentGeneration()
           return this.props.editTab(tab.id, {
             sftpCreated: false
@@ -3575,7 +3601,10 @@ export default class Sftp extends Component {
             task,
             sftp,
             generation
-          )) return
+          )) {
+            invalidateUnsafeRemoteExit()
+            return
+          }
           candidateCommitted = true
           this.retryCount = 0
         }
@@ -3583,7 +3612,13 @@ export default class Sftp extends Component {
 
       assertCurrentGeneration()
       if (!isCurrentSftpEntryRemoteTask(this, task)) {
-        await destroyCandidate()
+        invalidateUnsafeRemoteExit()
+        const staleError = remoteFileOperationStale()
+        await destroyCandidate({ propagateCleanup: false })
+        if (candidateCleanupFailures.length > 0) {
+          attachCandidateCleanupContext(staleError)
+          throw staleError
+        }
         return
       }
 
@@ -3594,7 +3629,10 @@ export default class Sftp extends Component {
         } else if (this.type === 'ftp') {
           remotePath = await this.getPwd(username, sftp)
           assertCurrentGeneration()
-          if (!isCurrentSftpEntryRemoteTask(this, task)) return
+          if (!isCurrentSftpEntryRemoteTask(this, task)) {
+            invalidateUnsafeRemoteExit()
+            return
+          }
         } else {
           remotePathPromise = Promise.resolve(this.getPwd(username, sftp))
           // Capability setup can fail before its callback observes this promise.
@@ -3604,7 +3642,10 @@ export default class Sftp extends Component {
 
       const commitRemoteResult = async remote => {
         assertCurrentGeneration()
-        if (!isCurrentSftpEntryRemoteTask(this, task)) return false
+        if (!isCurrentSftpEntryRemoteTask(this, task)) {
+          invalidateUnsafeRemoteExit()
+          return false
+        }
         if (cacheKey) {
           this.remoteDirectoryCache.set(cacheKey, remote)
         }
@@ -3719,7 +3760,10 @@ export default class Sftp extends Component {
         const committed = await renderCommit.promise
         if (!committed) {
           assertCurrentGeneration()
-          if (!isCurrentSftpEntryRemoteTask(this, task)) return false
+          if (!isCurrentSftpEntryRemoteTask(this, task)) {
+            invalidateUnsafeRemoteExit()
+            return false
+          }
           throw remoteFileOperationStale()
         }
         return true
@@ -3735,13 +3779,19 @@ export default class Sftp extends Component {
         })
         remote = await this.sftpList(sftp, remotePath)
         assertCurrentGeneration()
-        if (!isCurrentSftpEntryRemoteTask(this, task)) return
+        if (!isCurrentSftpEntryRemoteTask(this, task)) {
+          invalidateUnsafeRemoteExit()
+          return
+        }
         if (!await commitSftpEntryRemoteClient(
           this,
           task,
           sftp,
           generation
-        )) return
+        )) {
+          invalidateUnsafeRemoteExit()
+          return
+        }
         remote = await this.updateRemoteList(remote, remotePath, sftp, task)
         assertCurrentGeneration()
       } else {
@@ -3755,13 +3805,19 @@ export default class Sftp extends Component {
           if (remotePathPromise) {
             remotePath = await remotePathPromise
             assertCurrentGeneration()
-            if (!isCurrentSftpEntryRemoteTask(this, task)) return
+            if (!isCurrentSftpEntryRemoteTask(this, task)) {
+              invalidateUnsafeRemoteExit()
+              return
+            }
           }
           applyCachedDirectory(capability.runtimeIdentity)
           const listed = await this.sftpList(backend, remotePath, {
             signal: options.signal
           })
-          if (!isCurrentSftpEntryRemoteTask(this, task)) return
+          if (!isCurrentSftpEntryRemoteTask(this, task)) {
+            invalidateUnsafeRemoteExit()
+            return
+          }
           const updated = await this.updateRemoteList(
             listed,
             remotePath,
@@ -3776,13 +3832,19 @@ export default class Sftp extends Component {
           return updated
         })
         assertCurrentGeneration()
-        if (!isCurrentSftpEntryRemoteTask(this, task)) return
+        if (!isCurrentSftpEntryRemoteTask(this, task)) {
+          invalidateUnsafeRemoteExit()
+          return
+        }
         if (!await commitSftpEntryRemoteClient(
           this,
           task,
           sftp,
           generation
-        )) return
+        )) {
+          invalidateUnsafeRemoteExit()
+          return
+        }
       }
       if (returnList && !options.commitList) {
         return remote
@@ -3799,11 +3861,10 @@ export default class Sftp extends Component {
       if (!generation.accepting ||
         !isCurrentRemoteFileGeneration(this, generation) ||
         this.remoteFileUnmounted) {
+        invalidateUnsafeRemoteExit()
         await destroyCandidate({ propagateCleanup: false })
         if (candidateCleanupFailures.length > 0) {
-          const cleanupPrimary = candidateCleanupFailures[0]
-          attachCandidateCleanupContext(cleanupPrimary)
-          throw cleanupPrimary
+          attachCandidateCleanupContext(error)
         }
         let isAbortError = false
         try {
@@ -3813,11 +3874,11 @@ export default class Sftp extends Component {
         throw remoteFileOperationStale()
       }
       if (!isCurrentSftpEntryRemoteTask(this, task)) {
+        invalidateUnsafeRemoteExit()
         await destroyCandidate({ propagateCleanup: false })
         if (candidateCleanupFailures.length > 0) {
-          const cleanupPrimary = candidateCleanupFailures[0]
-          attachCandidateCleanupContext(cleanupPrimary)
-          throw cleanupPrimary
+          attachCandidateCleanupContext(error)
+          throw error
         }
         return
       }
@@ -3827,7 +3888,14 @@ export default class Sftp extends Component {
         } catch (cleanupError) {
           secondaryFailures.push(cleanupError)
         }
-        if (!isCurrentSftpEntryRemoteTask(this, task)) return
+        if (!isCurrentSftpEntryRemoteTask(this, task)) {
+          invalidateUnsafeRemoteExit()
+          if (secondaryFailures.length > 0) {
+            attachCandidateCleanupContext(error)
+            throw error
+          }
+          return
+        }
         try {
           this.props.editTab(tab.id, {
             sftpCreated: false
@@ -3885,7 +3953,7 @@ export default class Sftp extends Component {
         failure.inspectionIncomplete === true ||
         secondaryFailures.length > 0
       if (invalidatesRemoteIdentity &&
-        !cleanupFailureIdentityInvalidated) {
+        !unsafeRemoteExitInvalidated) {
         this.remoteFileIdentityEpoch =
           (this.remoteFileIdentityEpoch || 0) + 1
         update.remoteFileIdentity = {

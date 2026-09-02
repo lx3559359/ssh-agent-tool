@@ -1,5 +1,9 @@
 import resolve from '../../common/resolve.js'
 import normalizeRemotePath from '../../common/normalize-remote-path.js'
+import {
+  appendRemoteFileCleanupErrors,
+  containsUncertainRemoteFileTeardownError
+} from './remote-file-errors.js'
 
 const TIMER_KEYS = ['timer', 'timer4', 'timer5', 'retryHandler']
 const DEBOUNCE_KEYS = ['remoteListDebounce', 'localListDebounce']
@@ -343,22 +347,8 @@ export function destroySftpEntryClientOnce (entry, client) {
   return disposal
 }
 
-function containsUncertainTeardownError (error, visited = new Set()) {
-  if (!error || visited.has(error)) return false
-  if (error?.code === 'TEARDOWN_TIMEOUT' || error?.uncertain === true) {
-    return true
-  }
-  if (typeof error !== 'object' && typeof error !== 'function') return false
-  visited.add(error)
-  const nestedErrors = [
-    ...(Array.isArray(error.errors) ? error.errors : []),
-    ...(Array.isArray(error.cleanupErrors) ? error.cleanupErrors : []),
-    error.releaseError,
-    error.cause
-  ]
-  return nestedErrors.some(nestedError => (
-    containsUncertainTeardownError(nestedError, visited)
-  ))
+function containsUncertainTeardownError (error) {
+  return containsUncertainRemoteFileTeardownError(error)
 }
 
 function nextEpoch (value) {
@@ -422,14 +412,14 @@ export function activateRemoteFileGeneration (entry, generation) {
 
 function preserveSettlementErrors (errors) {
   const primaryError = errors[0]
-  if (primaryError && errors.length > 1 && Object.isExtensible(primaryError)) {
-    const existing = Array.isArray(primaryError.cleanupErrors)
-      ? primaryError.cleanupErrors
-      : []
-    primaryError.cleanupErrors = Object.freeze([
-      ...existing,
-      ...errors.slice(1)
-    ])
+  if (primaryError && errors.length > 1) {
+    const secondaryErrors = []
+    for (let index = 1;
+      index < errors.length && secondaryErrors.length < 8;
+      index += 1) {
+      secondaryErrors.push(errors[index])
+    }
+    appendRemoteFileCleanupErrors(primaryError, secondaryErrors)
   }
   return primaryError
 }

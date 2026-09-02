@@ -538,6 +538,156 @@ test('cleanup release and cause error shapes keep reconnects blocked', async () 
   assert.equal(entry.remoteFileGeneration.accepting, false)
 })
 
+test('uncertain teardown traversal is cycle-safe bounded and preserves the sticky primary', async t => {
+  const { reconnectSftpEntryRemote } = await loadModule()
+  const cases = [
+    ['deep cause chain', () => {
+      let nested = Object.assign(new Error('uncertain leaf'), {
+        code: 'TEARDOWN_TIMEOUT'
+      })
+      for (let index = 0; index < 10000; index += 1) {
+        nested = Object.assign(new Error(`cause-${index}`), { cause: nested })
+      }
+      return { failure: nested, iteratorCalls: () => 0 }
+    }],
+    ['cyclic cause and errors graph', () => {
+      const failure = new Error('cyclic cleanup graph')
+      const nested = new Error('cyclic nested cleanup')
+      const uncertain = Object.assign(new Error('uncertain cycle leaf'), {
+        uncertain: true
+      })
+      failure.cause = nested
+      nested.cause = failure
+      nested.errors = [failure, uncertain]
+      return { failure, iteratorCalls: () => 0 }
+    }],
+    ['shared yield budget across structured collections', () => {
+      const calls = [0, 0, 0, 0]
+      const collection = index => {
+        const values = new Array(60)
+        const iterator = Array.prototype[Symbol.iterator].call(values)
+        Object.defineProperty(values, Symbol.iterator, {
+          value: () => ({
+            next: () => {
+              const step = iterator.next()
+              if (!step.done) calls[index] += 1
+              return step
+            }
+          })
+        })
+        return values
+      }
+      return {
+        failure: Object.assign(new Error('many cleanup collections'), {
+          errors: collection(0),
+          cleanupErrors: collection(1),
+          releaseErrors: collection(2),
+          teardownErrors: collection(3)
+        }),
+        iteratorCalls: () => calls.reduce((total, count) => total + count, 0)
+      }
+    }],
+    ['throwing uncertainty getter', () => {
+      const failure = new Error('hostile uncertainty property')
+      Object.defineProperty(failure, 'uncertain', {
+        get () { throw new Error('uncertain inspection denied') }
+      })
+      return { failure, iteratorCalls: () => 0 }
+    }],
+    ['hostile infinite errors iterator', () => {
+      let nextCalls = 0
+      const errors = []
+      Object.defineProperty(errors, Symbol.iterator, {
+        value: () => ({
+          next: () => {
+            nextCalls += 1
+            if (nextCalls > 512) {
+              throw new Error('uncertain traversal was not bounded')
+            }
+            return { done: false, value: undefined }
+          }
+        })
+      })
+      return {
+        failure: Object.assign(new Error('hostile aggregate'), { errors }),
+        iteratorCalls: () => nextCalls
+      }
+    }]
+  ]
+
+  for (const [name, createFailure] of cases) {
+    await t.test(name, async () => {
+      const { failure, iteratorCalls } = createFailure()
+      const entry = {
+        sftp: { destroy: async () => true },
+        remoteFileOperations: new Set([{
+          release: async () => { throw failure }
+        }]),
+        remoteFileOperationSettlements: new Set(),
+        remoteFileOperationBackends: new Map(),
+        initRemoteAll: () => { throw new Error('must remain blocked') }
+      }
+
+      let primary
+      await assert.rejects(reconnectSftpEntryRemote(entry), error => {
+        primary = error
+        assert.equal(error instanceof AggregateError, true)
+        assert.deepEqual(error.errors, [failure])
+        return true
+      })
+      await Promise.resolve()
+      const firstTraversalCalls = iteratorCalls()
+      assert.ok(firstTraversalCalls <= 128)
+      await assert.rejects(
+        reconnectSftpEntryRemote(entry),
+        error => error === primary
+      )
+      assert.ok(iteratorCalls() - firstTraversalCalls <= 128)
+      assert.equal(entry.remoteFileGeneration.accepting, false)
+    })
+  }
+})
+
+test('transfer settlement aggregation is bounded and keeps the original primary', async () => {
+  const { quiesceSftpEntryTransfers } = await loadModule()
+  const primary = new Error('first owner cleanup failed')
+  const secondary = new Error('second owner cleanup failed')
+  let nextCalls = 0
+  const existing = []
+  Object.defineProperty(existing, Symbol.iterator, {
+    value: () => ({
+      next: () => {
+        nextCalls += 1
+        if (nextCalls > 512) {
+          throw new Error('settlement aggregation was not bounded')
+        }
+        return { done: false, value: primary }
+      }
+    })
+  })
+  primary.cleanupErrors = existing
+  const entry = {
+    props: { tab: { id: 'tab-root' } },
+    remoteFileGeneration: { accepting: true },
+    transferSafetySessionAliases: new Map(),
+    preparedTransferFileSessions: new Map()
+  }
+  const owners = [primary, secondary].map(error => ({
+    tabId: 'tab-root',
+    cancelAndWait: async () => { throw error }
+  }))
+
+  await assert.rejects(
+    quiesceSftpEntryTransfers(entry, { owners }),
+    error => error === primary
+  )
+
+  assert.ok(nextCalls <= 32)
+  assert.ok(primary.cleanupErrors.length <= 32)
+  assert.equal(primary.cleanupErrors.includes(primary), false)
+  assert.equal(primary.cleanupErrors.includes(secondary), true)
+})
+
 test('remote reconnect drains active root cleanup before destroy and init', async () => {
   const { reconnectSftpEntryRemote } = await loadModule()
   const releaseGate = deferred()
@@ -1036,7 +1186,7 @@ test('SFTP entry validates the latest lifecycle before transport and list writes
   assert.match(method, /const generation = initializeRemoteFileGeneration\(this\)/)
   assert.match(
     method,
-    /sftp = await Client\([\s\S]{0,300}candidateSftp = sftp[\s\S]{0,200}assertCurrentGeneration\(\)[\s\S]{0,160}destroyCandidate\(\)/
+    /sftp = await Client\([\s\S]{0,300}candidateSftp = sftp[\s\S]{0,200}assertCurrentGeneration\(\)[\s\S]{0,300}destroyCandidate\(/
   )
   assert.match(
     method,

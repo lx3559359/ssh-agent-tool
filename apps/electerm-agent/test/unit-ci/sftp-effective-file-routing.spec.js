@@ -2517,7 +2517,116 @@ test('prepared cleanup uncertainty invalidates identity on early branches', asyn
   }
 })
 
-test('stale task candidate teardown invalidates before rejection', async () => {
+test('successful early cleanup still clears privileged state and invalidates identity', async t => {
+  const cases = [
+    ['falsy client', {
+      client: async () => null
+    }],
+    ['prepared plus falsy connect', {
+      explicitOpen: true,
+      client: async () => ({
+        connect: async () => undefined,
+        destroy: async () => true
+      }),
+      beginProbe: () => ({
+        abort: async () => true,
+        release: async () => true
+      })
+    }],
+    ['superseded task after connect', {
+      supersedeAfterConnect: true
+    }]
+  ]
+
+  for (const [name, setup] of cases) {
+    await t.test(name, async () => {
+      const context = {}
+      const client = setup.supersedeAfterConnect
+        ? async () => ({
+          connect: async () => {
+            context.lifecycle.beginSftpEntryRemoteTask(context.entry)
+            return true
+          },
+          destroy: async () => true
+        })
+        : setup.client
+      const harness = await createEntryHarness({
+        client,
+        beginProbe: setup.beginProbe,
+        acquire: async () => { throw new Error('unexpected acquire') }
+      })
+      const { entry, lifecycle } = harness
+      context.entry = entry
+      context.lifecycle = lifecycle
+      entry.sftp = null
+      const rootFile = {
+        id: 'root-app-conf',
+        name: 'app.conf',
+        path: '/root',
+        type: 'remote'
+      }
+      entry.state.remote = [rootFile]
+      entry.state.remoteFileTree = entry.buildTree(entry.state.remote)
+      entry.state.selectedFiles = new Set([rootFile.id])
+      entry.state.lastClickedFile = rootFile.id
+      entry.state.remoteFileIdentity = {
+        loginUsername: 'hik',
+        effectiveUid: '0',
+        effectiveUsername: 'root',
+        channel: 'pty-root'
+      }
+      entry.visibleRemoteDirectoryCacheKey = 'root-cache-key'
+      const identityEpoch = entry.remoteFileIdentityEpoch + 1
+
+      await entry.remoteList(false, '/root', undefined, {
+        explicitOpen: setup.explicitOpen === true
+      })
+
+      assertRemoteSnapshotCleared(entry, {
+        identityEpoch,
+        identityChannel: 'unknown',
+        identityStatus: 'unavailable'
+      })
+    })
+  }
+})
+
+test('stale lifecycle error remains primary when candidate teardown fails', async () => {
+  const cleanupError = Object.assign(new Error('candidate teardown uncertain'), {
+    code: 'TEARDOWN_TIMEOUT',
+    uncertain: true
+  })
+  let drain
+  const context = {}
+  const candidate = {
+    connect: async () => {
+      drain = context.lifecycle.drainRemoteFileGeneration(context.entry)
+      return true
+    },
+    destroy: async () => { throw cleanupError }
+  }
+  const harness = await createEntryHarness({
+    client: async () => candidate,
+    acquire: async () => { throw new Error('unexpected acquire') }
+  })
+  const { entry, lifecycle } = harness
+  context.entry = entry
+  context.lifecycle = lifecycle
+  entry.sftp = null
+
+  await assert.rejects(
+    entry.remoteList(false, '/root', undefined, { rethrow: true }),
+    error => {
+      assert.notEqual(error, cleanupError)
+      assert.equal(error?.name, 'AbortError')
+      assert.equal(error.cleanupErrors?.includes(cleanupError), true)
+      return true
+    }
+  )
+  await drain.promise
+})
+
+test('stale task remains primary when candidate teardown rejects', async () => {
   const cleanupError = Object.assign(new Error('candidate teardown uncertain'), {
     code: 'TEARDOWN_TIMEOUT',
     uncertain: true
@@ -2557,7 +2666,12 @@ test('stale task candidate teardown invalidates before rejection', async () => {
 
   await assert.rejects(
     entry.remoteList(false, '/root', undefined, { rethrow: true }),
-    error => error === cleanupError
+    error => {
+      assert.notEqual(error, cleanupError)
+      assert.equal(error?.name, 'AbortError')
+      assert.equal(error.cleanupErrors?.includes(cleanupError), true)
+      return true
+    }
   )
 
   assertRemoteSnapshotCleared(entry, {

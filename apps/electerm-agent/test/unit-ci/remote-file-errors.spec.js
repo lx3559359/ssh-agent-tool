@@ -115,3 +115,43 @@ test('recovery classifier bounds nullish collection iteration', async t => {
     assert.equal(classification.failClosed, true)
   })
 })
+
+test('cleanup attachment removes primary cycles and deduplicates bounded errors', async () => {
+  const {
+    appendRemoteFileCleanupErrors,
+    remoteFileCleanupErrorsTruncatedCode
+  } = await import(moduleUrl)
+  const primary = new Error('primary operation failed')
+  const indirectSelfReference = Object.assign(
+    new Error('wrapper around primary'),
+    { cause: primary }
+  )
+  const secondary = new Error('secondary cleanup failed')
+  primary.cleanupErrors = [
+    primary,
+    indirectSelfReference,
+    secondary,
+    secondary
+  ]
+
+  const result = appendRemoteFileCleanupErrors(primary, [
+    primary,
+    indirectSelfReference,
+    secondary,
+    secondary
+  ])
+
+  assert.equal(result.attached, true)
+  assert.equal(primary.cleanupErrors.includes(primary), false)
+  assert.equal(primary.cleanupErrors.includes(indirectSelfReference), false)
+  assert.equal(
+    primary.cleanupErrors.filter(error => error === secondary).length,
+    1
+  )
+  assert.equal(
+    primary.cleanupErrors.some(error => (
+      error?.code === remoteFileCleanupErrorsTruncatedCode
+    )),
+    false
+  )
+})
