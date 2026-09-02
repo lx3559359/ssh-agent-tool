@@ -284,6 +284,8 @@ export default class AttachAddonCustom {
     this.writeToTerminal(ev.data)
   }
 
+  static passwordPromptContextLimit = 512
+
   static passwordPromptPatterns = [
     /password\s*[:\]>]\s*$/i,
     /\[sudo\]\s*password\s+for\s+\S+\s*:\s*$/i,
@@ -297,17 +299,20 @@ export default class AttachAddonCustom {
   ]
 
   _checkPasswordPrompt = (str) => {
-    // Extract last non-empty line from the output
-    const lines = str.split(/\r?\n|\r/)
+    const contextLimit = AttachAddonCustom.passwordPromptContextLimit
+    const lines = String(str || '').split(/\r?\n|\r/)
+    lines[0] = (this._lastOutputLine + lines[0]).slice(-contextLimit)
+    this._lastOutputLine = lines[lines.length - 1].slice(-contextLimit)
+
+    let candidate = ''
     for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i].trim()
-      if (line) {
-        this._lastOutputLine = line
-        break
-      }
+      const line = lines[i].slice(-contextLimit).trim()
+      if (!line) continue
+      candidate = line
+      break
     }
     return AttachAddonCustom.passwordPromptPatterns.some(
-      p => p.test(this._lastOutputLine)
+      pattern => pattern.test(candidate)
     )
   }
 
@@ -346,6 +351,7 @@ export default class AttachAddonCustom {
         clearTimeout(this._echoCheckTimer)
         this._pendingEchoCheck = null
         this._echoCheckTimer = null
+        this._lastOutputLine = ''
         // Cancel the password dropdown if it was shown
         this.term?.parent?.onPasswordPromptCancelled?.()
       }
@@ -993,7 +999,8 @@ export default class AttachAddonCustom {
       }
     }
     this._handleEchoDetection(str)
-    if (this._checkPasswordPrompt(str) && !this._passwordPromptDetected) {
+    if (this._checkPasswordPrompt(str) &&
+      !this._passwordPromptDetected) {
       this._passwordPromptDetected = true
       // Show password dropdown immediately after terminal renders the prompt
       this._schedulePasswordPromptNotification()

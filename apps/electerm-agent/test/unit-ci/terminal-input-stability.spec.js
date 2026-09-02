@@ -2879,6 +2879,159 @@ test('AttachAddon cancels delayed password UI after a terminating paste', async 
   assert.equal(tracked[0].context.passwordMode, false)
 })
 
+test('AttachAddon does not re-detect a stale password prompt after whitespace echo', async () => {
+  const tracked = []
+  const { addon, parent, sent, term } = await createAttachHarness(
+    (command, context) => {
+      tracked.push({ command, context })
+      return { sendNow: true }
+    }
+  )
+  const promptEvents = []
+  let uiPasswordMode = false
+  parent.notifyOnData = () => {}
+  parent.onPasswordPromptDetected = () => {
+    uiPasswordMode = true
+    promptEvents.push('detected')
+  }
+  parent.onPasswordPromptCancelled = () => {
+    uiPasswordMode = false
+    promptEvents.push('cancelled')
+  }
+  term.write = () => {}
+
+  addon.writeToTerminal('Password: ')
+  addon.sendToServer(' ')
+  assert.equal(addon._pendingEchoCheck?.char, ' ')
+
+  addon.writeToTerminal(' ')
+  await new Promise(resolve => setTimeout(resolve, 150))
+
+  assert.deepEqual(promptEvents, ['cancelled'])
+  assert.equal(uiPasswordMode, false)
+  assert.equal(addon.isPasswordPromptDetected(), false)
+  assert.equal(addon._passwordPromptNotificationTimer, null)
+  assert.equal(addon._pendingEchoCheck, null)
+  assert.equal(addon._echoCheckTimer, null)
+
+  addon.sendToServer('\r')
+
+  assert.deepEqual(sent, [' ', '\r'])
+  assert.equal(tracked.length, 1)
+  assert.equal(tracked[0].context.passwordMode, false)
+})
+
+test('AttachAddon detects a fresh prompt coalesced with echo disproof', async () => {
+  const { addon, parent, sent, term } = await createAttachHarness(() => {
+    throw new Error('Fresh password prompts must remain in password mode')
+  })
+  const promptEvents = []
+  let uiPasswordMode = false
+  parent.notifyOnData = () => {}
+  parent.onPasswordPromptDetected = () => {
+    uiPasswordMode = true
+    promptEvents.push('detected')
+  }
+  parent.onPasswordPromptCancelled = () => {
+    uiPasswordMode = false
+    promptEvents.push('cancelled')
+  }
+  term.write = () => {}
+
+  addon.writeToTerminal('Password: ')
+  addon.sendToServer('x')
+  addon.writeToTerminal('x\r\nPassword: ')
+
+  assert.equal(addon.isPasswordPromptDetected(), true)
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.deepEqual(promptEvents, ['cancelled', 'detected'])
+  assert.equal(uiPasswordMode, true)
+  assert.deepEqual(sent, ['x'])
+  assert.equal(addon._passwordPromptNotificationTimer, null)
+  assert.equal(addon._pendingEchoCheck, null)
+  assert.equal(addon._echoCheckTimer, null)
+  addon.dispose()
+})
+
+test('AttachAddon still rejects password mode for ordinary single-character echo', async () => {
+  for (const echoedCharacter of ['x', '中']) {
+    const { addon, parent, term } = await createAttachHarness(() => {
+      throw new Error('Echoed password probes must not enter command tracking')
+    })
+    const promptEvents = []
+    parent.notifyOnData = () => {}
+    parent.onPasswordPromptDetected = () => {
+      promptEvents.push('detected')
+    }
+    parent.onPasswordPromptCancelled = () => {
+      promptEvents.push('cancelled')
+    }
+    term.write = () => {}
+
+    addon.writeToTerminal('Password: ')
+    addon.sendToServer(echoedCharacter)
+    addon.writeToTerminal(echoedCharacter)
+    await new Promise(resolve => setTimeout(resolve, 130))
+
+    assert.deepEqual(promptEvents, ['cancelled'], echoedCharacter)
+    assert.equal(
+      addon.isPasswordPromptDetected(),
+      false,
+      echoedCharacter
+    )
+    assert.equal(addon._passwordPromptNotificationTimer, null, echoedCharacter)
+    assert.equal(addon._pendingEchoCheck, null, echoedCharacter)
+    assert.equal(addon._echoCheckTimer, null, echoedCharacter)
+  }
+})
+
+test('AttachAddon preserves prompt detection across output chunks and whitespace', async () => {
+  const { addon, parent, term } = await createAttachHarness(() => {
+    throw new Error('Prompt output must not enter command tracking')
+  })
+  const promptEvents = []
+  parent.notifyOnData = () => {}
+  parent.onPasswordPromptDetected = () => {
+    promptEvents.push('detected')
+  }
+  parent.onPasswordPromptCancelled = () => {
+    promptEvents.push('cancelled')
+  }
+  term.write = () => {}
+
+  addon.writeToTerminal('Login banner\r\n')
+  addon.writeToTerminal('Pass')
+  assert.equal(addon.isPasswordPromptDetected(), false)
+  assert.equal(addon._passwordPromptNotificationTimer, null)
+
+  addon.writeToTerminal('word: ')
+  const notificationTimer = addon._passwordPromptNotificationTimer
+  addon.writeToTerminal('   ')
+
+  assert.equal(addon.isPasswordPromptDetected(), true)
+  assert.notEqual(notificationTimer, null)
+  assert.equal(addon._passwordPromptNotificationTimer, notificationTimer)
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.deepEqual(promptEvents, ['detected'])
+  addon.dispose()
+})
+
+test('AttachAddon bounds rolling password prompt context', async () => {
+  const { addon, parent, term } = await createAttachHarness(() => {
+    throw new Error('Ordinary output must not enter command tracking')
+  })
+  const contextLimit = 512
+  parent.notifyOnData = () => {}
+  term.write = () => {}
+
+  addon.writeToTerminal('x'.repeat(contextLimit * 4))
+
+  assert.equal(addon._lastOutputLine, 'x'.repeat(contextLimit))
+  assert.equal(addon.isPasswordPromptDetected(), false)
+  assert.equal(addon._passwordPromptNotificationTimer, null)
+  addon.dispose()
+})
+
 test('AttachAddon clears an expired echo-check timer handle', async () => {
   const { addon } = await createAttachHarness(() => {
     throw new Error('Password input must not enter command safety tracking')
