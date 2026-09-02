@@ -2,7 +2,10 @@ const { promises: fs } = require('node:fs')
 const path = require('node:path')
 const { _electron: electron, expect, test } = require('@playwright/test')
 const { createLocalSftpFixture } = require('./common/local-sftp-fixture')
-const { startLocalSshServer } = require('./common/local-ssh-server')
+const {
+  parsePrivilegedFileCommand,
+  startLocalSshServer
+} = require('./common/local-ssh-server')
 const {
   cleanupQualityApp,
   launchQualityApp
@@ -374,6 +377,58 @@ async function expectRemoteFileWorkSettled (page) {
     backends: 0
   })
 }
+
+test('local SSH fixture rejects altered compact privileged command shapes', async () => {
+  const { buildPrivilegedFileCommand } = await import(
+    '../../src/client/components/sftp/privileged-file-protocol.js'
+  )
+  const token = 'a7'.repeat(24)
+  const probe = buildPrivilegedFileCommand({
+    token,
+    request: { operation: 'probe', args: {} }
+  })
+  expect(parsePrivilegedFileCommand(probe)?.operation).toBe('probe')
+  expect(parsePrivilegedFileCommand(probe + ' :')).toBeNull()
+  const tamperedProbe = probe.replace('cleanShell=1', 'cleanShell=1; :')
+  expect(tamperedProbe).not.toBe(probe)
+  expect(parsePrivilegedFileCommand(tamperedProbe)).toBeNull()
+
+  const list = buildPrivilegedFileCommand({
+    token,
+    request: {
+      operation: 'list-bound',
+      args: {
+        path: '/root-only',
+        sourceParentRealPath: '/',
+        sourceParentDevice: '3001',
+        sourceParentInode: '3002',
+        sourceDevice: '3003',
+        sourceInode: '3004'
+      }
+    }
+  })
+  expect(parsePrivilegedFileCommand(list)?.operation).toBe('list-bound')
+  expect(parsePrivilegedFileCommand(list + ' :')).toBeNull()
+  const tamperedList = list.replace('L() {', 'L() { :;')
+  expect(tamperedList).not.toBe(list)
+  expect(parsePrivilegedFileCommand(tamperedList)).toBeNull()
+
+  const firstArgument = /\bA0='([A-Za-z0-9+/=]+)'/.exec(list)?.[1]
+  expect(firstArgument).toBeTruthy()
+  const noncanonicalArguments = [
+    firstArgument + '=',
+    firstArgument + '==',
+    firstArgument.replace(/=+$/, ''),
+    firstArgument.replace(/Q==$/, 'R==')
+  ]
+  for (const noncanonicalArgument of noncanonicalArguments) {
+    const noncanonical = list.replace(
+      `A0='${firstArgument}'`,
+      `A0='${noncanonicalArgument}'`
+    )
+    expect(parsePrivilegedFileCommand(noncanonical)).toBeNull()
+  }
+})
 
 test('operations and the complete remote file panel inherit su root then return to the login identity', async () => {
   const fixture = await createLocalSftpFixture()
@@ -870,6 +925,14 @@ test('operations and the complete remote file panel inherit su root then return 
     await expect.poll(() => terminalBufferText(page))
       .toContain('SHELLPILOT_RECOVERY_EXECUTED')
     await expectManagedPtyEchoHidden(page)
+    const recordedShellCommands = [
+      ...sshServer.state.commands,
+      ...sshServer.state.commandEvents.map(event => event.command)
+    ]
+    expect(recordedShellCommands.some(command =>
+      command.includes('SHELLPILOT_FILE_FRAME'))).toBe(false)
+    expect(recordedShellCommands.some(command =>
+      command.includes('__sp_pf_b='))).toBe(false)
 
     const terminal = page.locator('.session-current')
     await sendTerminalLine(page, 'exit')

@@ -286,26 +286,41 @@ function privilegedFileCommandShapeDigest (command, token) {
   return sha256(normalized)
 }
 
+function decodeCanonicalBase64 (value) {
+  if (typeof value !== 'string' || value.length === 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    return null
+  }
+  const decoded = Buffer.from(value, 'base64')
+  if (decoded.toString('base64') !== value) return null
+  return decoded.toString('utf8')
+}
+
 function parsePrivilegedFileCommand (command) {
   const token = /SHELLPILOT_TOKEN='([a-f0-9]{32,128})'/.exec(command)?.[1]
   if (!token || !command.includes('SHELLPILOT_FILE')) return null
   const args = {}
   const argumentPattern = /SHELLPILOT_ARG_([A-Z0-9_]+)='([A-Za-z0-9+/=]+)'/g
   for (const match of command.matchAll(argumentPattern)) {
+    const decoded = decodeCanonicalBase64(match[2])
+    if (decoded === null) return null
     const key = privilegedArgumentNames[match[1]]
     if (!key) continue
-    args[key] = Buffer.from(match[2], 'base64').toString('utf8')
+    args[key] = decoded
   }
   const positionalArgs = []
   const positionalPattern = /\bA([0-9]+)='([A-Za-z0-9+/=]+)'/g
   for (const match of command.matchAll(positionalPattern)) {
-    positionalArgs[Number(match[1])] = Buffer.from(
-      match[2],
-      'base64'
-    ).toString('utf8')
+    const decoded = decodeCanonicalBase64(match[2])
+    if (decoded === null) return null
+    positionalArgs[Number(match[1])] = decoded
   }
   const wrappedBody = /__sp_run_operation\(\) \{ ([\s\S]*); \}; __sp_status=125;/.exec(command)?.[1]
-  const shapeDigest = privilegedFileCommandShapeDigest(command, token)
+  const canonicalCommand = command
+  const shapeDigest = privilegedFileCommandShapeDigest(
+    canonicalCommand,
+    token
+  )
   const compactList = shapeDigest === (
     positionalArgs.length === listBoundArgumentNames.length
       ? privilegedFileCommandShapeDigests.compactListBound
