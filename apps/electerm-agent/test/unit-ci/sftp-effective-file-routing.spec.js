@@ -258,6 +258,7 @@ function createEntryHarness ({
   client,
   beginProbe,
   classifyRecoveryError,
+  editTab,
   reportBackgroundError = () => {},
   reportOperationError = () => {},
   recordPerformanceDuration = () => true
@@ -268,7 +269,7 @@ function createEntryHarness ({
       tab: { id: 'tab-1', username: 'hik' },
       sessionOptions: {},
       config: {},
-      editTab: () => {}
+      editTab: editTab || (() => {})
     },
     state: {
       remotePath: '/root',
@@ -303,7 +304,6 @@ function createEntryHarness ({
     },
     buildTree: remote => new Map(remote.map(file => [file.id, file])),
     updateRemoteList: async remote => remote,
-    normalizeSftpError: error => error,
     isSftpVisible: () => false,
     onError: () => {},
     setState (update, callback) {
@@ -315,6 +315,9 @@ function createEntryHarness ({
       callback?.()
     }
   }
+  installClassField(entry, 'normalizeSftpError', {
+    e: () => 'SFTP unavailable'
+  })
   const typeMap = { remote: 'remote', local: 'local' }
   installClassField(entry, 'acquireRemoteFileOperation', {
     acquireRemoteFileCapability: acquire,
@@ -1313,6 +1316,149 @@ test('unexpected classifier failure still clears a privileged snapshot', async (
   assertRemoteSnapshotCleared(entry)
 })
 
+test('hostile SFTP errors cannot escape normalization before snapshot clear', async t => {
+  const cases = [
+    ['throwing message getter', () => {
+      const failure = { code: 'ECONNRESET' }
+      Object.defineProperty(failure, 'message', {
+        get () { throw new Error('message denied') }
+      })
+      return failure
+    }],
+    ['revoked proxy', () => {
+      const revoked = Proxy.revocable(new Error('revoked failure'), {})
+      revoked.revoke()
+      return revoked.proxy
+    }]
+  ]
+
+  for (const [name, createFailure] of cases) {
+    await t.test(name, async () => {
+      const failure = createFailure()
+      const acquire = async ({ onIdentity }) => {
+        await onIdentity({ loginUsername: 'hik', ...rootRuntimeIdentity })
+        return {
+          runtimeIdentity: rootRuntimeIdentity,
+          backend: { list: async () => { throw failure } },
+          release: async () => true
+        }
+      }
+      const { entry } = await createEntryHarness({ acquire })
+      const rootFile = {
+        id: 'root-app-conf',
+        name: 'app.conf',
+        path: '/root-only',
+        type: 'remote'
+      }
+      entry.state.remote = [rootFile]
+      entry.state.remoteFileTree = entry.buildTree(entry.state.remote)
+      entry.state.selectedType = 'remote'
+      entry.state.selectedFiles = new Set([rootFile.id])
+      entry.state.lastClickedFile = rootFile.id
+      entry.state.remoteFileIdentity = {
+        loginUsername: 'hik',
+        effectiveUid: '0',
+        effectiveUsername: 'root',
+        channel: 'pty-root'
+      }
+      entry.visibleRemoteDirectoryCacheKey = 'root-cache-key'
+      const identityEpoch = entry.remoteFileIdentityEpoch + 1
+
+      await entry.remoteList(false, '/root-only')
+
+      assertRemoteSnapshotCleared(entry, {
+        identityEpoch,
+        identityChannel: 'unknown',
+        identityStatus: 'unavailable'
+      })
+    })
+  }
+})
+
+test('candidate failure secondary errors clear privileged state before escape', async t => {
+  const cases = [
+    ['candidate cleanup rejection', true, false],
+    ['editTab rejection', false, true]
+  ]
+
+  for (const [name, cleanupRejects, editTabRejects] of cases) {
+    await t.test(name, async () => {
+      const primary = Object.assign(new Error('native connect failed'), {
+        code: 'ECONNRESET'
+      })
+      const secondary = Object.assign(new Error(`${name} failed`), {
+        code: cleanupRejects ? 'TEARDOWN_TIMEOUT' : 'EEDITTAB',
+        uncertain: cleanupRejects
+      })
+      const candidate = {
+        sshSessionGeneration: 'generation-1',
+        sshTerminalPid: 4242,
+        connect: async () => { throw primary },
+        destroy: async () => {
+          if (cleanupRejects) throw secondary
+          return true
+        }
+      }
+      const { entry } = await createEntryHarness({
+        client: async () => candidate,
+        editTab: () => {
+          if (editTabRejects) throw secondary
+        },
+        acquire: async () => { throw new Error('unexpected acquire') }
+      })
+      const rootFile = {
+        id: 'root-app-conf',
+        name: 'app.conf',
+        path: '/root-only',
+        type: 'remote'
+      }
+      entry.sftp = null
+      entry.state.remote = [rootFile]
+      entry.state.remoteFileTree = entry.buildTree(entry.state.remote)
+      entry.state.selectedType = 'remote'
+      entry.state.selectedFiles = new Set([rootFile.id])
+      entry.state.lastClickedFile = rootFile.id
+      entry.state.remoteFileIdentity = {
+        loginUsername: 'hik',
+        effectiveUid: '0',
+        effectiveUsername: 'root',
+        channel: 'pty-root'
+      }
+      entry.visibleRemoteDirectoryCacheKey = 'root-cache-key'
+      const identityEpoch = entry.remoteFileIdentityEpoch + 1
+
+      await assert.rejects(
+        entry.remoteList(false, '/root-only', undefined, { rethrow: true }),
+        error => {
+          assert.equal(error, primary)
+          assert.equal(Array.isArray(error.cleanupErrors), true)
+          assert.equal(error.cleanupErrors.length, 1)
+          assert.equal(error.cleanupErrors[0], secondary)
+          return true
+        }
+      )
+
+      assertRemoteSnapshotCleared(entry, {
+        identityEpoch,
+        identityChannel: 'unknown',
+        identityStatus: 'unavailable'
+      })
+    })
+  }
+})
+
+test('normal SFTP error display and code remain unchanged', async () => {
+  const { entry } = await createEntryHarness()
+  const failure = Object.assign(new Error(' permission denied '), {
+    code: 'EACCES'
+  })
+
+  const normalized = entry.normalizeSftpError(failure)
+
+  assert.equal(normalized.message, ' permission denied ')
+  assert.equal(normalized.code, 'EACCES')
+})
+
 test('deep and structured sensitive failures never recover a visible cache', async t => {
   const deepCause = (() => {
     let nested = Object.assign(new Error(), {
@@ -1380,10 +1526,10 @@ test('deep and structured sensitive failures never recover a visible cache', asy
     ['release permission', releasePermission, false],
     ['release uncertainty', releaseUncertain, false],
     ['cleanup uncertainty', cleanupUncertain, false],
-    ['traversal overflow', traversalOverflow, false]
+    ['traversal overflow', traversalOverflow, true]
   ]
 
-  for (const [name, failure, identityFailure] of cases) {
+  for (const [name, failure, invalidatesIdentity] of cases) {
     await t.test(name, async () => {
       const acquire = async ({ onIdentity }) => {
         await onIdentity({ loginUsername: 'hik', ...rootRuntimeIdentity })
@@ -1412,7 +1558,7 @@ test('deep and structured sensitive failures never recover a visible cache', asy
         channel: 'pty-root'
       }
       const identityEpoch = entry.remoteFileIdentityEpoch +
-        (identityFailure ? 1 : 0)
+        (invalidatesIdentity ? 1 : 0)
       entry.remoteDirectoryCache = {
         get: key => {
           entry.visibleRemoteDirectoryCacheKey = key
@@ -1429,8 +1575,8 @@ test('deep and structured sensitive failures never recover a visible cache', asy
 
       assertRemoteSnapshotCleared(entry, {
         identityEpoch,
-        identityChannel: identityFailure ? 'unknown' : 'pty-root',
-        identityStatus: identityFailure ? 'unavailable' : 'idle'
+        identityChannel: invalidatesIdentity ? 'unknown' : 'pty-root',
+        identityStatus: invalidatesIdentity ? 'unavailable' : 'idle'
       })
     })
   }

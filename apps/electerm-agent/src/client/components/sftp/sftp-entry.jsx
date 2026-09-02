@@ -2482,12 +2482,33 @@ export default class Sftp extends Component {
   }
 
   normalizeSftpError = error => {
-    const message = typeof error?.message === 'string'
-      ? error.message.trim()
-      : ''
-    return message && message !== 'Error'
-      ? error
-      : new Error(e('shellpilotSftpUnavailable'))
+    let fallbackMessage = 'SFTP unavailable'
+    try {
+      const translated = e('shellpilotSftpUnavailable')
+      if (typeof translated === 'string' && translated.trim()) {
+        fallbackMessage = translated.trim()
+      }
+    } catch {}
+    let message = ''
+    let code
+    try {
+      const candidate = error?.message
+      if (typeof candidate === 'string') {
+        const trimmed = candidate.trim()
+        if (trimmed && trimmed !== 'Error') message = candidate
+      }
+    } catch {}
+    try {
+      const candidate = error?.code
+      if (typeof candidate === 'string' || typeof candidate === 'number') {
+        code = candidate
+      }
+    } catch {}
+    const normalized = new Error(
+      message || fallbackMessage
+    )
+    if (code !== undefined) normalized.code = code
+    return normalized
   }
 
   runSftpBackgroundTask = task => runTrackedSftpBackgroundTask(
@@ -3708,11 +3729,22 @@ export default class Sftp extends Component {
       }
       if (this.type === 'ftp') await commitRemoteResult(remote)
     } catch (error) {
+      const secondaryFailures = []
+      let failure
+      try {
+        failure = classifyRemoteFileRecoveryError(error)
+      } catch {
+        failure = null
+      }
       if (!generation.accepting ||
         !isCurrentRemoteFileGeneration(this, generation) ||
         this.remoteFileUnmounted) {
         await destroyCandidate(error)
-        if (error?.name === 'AbortError') throw error
+        let isAbortError = false
+        try {
+          isAbortError = error?.name === 'AbortError'
+        } catch {}
+        if (isAbortError) throw error
         throw remoteFileOperationStale()
       }
       if (!isCurrentSftpEntryRemoteTask(this, task)) {
@@ -3720,17 +3752,46 @@ export default class Sftp extends Component {
         return
       }
       if (candidateSftp && !candidateCommitted) {
-        await destroyCandidate(error)
+        try {
+          await destroyCandidate(error)
+        } catch (cleanupError) {
+          secondaryFailures.push(cleanupError)
+        }
         if (!isCurrentSftpEntryRemoteTask(this, task)) return
-        this.props.editTab(tab.id, {
-          sftpCreated: false
-        })
+        try {
+          this.props.editTab(tab.id, {
+            sftpCreated: false
+          })
+        } catch (editTabError) {
+          secondaryFailures.push(editTabError)
+        }
       }
-      const normalizedError = this.normalizeSftpError(error)
-      let failure
+      if (secondaryFailures.length > 0) {
+        try {
+          failure = classifyRemoteFileRecoveryError({
+            cause: error,
+            cleanupErrors: secondaryFailures
+          })
+        } catch {
+          failure = null
+        }
+        try {
+          if (error && Object.isExtensible(error)) {
+            const existing = Array.isArray(error.cleanupErrors)
+              ? error.cleanupErrors
+              : []
+            error.cleanupErrors = Object.freeze([
+              ...existing,
+              ...secondaryFailures
+            ])
+          }
+        } catch {}
+      }
+      let normalizedError
       try {
-        failure = classifyRemoteFileRecoveryError(error)
+        normalizedError = this.normalizeSftpError(error)
       } catch {
+        normalizedError = new Error('SFTP unavailable')
         failure = null
       }
       const sameVisibleIdentity = Boolean(cacheKey) &&
@@ -3759,7 +3820,11 @@ export default class Sftp extends Component {
         update.selectedFiles = new Set()
         update.lastClickedFile = null
       }
-      if (failure?.identityFailure === true) {
+      const invalidatesRemoteIdentity = !failure ||
+        failure.identityFailure === true ||
+        failure.inspectionIncomplete === true ||
+        secondaryFailures.length > 0
+      if (invalidatesRemoteIdentity) {
         this.remoteFileIdentityEpoch =
           (this.remoteFileIdentityEpoch || 0) + 1
         update.remoteFileIdentity = {
@@ -3790,6 +3855,7 @@ export default class Sftp extends Component {
         }
       }
       if (options.rethrow) throw error
+      if (secondaryFailures.length > 0) throw secondaryFailures[0]
     }
   }
 
