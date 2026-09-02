@@ -361,7 +361,9 @@ export default class AttachAddonCustom {
     this.suppressionScanText += str
     const markerIndex = this.suppressionScanText.indexOf(marker)
     if (markerIndex !== -1) {
-      return this.suppressionScanText.slice(markerIndex)
+      const releaseData = this.suppressionScanText.slice(markerIndex)
+      this.suppressionScanText = ''
+      return releaseData
     }
     this.suppressionScanText = this.suppressionScanText.slice(
       -(marker.length - 1)
@@ -642,15 +644,6 @@ export default class AttachAddonCustom {
         forwardedPrePromptLifecycleFrames.add(frame)
       }
     }
-    if (this.managedPtyLifecyclePending) {
-      writePrePromptLifecycleFrames()
-      if (!promptReleaseWasPending && this.publishSuppressionRemainder &&
-        this.managedPtyOutputStreamingActive &&
-        listenerData.publishData.length > 0) {
-        this._publishRemoteOutput(listenerData.publishData)
-      }
-      return
-    }
     const toBytes = value => {
       if (typeof value === 'string') return new TextEncoder().encode(value)
       if (value instanceof ArrayBuffer) return new Uint8Array(value)
@@ -721,6 +714,15 @@ export default class AttachAddonCustom {
       releaseData = this.managedPtyPromptReleaseBytes
       promptReleaseReady = true
     } else if (promptReleaseWasPending) {
+      return
+    }
+    if (this.managedPtyLifecyclePending && !promptReleaseReady) {
+      writePrePromptLifecycleFrames()
+      if (!promptReleaseWasPending && this.publishSuppressionRemainder &&
+        this.managedPtyOutputStreamingActive &&
+        listenerData.publishData.length > 0) {
+        this._publishRemoteOutput(listenerData.publishData)
+      }
       return
     }
     if (promptReleaseReady) {

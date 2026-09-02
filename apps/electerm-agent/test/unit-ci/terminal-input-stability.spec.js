@@ -290,6 +290,121 @@ test('managed PTY hides natural prompt text for root-file presentation', async (
   }
 })
 
+test('managed PTY final hidden prompt handles split authenticated B', async (t) => {
+  const promptFrame = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const inputFrame = `\u001b]633;B;${testTrackerNonce}\u0007`
+  const inputPrefix = '\u001b]633;'
+  const inputRemainder = `B;${testTrackerNonce}\u0007`
+  const promptText = 'split-final@fixture:$ '
+  const tail = 'post-prompt-output\r\n'
+
+  for (const binary of [false, true]) {
+    await t.test(binary ? 'Uint8Array' : 'string', async () => {
+      const { addon, term } = await createDirectAttachHarness()
+      const writes = []
+      const output = []
+      term.write = value => writes.push(value)
+      addon.onRemoteOutput(chunk => output.push(chunk))
+      const command = `split-final-${binary}`
+      const send = value => addon.writeToTerminal(
+        binary ? new TextEncoder().encode(value) : value
+      )
+
+      assert.equal(addon.submitManagedPtyCommand(
+        command,
+        testTrackerNonce,
+        { hidePromptText: true }
+      ), true)
+      send(
+        `\u001b]633;E;${testTrackerNonce};${command}\u0007` +
+        `\u001b]633;C;${testTrackerNonce}\u0007` +
+        '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+      )
+      send(promptFrame + promptText + inputPrefix)
+      assert.equal(addon.outputSuppressed, true)
+      send(inputRemainder + tail)
+
+      const writtenText = writes.map(value => typeof value === 'string'
+        ? value
+        : new TextDecoder().decode(value)).join('')
+      assert.equal(addon.outputSuppressed, false)
+      assert.equal(writtenText.split(promptFrame).length - 1, 1)
+      assert.equal(writtenText.split(inputFrame).length - 1, 1)
+      assert.equal(writtenText.indexOf(promptFrame) <
+        writtenText.indexOf(inputFrame), true)
+      assert.equal(writtenText.includes(promptText), false)
+      assert.equal(writtenText.includes(tail), true)
+      assert.equal(output.join('').includes(tail), true)
+    })
+  }
+})
+
+test('managed PTY held hidden prompt handles split authenticated B', async (t) => {
+  const promptFrame = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const inputFrame = `\u001b]633;B;${testTrackerNonce}\u0007`
+  const inputPrefix = '\u001b]633;'
+  const inputRemainder = `B;${testTrackerNonce}\u0007`
+  const promptText = 'split-held@fixture:$ '
+  const tail = 'post-prompt-output\r\n'
+
+  for (const binary of [false, true]) {
+    await t.test(binary ? 'Uint8Array' : 'string', async () => {
+      const { addon, sent, term } = await createDirectAttachHarness()
+      const writes = []
+      const output = []
+      term.write = value => writes.push(value)
+      addon.onRemoteOutput(chunk => output.push(chunk))
+      const first = `split-held-first-${binary}`
+      const final = `split-held-final-${binary}`
+      const send = value => addon.writeToTerminal(
+        binary ? new TextEncoder().encode(value) : value
+      )
+
+      assert.equal(addon.submitManagedPtyCommand(
+        first,
+        testTrackerNonce,
+        { holdSuppression: true, hidePromptText: true }
+      ), true)
+      send(
+        `\u001b]633;E;${testTrackerNonce};${first}\u0007` +
+        `\u001b]633;C;${testTrackerNonce}\u0007` +
+        '\u001b]698;SHELLPILOT_FILE_FRAME;token;0;2;' +
+        `${'a'.repeat(64)};ok\u0007`
+      )
+      send(promptFrame + promptText + inputPrefix)
+      send(inputRemainder + tail)
+
+      const heldText = writes.map(value => typeof value === 'string'
+        ? value
+        : new TextDecoder().decode(value)).join('')
+      assert.equal(addon.outputSuppressed, true)
+      assert.equal(heldText.split(promptFrame).length - 1, 1)
+      assert.equal(heldText.split(inputFrame).length - 1, 1)
+      assert.equal(heldText.indexOf(promptFrame) <
+        heldText.indexOf(inputFrame), true)
+      assert.equal(heldText.includes(promptText), false)
+      assert.equal(output.join('').includes(tail), true)
+
+      assert.equal(addon.submitManagedPtyCommand(
+        final,
+        testTrackerNonce,
+        { holdSuppression: false, hidePromptText: true }
+      ), true)
+      send(
+        `\u001b]633;E;${testTrackerNonce};${final}\u0007` +
+        `\u001b]633;C;${testTrackerNonce}\u0007` +
+        '\u001b]698;SHELLPILOT_FILE_FRAME;token;1;2;' +
+        `${'a'.repeat(64)};ok\u0007`
+      )
+      send(promptFrame + 'final-hidden@fixture:$ ' + inputFrame)
+
+      assert.equal(addon.outputSuppressed, false)
+      assert.equal(sent.length, 2)
+      assert.equal(writes.join('').includes('final-hidden@fixture:$ '), false)
+    })
+  }
+})
+
 test('current-child-shell reinjection hides injection echo and natural prompt', async () => {
   const { addon, term } = await createDirectAttachHarness()
   const writes = []
