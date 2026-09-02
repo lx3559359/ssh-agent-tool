@@ -266,6 +266,26 @@ const listBoundArgumentNames = Object.freeze([
   'sourceParentInode', 'sourceDevice', 'sourceInode'
 ])
 
+const privilegedFileCommandShapeDigests = Object.freeze({
+  standaloneProbe:
+    'c4ccd0a7b636352cb8180703dd7578964d0b0d029a847583609e315b7c2ee191',
+  compactList:
+    '6d626f23c047604763b4e1bb3ea1f1d6e774412f85da78f5420de925dbc85a1a',
+  compactListBound:
+    '0dfef336488e706d5e4b0b09667c0c410d36b36a6d43a3aa4ed21368ff3054ac'
+})
+
+function privilegedFileCommandShapeDigest (command, token) {
+  const normalized = command
+    .replaceAll(token, '<token>')
+    .replace(/\bA([0-9]+)='[A-Za-z0-9+/=]+'/g, "A$1='<arg>'")
+    .replace(
+      /SHELLPILOT_ARG_([A-Za-z0-9_]+)='[A-Za-z0-9+/=]+'/g,
+      "SHELLPILOT_ARG_$1='<arg>'"
+    )
+  return sha256(normalized)
+}
+
 function parsePrivilegedFileCommand (command) {
   const token = /SHELLPILOT_TOKEN='([a-f0-9]{32,128})'/.exec(command)?.[1]
   if (!token || !command.includes('SHELLPILOT_FILE')) return null
@@ -285,11 +305,14 @@ function parsePrivilegedFileCommand (command) {
     ).toString('utf8')
   }
   const wrappedBody = /__sp_run_operation\(\) \{ ([\s\S]*); \}; __sp_status=125;/.exec(command)?.[1]
-  const compactList = command.includes('L() {') &&
-    command.includes('SHELLPILOT_FILE;%s;start')
-  const standaloneProbe = Object.keys(args).length === 0 &&
-    command.includes('cleanShell=1') &&
-    command.includes('SHELLPILOT_FILE;%s;start')
+  const shapeDigest = privilegedFileCommandShapeDigest(command, token)
+  const compactList = shapeDigest === (
+    positionalArgs.length === listBoundArgumentNames.length
+      ? privilegedFileCommandShapeDigests.compactListBound
+      : privilegedFileCommandShapeDigests.compactList
+  )
+  const standaloneProbe = shapeDigest ===
+    privilegedFileCommandShapeDigests.standaloneProbe
   const body = wrappedBody || (compactList
     ? '__sp_emit_entry'
     : standaloneProbe ? ':' : '')
@@ -1193,15 +1216,17 @@ function runCommand (stream, command, state, sessionId, shellState, options) {
     return
   }
 
-  state.commands.push(command)
-  state.commandEvents.push({ sessionId, command })
+  const privilegedFrame = parsePrivilegedFileFrameCommand(command)
+  if (!privilegedFrame) {
+    state.commands.push(command)
+    state.commandEvents.push({ sessionId, command })
+  }
   const managed = options.managedPtyTasks
     ? parseManagedPtyCommand(command)
     : null
   const privileged = options.sftpFixture
     ? parsePrivilegedFileCommand(command)
     : null
-  const privilegedFrame = parsePrivilegedFileFrameCommand(command)
   const nonce = shellState.shellIntegrationActive
     ? shellState.shellIntegrationNonce
     : ''

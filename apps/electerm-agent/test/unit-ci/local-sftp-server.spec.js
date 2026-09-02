@@ -4,11 +4,17 @@ import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { createRequire } from 'node:module'
-import { buildPrivilegedFileCommand } from '../../src/client/components/sftp/privileged-file-protocol.js'
+import {
+  buildPrivilegedFileCommand,
+  buildPrivilegedFileExecutionPlan
+} from '../../src/client/components/sftp/privileged-file-protocol.js'
 
 const require = createRequire(import.meta.url)
 const { Client } = require('@electerm/ssh2')
-const { startLocalSshServer } = require('../e2e/common/local-ssh-server')
+const {
+  parsePrivilegedFileCommand,
+  startLocalSshServer
+} = require('../e2e/common/local-ssh-server')
 const { createLocalSftpFixture } = require('../e2e/common/local-sftp-fixture')
 
 function connectClient (server) {
@@ -118,6 +124,23 @@ async function runPrivilegedRequest (shell, request) {
   return { exitCode, output: result }
 }
 
+async function runPrivilegedPlan (shell, request) {
+  const token = privilegedTokenSequence.toString(16).padStart(32, '0')
+  privilegedTokenSequence += 1
+  const plan = buildPrivilegedFileExecutionPlan({ token, request })
+  const start = shell.output().length
+  for (const frame of plan.frames) {
+    shell.stream.write(frame.command + '\r')
+    if (frame.acknowledgement) {
+      await waitFor(() => shell.output().slice(start)
+        .includes(frame.acknowledgement), 10000)
+    }
+  }
+  const endPrefix = `\u001b]698;SHELLPILOT_FILE;${token};end;`
+  await waitFor(() => shell.output().slice(start).includes(endPrefix), 10000)
+  return { plan, token }
+}
+
 async function withPrivilegedFixture (runTest) {
   const fixture = await createLocalSftpFixture()
   const server = await startLocalSshServer({
@@ -142,6 +165,68 @@ function callSftp (sftp, method, ...args) {
     sftp[method](...args, (error, result) => error ? reject(error) : resolve(result))
   })
 }
+
+test('local SSH fixture never records staged privileged frame payloads', async () => {
+  await withPrivilegedFixture(async ({ server, shell }) => {
+    const { plan } = await runPrivilegedPlan(shell, {
+      operation: 'lstat',
+      args: { path: '/root-only/app.conf' }
+    })
+    assert.ok(plan.frames.length > 1)
+    const stagedPayload = plan.frames.map(frame =>
+      /__sp_pf_b="\$\{__sp_pf_b\}([A-Za-z0-9+/=]+)";/.exec(
+        frame.command
+      )?.[1]
+    ).find(Boolean)
+    assert.ok(stagedPayload?.length > 100)
+    assert.equal(server.state.commands.some(command =>
+      command.includes('SHELLPILOT_FILE_FRAME')), false)
+    assert.equal(server.state.commandEvents.some(event =>
+      event.command.includes('SHELLPILOT_FILE_FRAME')), false)
+    assert.equal(server.state.commands.some(command =>
+      command.includes(stagedPayload)), false)
+    assert.equal(server.state.commandEvents.some(event =>
+      event.command.includes(stagedPayload)), false)
+
+    const eventCount = server.state.commandEvents.length
+    shell.stream.write('pwd\r')
+    await waitFor(() => server.state.commandEvents.length > eventCount)
+    assert.equal(server.state.commandEvents.at(-1).command, 'pwd')
+  })
+})
+
+test('local SSH fixture accepts only exact standalone probe and compact list shapes', () => {
+  const token = 'a7'.repeat(24)
+  const probe = buildPrivilegedFileCommand({
+    token,
+    request: { operation: 'probe', args: {} }
+  })
+  assert.equal(parsePrivilegedFileCommand(probe)?.operation, 'probe')
+  assert.equal(parsePrivilegedFileCommand(probe + ' :'), null)
+  const tamperedProbe = probe.replace('cleanShell=1', 'cleanShell=1; :')
+  assert.notEqual(tamperedProbe, probe)
+  assert.equal(parsePrivilegedFileCommand(tamperedProbe), null)
+
+  const list = buildPrivilegedFileCommand({
+    token,
+    request: {
+      operation: 'list-bound',
+      args: {
+        path: '/root-only',
+        sourceParentRealPath: '/',
+        sourceParentDevice: '3001',
+        sourceParentInode: '3002',
+        sourceDevice: '3003',
+        sourceInode: '3004'
+      }
+    }
+  })
+  assert.equal(parsePrivilegedFileCommand(list)?.operation, 'list-bound')
+  assert.equal(parsePrivilegedFileCommand(list + ' :'), null)
+  const tamperedList = list.replace('L() {', 'L() { :;')
+  assert.notEqual(tamperedList, list)
+  assert.equal(parsePrivilegedFileCommand(tamperedList), null)
+})
 
 test('local SSH fixture provides isolated SFTP read, write, rename and cleanup operations', async () => {
   const fixture = await createLocalSftpFixture()
