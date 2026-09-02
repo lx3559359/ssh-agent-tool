@@ -2838,6 +2838,111 @@ test('AttachAddon preserves single-key password echo detection and cancellation'
   assert.deepEqual(calls, [{ passwordCancelled: true }])
 })
 
+test('AttachAddon cancels delayed password UI after a terminating paste', async () => {
+  const tracked = []
+  const { addon, sent, parent, term } = await createAttachHarness(
+    (command, context) => {
+      tracked.push({ command, context })
+      return { sendNow: true }
+    }
+  )
+  const promptEvents = []
+  let uiPasswordMode = false
+  parent.notifyOnData = () => {}
+  parent.onPasswordPromptDetected = () => {
+    uiPasswordMode = true
+    promptEvents.push('detected')
+  }
+  parent.onPasswordPromptCancelled = () => {
+    uiPasswordMode = false
+    promptEvents.push('cancelled')
+  }
+  term.write = () => {}
+
+  addon.writeToTerminal('Password: ')
+  assert.equal(addon.isPasswordPromptDetected(), true)
+
+  addon.sendToServer('secret\r')
+  await new Promise(resolve => setTimeout(resolve, 150))
+
+  assert.deepEqual(promptEvents, ['cancelled'])
+  assert.equal(uiPasswordMode, false)
+  assert.equal(addon.isPasswordPromptDetected(), false)
+  assert.equal(addon._passwordPromptNotificationTimer, null)
+  assert.equal(addon._pendingEchoCheck, null)
+  assert.equal(addon._echoCheckTimer, null)
+
+  addon.sendToServer('\r')
+
+  assert.deepEqual(sent, ['secret\r', '\r'])
+  assert.equal(tracked.length, 1)
+  assert.equal(tracked[0].context.passwordMode, false)
+})
+
+test('AttachAddon clears an expired echo-check timer handle', async () => {
+  const { addon } = await createAttachHarness(() => {
+    throw new Error('Password input must not enter command safety tracking')
+  })
+  addon._passwordPromptDetected = true
+
+  addon.sendToServer('s')
+  assert.notEqual(addon._echoCheckTimer, null)
+
+  await new Promise(resolve => setTimeout(resolve, 240))
+
+  assert.equal(addon._pendingEchoCheck, null)
+  assert.equal(addon._echoCheckTimer, null)
+  addon.sendToServer('\x03')
+})
+
+test('AttachAddon dispose cancels a delayed password notification', async () => {
+  const { addon, parent, term } = await createDirectAttachHarness()
+  const promptEvents = []
+  parent.onPasswordPromptDetected = () => promptEvents.push('detected')
+  parent.onPasswordPromptCancelled = () => promptEvents.push('cancelled')
+  term.write = () => {}
+
+  addon.writeToTerminal('Password: ')
+  assert.equal(addon.isPasswordPromptDetected(), true)
+  assert.notEqual(addon._passwordPromptNotificationTimer, null)
+
+  addon.dispose()
+
+  assert.equal(addon.isPasswordPromptDetected(), false)
+  assert.equal(addon._passwordPromptNotificationTimer, null)
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.deepEqual(promptEvents, [])
+})
+
+test('xterm listener order keeps a terminating password event private', async () => {
+  const { addon, sent } = await createAttachHarness(() => {
+    throw new Error('Embedded password terminators must stay transparent')
+  })
+  const listeners = []
+  const tracked = []
+  const xterm = {
+    onData: listener => listeners.push(listener),
+    emit: data => listeners.forEach(listener => listener(data))
+  }
+
+  // terminal.jsx registers its tracker before remoteInit registers AttachAddon.
+  xterm.onData(data => {
+    if (!addon.isPasswordPromptDetected()) tracked.push(data)
+  })
+  xterm.onData(addon.sendToServer)
+  addon._passwordPromptDetected = true
+
+  xterm.emit('secret\r')
+
+  assert.deepEqual(tracked, [])
+  assert.equal(addon.isPasswordPromptDetected(), false)
+
+  xterm.emit('uptime')
+
+  assert.deepEqual(tracked, ['uptime'])
+  assert.deepEqual(sent, ['secret\r', 'uptime'])
+})
+
 test('CommandTrackerAddon completes a released expected simple command once', async () => {
   const { CommandTrackerAddon } = await importCommandTracker()
   const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
@@ -3245,6 +3350,8 @@ test('terminal snapshots real password mode before tracking the input event', ()
   const passwordEventReturn = onData.indexOf(
     'if (passwordMode) {\n      if (d === \'\\r\' || d === \'\\n\') this.closeSuggestions()\n      return\n    }'
   )
+  const trackingRegistration = source.indexOf('term.onData(this.onData)')
+  const attachRegistration = source.indexOf('await this.initAttachAddon()')
 
   assert.notEqual(onDataStart, -1)
   assert.notEqual(onDataEnd, -1)
@@ -3252,6 +3359,9 @@ test('terminal snapshots real password mode before tracking the input event', ()
   assert.notEqual(passwordModeCheck, -1)
   assert.notEqual(guardedTracking, -1)
   assert.notEqual(passwordEventReturn, -1)
+  assert.notEqual(trackingRegistration, -1)
+  assert.notEqual(attachRegistration, -1)
+  assert.equal(trackingRegistration < attachRegistration, true)
   assert.equal(passwordModeCheck < transportCheck, true)
   assert.equal(transportCheck < guardedTracking, true)
   assert.equal(guardedTracking < passwordEventReturn, true)

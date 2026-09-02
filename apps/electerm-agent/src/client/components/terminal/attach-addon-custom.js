@@ -60,6 +60,7 @@ export default class AttachAddonCustom {
     this._passwordPromptDetected = false
     this._pendingEchoCheck = null
     this._echoCheckTimer = null
+    this._passwordPromptNotificationTimer = null
     this._pendingTerminalEnter = null
     this._terminalPastePending = false
     this._remoteOutputListeners = new Set()
@@ -314,9 +315,26 @@ export default class AttachAddonCustom {
     return this._passwordPromptDetected === true
   }
 
+  _clearPasswordPromptNotification = () => {
+    clearTimeout(this._passwordPromptNotificationTimer)
+    this._passwordPromptNotificationTimer = null
+  }
+
+  _schedulePasswordPromptNotification = () => {
+    this._clearPasswordPromptNotification()
+    const timer = setTimeout(() => {
+      if (this._passwordPromptNotificationTimer !== timer) return
+      this._passwordPromptNotificationTimer = null
+      if (!this._passwordPromptDetected) return
+      this.term?.parent?.onPasswordPromptDetected?.()
+    }, 100)
+    this._passwordPromptNotificationTimer = timer
+  }
+
   _onEchoCheckTimeout = () => {
     // No echo received within timeout → confirms password mode
     this._pendingEchoCheck = null
+    this._echoCheckTimer = null
   }
 
   _handleEchoDetection = (str) => {
@@ -324,6 +342,7 @@ export default class AttachAddonCustom {
       // Server sent data back while we were waiting → echo is ON → not password
       if (str.includes(this._pendingEchoCheck.char)) {
         this._passwordPromptDetected = false
+        this._clearPasswordPromptNotification()
         clearTimeout(this._echoCheckTimer)
         this._pendingEchoCheck = null
         this._echoCheckTimer = null
@@ -977,9 +996,7 @@ export default class AttachAddonCustom {
     if (this._checkPasswordPrompt(str) && !this._passwordPromptDetected) {
       this._passwordPromptDetected = true
       // Show password dropdown immediately after terminal renders the prompt
-      setTimeout(() => {
-        this.term?.parent?.onPasswordPromptDetected?.()
-      }, 100)
+      this._schedulePasswordPromptNotification()
     }
 
     if (typeof data === 'string') {
@@ -1028,6 +1045,7 @@ export default class AttachAddonCustom {
     // Treat the whole event as password input, then clear on its first terminator.
     if (passwordInputTerminated ||
       data === '\r' || data === '\n' || data === '\x03') {
+      this._clearPasswordPromptNotification()
       if (this._passwordPromptDetected) {
         this.term?.parent?.onPasswordPromptCancelled?.()
       }
@@ -1277,6 +1295,10 @@ export default class AttachAddonCustom {
     this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
     this.managedPtyPromptReleasePending = false
     this.pendingInput = []
+    this._clearPasswordPromptNotification()
+    this._passwordPromptDetected = false
+    this._lastOutputLine = ''
+    this._pendingEchoCheck = null
     clearTimeout(this._echoCheckTimer)
     this._echoCheckTimer = null
     this._pendingTerminalEnter = null
