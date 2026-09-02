@@ -252,22 +252,6 @@ function createBackend (calls, name = 'backend', options = {}) {
   }
 }
 
-function stableTestRemoteListRequestObjectIdentity (value) {
-  if (value?.requestEpoch !== undefined) {
-    return [
-      'task',
-      value.lifecycleEpoch,
-      value.requestEpoch,
-      value.sshSessionGeneration,
-      value.sshTerminalPid
-    ].join(':')
-  }
-  if (typeof value?.aborted === 'boolean') {
-    return `signal:${value.testRemoteListRequestIdentity || 'default'}`
-  }
-  return String(value || '')
-}
-
 function createEntryHarness ({
   acquire,
   replaceTimer,
@@ -393,11 +377,6 @@ function createEntryHarness ({
         trackSftpEntryMetric: lifecycle.trackSftpEntryMetric,
         typeMap
       })
-      installClassField(entry, 'buildRemoteListRequestKey', {
-        normalizeRemotePath: value => value,
-        remoteListRequestObjectIdentity:
-          stableTestRemoteListRequestObjectIdentity
-      })
       installClassField(entry, 'remoteListUncoalesced', {
         Client: client || (async () => {
           throw new Error('unexpected SFTP client construction')
@@ -441,31 +420,6 @@ function createEntryHarness ({
       entry.remoteList = entry.remoteListUncoalesced
       return { entry, stateWrites, lifecycle }
     })
-}
-
-async function enableRemoteListCoalescing (entry) {
-  const { createRemoteDirectoryCache } = await importModule(
-    'src/client/components/sftp/remote-directory-cache.js'
-  )
-  const cache = createRemoteDirectoryCache()
-  entry.remoteListRequestKeys = []
-  entry.remoteDirectoryCache = {
-    get: (...args) => cache.get(...args),
-    set: (...args) => cache.set(...args),
-    clear: (...args) => cache.clear(...args),
-    stats: (...args) => cache.stats(...args),
-    runRequest: (key, loader) => {
-      entry.remoteListRequestKeys.push(key)
-      return cache.runRequest(key, loader)
-    }
-  }
-  installClassField(entry, 'buildRemoteListRequestKey', {
-    normalizeRemotePath: value => value,
-    remoteListRequestObjectIdentity:
-      stableTestRemoteListRequestObjectIdentity
-  })
-  installClassField(entry, 'remoteList')
-  return entry.remoteDirectoryCache
 }
 
 test('remoteList rejects before constructing a client while its generation drains', async () => {
@@ -984,87 +938,6 @@ test('root to login cache miss clears privileged rows before deferred list resol
   assert.deepEqual(entry.state.remote.map(file => file.name), ['home.txt'])
 })
 
-test('remote list request identity changes when only terminal PID changes', async () => {
-  const { entry } = await createEntryHarness({
-    acquire: async () => { throw new Error('unused') }
-  })
-  installClassField(entry, 'buildRemoteListRequestKey', {
-    normalizeRemotePath: value => value,
-    remoteListRequestObjectIdentity:
-      stableTestRemoteListRequestObjectIdentity
-  })
-  entry.sshSessionGeneration = 'generation-1'
-  entry.sshTerminalPid = '100'
-  const first = entry.buildRemoteListRequestKey({
-    remotePath: '/root-only',
-    returnList: false,
-    commitList: false
-  })
-
-  entry.sshTerminalPid = '200'
-  const second = entry.buildRemoteListRequestKey({
-    remotePath: '/root-only',
-    returnList: false,
-    commitList: false
-  })
-
-  assert.notEqual(first, second)
-})
-
-test('remote list request key isolates identity lifecycle signal and policies', async () => {
-  const { entry } = await createEntryHarness({
-    acquire: async () => { throw new Error('unused') }
-  })
-  const objectIds = new WeakMap()
-  let objectSequence = 0
-  installClassField(entry, 'buildRemoteListRequestKey', {
-    normalizeRemotePath: value => value,
-    remoteListRequestObjectIdentity: value => {
-      if (!value || !['object', 'function'].includes(typeof value)) {
-        return String(value || '')
-      }
-      if (!objectIds.has(value)) objectIds.set(value, ++objectSequence)
-      return objectIds.get(value)
-    }
-  })
-  entry.sshSessionGeneration = 'generation-1'
-  entry.sshTerminalPid = '100'
-  const task = Object.freeze({
-    lifecycleEpoch: 1,
-    requestEpoch: 7,
-    sshSessionGeneration: 'generation-1',
-    sshTerminalPid: '100'
-  })
-  const signal = new AbortController().signal
-  const base = {
-    cacheKey: 'uid=0:/root-only',
-    task,
-    signal,
-    remotePath: '/root-only',
-    returnList: false,
-    commitList: false,
-    suppressLoading: false,
-    suppressVisibleError: false,
-    rethrow: true
-  }
-  const baseKey = entry.buildRemoteListRequestKey(base)
-  assert.equal(entry.buildRemoteListRequestKey(base), baseKey)
-  const keys = [
-    base,
-    { ...base, cacheKey: 'uid=1000:/root-only' },
-    { ...base, task: { ...task } },
-    { ...base, task: { ...task, requestEpoch: 8 } },
-    { ...base, signal: new AbortController().signal },
-    { ...base, suppressLoading: true },
-    { ...base, suppressVisibleError: true },
-    { ...base, rethrow: false },
-    { ...base, returnList: true },
-    { ...base, commitList: true }
-  ].map(options => entry.buildRemoteListRequestKey(options))
-
-  assert.equal(new Set(keys).size, keys.length)
-})
-
 test('stale and current list calls probe and load independently', async () => {
   const firstListGate = deferred()
   const firstListStarted = deferred()
@@ -1099,7 +972,6 @@ test('stale and current list calls probe and load independently', async () => {
     }
   }
   const { entry, lifecycle } = await createEntryHarness({ acquire })
-  await enableRemoteListCoalescing(entry)
   entry.sshSessionGeneration = 'generation-1'
   entry.sshTerminalPid = '100'
   const signal = new AbortController().signal
@@ -1132,45 +1004,57 @@ test('stale and current list calls probe and load independently', async () => {
   assert.ok(['fulfilled', 'rejected'].includes(oldResult.status))
 })
 
-test('equivalent current list calls still validate each serialized operation', async () => {
+test('equivalent current list calls serialize and independently probe load and release', async () => {
   const listGate = deferred()
   const firstListStarted = deferred()
   let probeCount = 0
   let listCount = 0
+  let releaseCount = 0
   const acquire = async ({ onIdentity }) => {
-    probeCount += 1
+    const operation = ++probeCount
     await onIdentity({ loginUsername: 'hik', ...rootRuntimeIdentity })
     return {
       runtimeIdentity: rootRuntimeIdentity,
       backend: {
         list: async () => {
           listCount += 1
-          if (listCount === 1) firstListStarted.resolve()
-          await listGate.promise
-          return [{ name: 'root', type: 'f', size: 1 }]
+          if (operation === 1) {
+            firstListStarted.resolve()
+            await listGate.promise
+          }
+          return [{ name: `root-${operation}`, type: 'f', size: 1 }]
         }
       },
-      release: async () => true
+      release: async () => {
+        releaseCount += 1
+        return true
+      }
     }
   }
   const { entry, lifecycle } = await createEntryHarness({ acquire })
-  const cache = await enableRemoteListCoalescing(entry)
   entry.sshSessionGeneration = 'generation-1'
   entry.sshTerminalPid = '100'
   const task = lifecycle.beginSftpEntryRemoteTask(entry)
   const signal = new AbortController().signal
   const options = { lifecycleTask: task, signal, rethrow: true }
-  const first = entry.remoteList(false, '/root-only', undefined, options)
+  const first = entry.remoteList(true, '/root-only', undefined, options)
   await firstListStarted.promise
-  const second = entry.remoteList(false, '/root-only', undefined, options)
+  const second = entry.remoteList(true, '/root-only', undefined, options)
+  await new Promise(resolve => setImmediate(resolve))
+
+  assert.equal(probeCount, 1)
+  assert.equal(listCount, 1)
+  assert.equal(releaseCount, 0)
   listGate.resolve()
-  await Promise.all([first, second])
+  const [firstResult, secondResult] = await Promise.all([first, second])
 
   assert.notEqual(first, second)
   assert.equal(probeCount, 2)
-  assert.equal(entry.remoteListRequestKeys[0], entry.remoteListRequestKeys[1])
   assert.equal(listCount, 2)
-  assert.equal(cache.stats().coalesced, 0)
+  assert.equal(releaseCount, 2)
+  assert.notStrictEqual(firstResult, secondResult)
+  assert.deepEqual(firstResult.map(file => file.name), ['root-1'])
+  assert.deepEqual(secondResult.map(file => file.name), ['root-2'])
 })
 
 test('PID-only rebind cannot recover the prior terminal cached snapshot', async () => {
@@ -2066,7 +1950,6 @@ test('remote list waits for committed paint and metric acceptance', async () => 
       backgroundTaskCount: 0,
       renderCommitCount: 1,
       metricTaskCount: 0,
-      directoryRequestCount: 0,
       requestEpoch: 1,
       visibleRemoteCommitted: false,
       firstReadyCommitted: false,
@@ -2096,7 +1979,6 @@ test('remote list waits for committed paint and metric acceptance', async () => 
       backgroundTaskCount: 0,
       renderCommitCount: 0,
       metricTaskCount: 0,
-      directoryRequestCount: 0,
       requestEpoch: 1,
       visibleRemoteCommitted: true,
       firstReadyCommitted: true,

@@ -24,7 +24,6 @@ export function buildRemoteDirectoryCacheKey (identity = {}) {
 
 export function createRemoteDirectoryCache (options = {}) {
   const entries = new Map()
-  const inflight = new Map()
   const now = typeof options.now === 'function' ? options.now : Date.now
   const requestedTtlMs = Number(options.ttlMs)
   const ttlMs = Number.isFinite(requestedTtlMs)
@@ -34,7 +33,6 @@ export function createRemoteDirectoryCache (options = {}) {
   const maxEntries = Number.isFinite(requestedMaxEntries)
     ? Math.max(1, Math.floor(requestedMaxEntries))
     : remoteDirectoryCacheMaxEntries
-  let coalesced = 0
 
   function get (key) {
     const requestKey = String(key || '')
@@ -68,45 +66,13 @@ export function createRemoteDirectoryCache (options = {}) {
     return cloneDirectoryValue(entry.value)
   }
 
-  function runRequest (key, loader) {
-    if (typeof loader !== 'function') {
-      throw new TypeError('Remote directory request requires a loader')
-    }
-    const requestKey = String(key || '')
-    const active = inflight.get(requestKey)
-    if (active) {
-      coalesced += 1
-      return active
-    }
-    const request = Promise.resolve().then(loader)
-    inflight.set(requestKey, request)
-    const clearRequest = () => {
-      if (inflight.get(requestKey) === request) {
-        inflight.delete(requestKey)
-      }
-    }
-    request.then(clearRequest, clearRequest)
-    return request
-  }
-
   function clear () {
     entries.clear()
-    inflight.clear()
-  }
-
-  function stats () {
-    return {
-      entries: entries.size,
-      inflight: inflight.size,
-      coalesced
-    }
   }
 
   return Object.freeze({
     get,
     set,
-    runRequest,
-    clear,
-    stats
+    clear
   })
 }

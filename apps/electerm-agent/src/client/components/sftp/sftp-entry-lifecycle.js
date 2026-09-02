@@ -171,20 +171,9 @@ function invalidateSftpEntryCommittedReadiness (entry) {
   readiness.firstReadyCommitted = false
 }
 
-function safeDirectoryRequestCount (entry) {
-  try {
-    return Math.max(0, Number(
-      entry.remoteDirectoryCache?.stats?.()?.inflight || 0
-    ))
-  } catch {
-    return 0
-  }
-}
-
 export function getSftpEntryReadinessSnapshot (entry) {
   const readiness = initializeSftpEntryReadiness(entry)
   const refreshState = String(entry.state?.remoteRefreshState || '')
-  const directoryRequestCount = safeDirectoryRequestCount(entry)
   const remoteFileSettlementCount = Math.max(0, Number(
     entry.remoteFileGeneration?.settlements?.size ||
     entry.remoteFileOperationSettlements?.size || 0
@@ -201,7 +190,6 @@ export function getSftpEntryReadinessSnapshot (entry) {
     backgroundTaskCount: readiness.backgroundTasks.size,
     renderCommitCount: readiness.renderCommits.size,
     metricTaskCount: readiness.metricTasks.size,
-    directoryRequestCount,
     requestEpoch: Number(entry.sftpRemoteRequestEpoch || 0),
     visibleRemoteCommitted: readiness.visibleRemoteCommitted,
     firstReadyCommitted: readiness.firstReadyCommitted
@@ -221,8 +209,7 @@ export function getSftpEntryReadinessSnapshot (entry) {
       snapshot.metricTaskCount === 0 &&
       remoteFileSettlementCount === 0 &&
       activeRemoteFileLeaseCount === 0 &&
-      uncertainRemoteFileLeaseCount === 0 &&
-      snapshot.directoryRequestCount === 0
+      uncertainRemoteFileLeaseCount === 0
   })
 }
 

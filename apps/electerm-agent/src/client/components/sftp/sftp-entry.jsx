@@ -146,21 +146,6 @@ import { recordPerformanceDuration } from '../../common/quality/quality-events.j
 import './sftp.styl'
 
 const e = window.translate
-const remoteListRequestObjectIds = new WeakMap()
-let remoteListRequestObjectSequence = 0
-
-function remoteListRequestObjectIdentity (value) {
-  if (!value || !['object', 'function'].includes(typeof value)) {
-    return String(value || '')
-  }
-  let identity = remoteListRequestObjectIds.get(value)
-  if (!identity) {
-    remoteListRequestObjectSequence += 1
-    identity = remoteListRequestObjectSequence
-    remoteListRequestObjectIds.set(value, identity)
-  }
-  return identity
-}
 
 const transferSafetyTerminalStates = new Set([
   'rollback-available',
@@ -3206,38 +3191,6 @@ export default class Sftp extends Component {
     })
   }
 
-  buildRemoteListRequestKey = ({
-    cacheKey,
-    task,
-    signal,
-    returnList,
-    remotePath,
-    oldPath,
-    commitList,
-    suppressLoading,
-    suppressVisibleError,
-    rethrow,
-    explicitOpen
-  }) => [
-    String(cacheKey || ''),
-    String(this.sshSessionGeneration || ''),
-    String(this.sshTerminalPid || ''),
-    String(task?.lifecycleEpoch || ''),
-    String(task?.requestEpoch || ''),
-    String(task?.sshSessionGeneration || ''),
-    String(task?.sshTerminalPid || ''),
-    String(remoteListRequestObjectIdentity(task)),
-    String(remoteListRequestObjectIdentity(signal)),
-    normalizeRemotePath(remotePath || ''),
-    normalizeRemotePath(oldPath || ''),
-    returnList ? 'return' : 'paint',
-    commitList ? 'commit' : 'no-commit',
-    suppressLoading ? 'suppress-loading' : 'show-loading',
-    suppressVisibleError ? 'suppress-error' : 'show-error',
-    rethrow ? 'rethrow' : 'consume-error',
-    explicitOpen ? 'explicit-open' : 'ordinary-open'
-  ].join('\u0000')
-
   remoteList = (...args) => {
     return this.remoteListUncoalesced(...args)
   }
@@ -3429,29 +3382,6 @@ export default class Sftp extends Component {
           cacheKey
         )
       }
-    }
-    const runDirectoryRequest = loader => {
-      const requestKey = this.buildRemoteListRequestKey({
-        cacheKey,
-        task,
-        signal: options.signal,
-        returnList,
-        remotePath,
-        oldPath,
-        commitList: options.commitList === true,
-        suppressLoading: options.suppressLoading === true,
-        suppressVisibleError: options.suppressVisibleError === true,
-        rethrow: options.rethrow === true,
-        explicitOpen: options.explicitOpen === true
-      })
-      const runRequest = this.remoteDirectoryCache?.runRequest
-      return typeof runRequest === 'function'
-        ? Reflect.apply(
-          runRequest,
-          this.remoteDirectoryCache,
-          [requestKey, loader]
-        )
-        : Promise.resolve().then(loader)
     }
     const invalidateCleanupUncertainty = () => {
       return invalidateUnsafeRemoteExit()
@@ -3886,22 +3816,20 @@ export default class Sftp extends Component {
             }
           }
           applyCachedDirectory(capability.runtimeIdentity)
-          const updated = await runDirectoryRequest(async () => {
-            const listed = await this.sftpList(backend, remotePath, {
-              signal: options.signal
-            })
-            if (!isCurrentSftpEntryRemoteTask(this, task)) {
-              invalidateUnsafeRemoteExit()
-              return
-            }
-            return this.updateRemoteList(
-              listed,
-              remotePath,
-              backend,
-              task,
-              options.signal
-            )
+          const listed = await this.sftpList(backend, remotePath, {
+            signal: options.signal
           })
+          if (!isCurrentSftpEntryRemoteTask(this, task)) {
+            invalidateUnsafeRemoteExit()
+            return
+          }
+          const updated = await this.updateRemoteList(
+            listed,
+            remotePath,
+            backend,
+            task,
+            options.signal
+          )
           if (!returnList || options.commitList) {
             if (!await commitRemoteResult(updated)) return
             mutation.commit()
