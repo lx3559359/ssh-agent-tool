@@ -41,6 +41,13 @@ async function importShellIntegration () {
   )))
 }
 
+async function importTerminalInputMode () {
+  return import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/terminal/terminal-input-mode.js'
+  )))
+}
+
 function deferred () {
   let resolveDeferred
   let rejectDeferred
@@ -1441,6 +1448,23 @@ test('shell transition detection is conservative about interactive child shells'
   }
 })
 
+test('transport password state blocks ordinary command input tracking', async () => {
+  const { isTerminalPasswordInputMode } = await importTerminalInputMode()
+
+  assert.equal(isTerminalPasswordInputMode({
+    transportPasswordMode: true,
+    suggestionPasswordMode: false
+  }), true)
+  assert.equal(isTerminalPasswordInputMode({
+    transportPasswordMode: false,
+    suggestionPasswordMode: true
+  }), true)
+  assert.equal(isTerminalPasswordInputMode({
+    transportPasswordMode: false,
+    suggestionPasswordMode: false
+  }), false)
+})
+
 test('shell integration detection forwards authenticated OSC data after hidden injection echo', async () => {
   const writes = []
   const term = {
@@ -2647,6 +2671,26 @@ test('terminal invalidates managed PTY leases and can rearm the current child sh
   assert.match(source, /outputObservedSequence/)
   assert.match(source, /operationsPtyTaskController\.invalidate\(/)
   assert.match(source, /attachAddon\?\.isPasswordPromptDetected\?\.\(\)/)
+})
+
+test('terminal checks real password mode before tracking Enter as a command', () => {
+  const source = readClientFile('components/terminal/terminal.jsx')
+  const onDataStart = source.indexOf('  onData = (d) => {')
+  const onDataEnd = source.indexOf('\n  runSafetyCommand =', onDataStart)
+  const onData = source.slice(onDataStart, onDataEnd).replaceAll('\r\n', '\n')
+  const transportCheck = onData.indexOf('isPasswordPromptDetected')
+  const passwordModeCheck = onData.indexOf('isTerminalPasswordInputMode')
+  const guardedTracking = onData.indexOf(
+    'if (!passwordMode) {\n      this.handleInputEvent(d)\n    }'
+  )
+
+  assert.notEqual(onDataStart, -1)
+  assert.notEqual(onDataEnd, -1)
+  assert.notEqual(transportCheck, -1)
+  assert.notEqual(passwordModeCheck, -1)
+  assert.notEqual(guardedTracking, -1)
+  assert.equal(passwordModeCheck < transportCheck, true)
+  assert.equal(transportCheck < guardedTracking, true)
 })
 
 test('terminal command tracking no longer routes through the manual safety controller', () => {

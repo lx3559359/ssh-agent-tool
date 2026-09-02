@@ -105,6 +105,7 @@ import { buildRecoveryPlan } from '../../common/safety-transactions/recovery-pro
 import { assertSameSessionEndpoint } from '../../common/safety-transactions/endpoint-guard.js'
 import * as terminalSafetyStore from '../../common/safety-transactions/transaction-store.js'
 import { extractTerminalCommandInput } from './terminal-current-input.js'
+import { isTerminalPasswordInputMode } from './terminal-input-mode.js'
 import { recordPerformanceMark } from '../../common/quality/quality-events.js'
 import {
   emitAgentTakeoverLifecycleEvent
@@ -1315,13 +1316,17 @@ class Term extends Component {
   }
 
   onData = (d) => {
-    this.handleInputEvent(d)
-    // Skip normal suggestion logic when in password mode
     const suggestions = refsStatic.get('terminal-suggestions')
-    if (suggestions?.state?.passwordMode) {
-      if (d === '\r' || d === '\n') {
-        this.closeSuggestions()
-      }
+    const passwordMode = isTerminalPasswordInputMode({
+      transportPasswordMode:
+        this.attachAddon?.isPasswordPromptDetected?.() === true,
+      suggestionPasswordMode: suggestions?.state?.passwordMode === true
+    })
+    if (!passwordMode) {
+      this.handleInputEvent(d)
+    }
+    if (passwordMode) {
+      if (d === '\r' || d === '\n') this.closeSuggestions()
       return
     }
     if (!this.props.config.showCmdSuggestions || d === '\r' || d === '\n') {
