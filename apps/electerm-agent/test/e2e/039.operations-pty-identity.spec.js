@@ -1,4 +1,5 @@
 const { promises: fs } = require('node:fs')
+const path = require('node:path')
 const { _electron: electron, expect, test } = require('@playwright/test')
 const { createLocalSftpFixture } = require('./common/local-sftp-fixture')
 const { startLocalSshServer } = require('./common/local-ssh-server')
@@ -167,7 +168,7 @@ async function saveRemoteEditor (page) {
   const confirmation = page.locator('.custom-modal-wrap:visible').filter({
     has: page.locator('.sftp-safety-confirmation')
   }).last()
-  await expect(confirmation).toBeVisible({ timeout: 15000 })
+  await expect(confirmation).toBeVisible({ timeout: 60000 })
   await confirmation.locator('.custom-modal-ok-btn').click()
   await expect(remoteEditor(page)).toHaveCount(0, { timeout: 30000 })
   await waitForRemoteRequestCycle(page, requestEpoch)
@@ -376,6 +377,13 @@ async function expectRemoteFileWorkSettled (page) {
 
 test('operations and the complete remote file panel inherit su root then return to the login identity', async () => {
   const fixture = await createLocalSftpFixture()
+  await fs.mkdir(path.join(
+    fixture.root,
+    'home',
+    'shellpilot',
+    'folder-a',
+    'folder-b'
+  ), { recursive: true })
   const sshServer = await startLocalSshServer({
     managedPtyTasks: true,
     sftpRoot: fixture.root,
@@ -395,35 +403,6 @@ test('operations and the complete remote file panel inherit su root then return 
     await dismissStartupModals(page)
     await connectWithQuickWizard(page, sshServer)
     await expect.poll(() => activeTerminal(page), { timeout: 20000 })
-      .toBe(true)
-    await expect.poll(() => sshServer.state.sftpEvents.filter(event => (
-      event.event === 'OPENDIR' && event.path === '/home/shellpilot'
-    )).length, { timeout: 20000 }).toBeGreaterThan(0)
-    await waitForRemotePanelReady(page)
-    await expectRemoteFileWorkSettled(page)
-    await expectManagedPtyEchoHidden(page)
-    const terminalSnapshot = await page.evaluate(() => {
-      const terminal = window.refs.get('term-' + window.store.activeTabId)
-      return {
-        activeTabId: window.store.activeTabId,
-        currentTabId: window.store.currentTab?.id,
-        currentTabStatus: window.store.currentTab?.status,
-        hasTerminal: Boolean(terminal),
-        hasXterm: Boolean(terminal?.term),
-        hasAttachAddon: Boolean(terminal?.attachAddon),
-        pid: terminal?.pid || '',
-        onClose: Boolean(terminal?.onClose),
-        loading: terminal?.state?.loading,
-        terminalError: terminal?.state?.terminalError || null,
-        ready: Boolean(
-          terminal?.term &&
-          terminal?.attachAddon &&
-          terminal?.pid &&
-          !terminal?.onClose
-        )
-      }
-    })
-    expect(terminalSnapshot.ready, JSON.stringify(terminalSnapshot, null, 2))
       .toBe(true)
     const initialTracker = await page.evaluate(async () => {
       const terminal = window.refs.get('term-' + window.store.activeTabId)
@@ -454,7 +433,52 @@ test('operations and the complete remote file panel inherit su root then return 
       }
     }, null, 2)).toBe(true)
 
-    await sendTerminalLine(page, 'su root')
+    await openRemoteFilePanel(page)
+    await expect.poll(() => sshServer.state.sftpEvents.filter(event => (
+      event.event === 'OPENDIR' && event.path === '/home/shellpilot'
+    )).length, { timeout: 20000 }).toBeGreaterThan(0)
+    await waitForRemotePanelReady(page)
+    await expectRemoteFileWorkSettled(page)
+    await expectManagedPtyEchoHidden(page)
+    const terminalBeforeDirectoryNavigation = await terminalBufferText(page)
+    for (const name of ['folder-a', 'folder-b']) {
+      const requestEpoch = await remoteRequestEpoch(page)
+      await remoteRow(page, name).dblclick()
+      await waitForRemoteRequestCycle(page, requestEpoch)
+    }
+    expect(await terminalBufferText(page))
+      .toBe(terminalBeforeDirectoryNavigation)
+    await gotoRemotePath(page, '/home/shellpilot')
+    await page.locator('.session-current .term-sftp-tabs .type-tab:visible')
+      .first().click()
+    const terminalSnapshot = await page.evaluate(() => {
+      const terminal = window.refs.get('term-' + window.store.activeTabId)
+      return {
+        activeTabId: window.store.activeTabId,
+        currentTabId: window.store.currentTab?.id,
+        currentTabStatus: window.store.currentTab?.status,
+        hasTerminal: Boolean(terminal),
+        hasXterm: Boolean(terminal?.term),
+        hasAttachAddon: Boolean(terminal?.attachAddon),
+        pid: terminal?.pid || '',
+        onClose: Boolean(terminal?.onClose),
+        loading: terminal?.state?.loading,
+        terminalError: terminal?.state?.terminalError || null,
+        ready: Boolean(
+          terminal?.term &&
+          terminal?.attachAddon &&
+          terminal?.pid &&
+          !terminal?.onClose
+        )
+      }
+    })
+    expect(terminalSnapshot.ready, JSON.stringify(terminalSnapshot, null, 2))
+      .toBe(true)
+
+    await sendTerminalLine(page, 'su')
+    await expect.poll(() => terminalBufferText(page))
+      .toContain('Password:')
+    await sendTerminalLine(page, sshServer.password)
     await expect.poll(
       () => sshServer.state.effectiveIdentity?.username,
       { timeout: 10000 }
@@ -530,6 +554,13 @@ test('operations and the complete remote file panel inherit su root then return 
     )
     await expectRemoteFileWorkSettled(page)
     await expectManagedPtyEchoHidden(page)
+    const rootTerminalText = await terminalBufferText(page)
+    expect(rootTerminalText).not.toContain('__e_cmd: command not found')
+    expect(rootTerminalText).not.toContain(sshServer.password)
+    expect(rootTerminalText.match(/root@fixture:# /g)?.length || 0).toBe(1)
+    expect(sshServer.state.commandEvents.some(
+      event => event.command === sshServer.password
+    )).toBe(false)
     const ordinarySftp = await page.evaluate(async () => {
       const entry = window.refs.get('sftp-' + window.store.activeTabId)
       try {
