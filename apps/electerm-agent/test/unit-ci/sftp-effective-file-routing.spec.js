@@ -142,7 +142,7 @@ const rootRuntimeIdentity = Object.freeze({
   effectiveUsername: 'root'
 })
 
-function assertRemoteSnapshotCleared (entry) {
+function assertRemoteSnapshotCleared (entry, options = {}) {
   assert.deepEqual(Array.from(entry.state.remote, file => ({
     id: file.id,
     name: file.name
@@ -153,6 +153,19 @@ function assertRemoteSnapshotCleared (entry) {
   ), [])
   assert.deepEqual(Array.from(entry.state.selectedFiles), [])
   assert.equal(entry.state.lastClickedFile, null)
+  assert.equal(entry.visibleRemoteDirectoryCacheKey, '')
+  if (options.identityEpoch !== undefined) {
+    assert.equal(entry.remoteFileIdentityEpoch, options.identityEpoch)
+  }
+  if (options.identityChannel !== undefined) {
+    assert.equal(
+      entry.state.remoteFileIdentity.channel,
+      options.identityChannel
+    )
+  }
+  if (options.identityStatus !== undefined) {
+    assert.equal(entry.state.remoteFileStatus, options.identityStatus)
+  }
 }
 
 async function installRemoteFileIdentityFields (entry) {
@@ -1028,6 +1041,151 @@ test('cached root metadata fails closed on a later identity mismatch', async () 
   assertRemoteSnapshotCleared(entry)
   assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
   assert.equal(entry.state.remoteFileStatus, 'unavailable')
+})
+
+test('sensitive code-only failures outrank nested transient causes', async t => {
+  const cases = [
+    ['REMOTE_FILE_IDENTITY_UNKNOWN', true],
+    ['REMOTE_FILE_IDENTITY_UNAVAILABLE', true],
+    ['REMOTE_FILE_IDENTITY_MISMATCH', true],
+    ['REMOTE_FILE_IDENTITY_CHANGED', true],
+    ['REMOTE_FILE_IDENTITY_SWITCH', true],
+    ['PERMISSION_DENIED', false],
+    ['SSH_FX_PERMISSION_DENIED', false],
+    ['SFTP_PERMISSION_DENIED', false],
+    ['EACCES', false],
+    ['EPERM', false],
+    [3, false]
+  ]
+  for (const [code, identityFailure] of cases) {
+    await t.test(String(code), async () => {
+      const transientCause = Object.assign(new Error(), {
+        code: 'ECONNRESET'
+      })
+      const sensitiveError = Object.assign(new Error(), {
+        code,
+        cause: transientCause
+      })
+      const acquire = async ({ onIdentity }) => {
+        await onIdentity({ loginUsername: 'hik', ...rootRuntimeIdentity })
+        return {
+          runtimeIdentity: rootRuntimeIdentity,
+          backend: { list: async () => { throw sensitiveError } },
+          release: async () => true
+        }
+      }
+      const { entry } = await createEntryHarness({ acquire })
+      const rootFile = {
+        id: 'root-app-conf',
+        name: 'app.conf',
+        path: '/root-only',
+        type: 'remote'
+      }
+      entry.state.remote = [rootFile]
+      entry.state.remoteFileTree = entry.buildTree(entry.state.remote)
+      entry.state.selectedType = 'remote'
+      entry.state.selectedFiles = new Set([rootFile.id])
+      entry.state.lastClickedFile = rootFile.id
+      entry.state.remoteFileIdentity = {
+        loginUsername: 'hik',
+        effectiveUid: '0',
+        effectiveUsername: 'root',
+        channel: 'pty-root'
+      }
+      const identityEpoch = entry.remoteFileIdentityEpoch +
+        (identityFailure ? 1 : 0)
+      entry.remoteDirectoryCache = {
+        get: key => {
+          entry.visibleRemoteDirectoryCacheKey = key
+          return { value: [structuredClone(rootFile)] }
+        },
+        set: () => {},
+        clear: () => {}
+      }
+
+      await assert.rejects(
+        entry.remoteList(false, '/root-only', undefined, { rethrow: true }),
+        error => error === sensitiveError
+      )
+
+      assertRemoteSnapshotCleared(entry, {
+        identityEpoch,
+        identityChannel: identityFailure ? 'unknown' : 'pty-root',
+        identityStatus: identityFailure ? 'unavailable' : 'idle'
+      })
+    })
+  }
+})
+
+test('unsafe failure invalidates a delayed cached paint callback', async () => {
+  const transientCause = Object.assign(new Error(), {
+    code: 'ECONNRESET'
+  })
+  const unavailable = Object.assign(new Error(), {
+    code: 'REMOTE_FILE_IDENTITY_UNAVAILABLE',
+    cause: transientCause
+  })
+  const acquire = async ({ onIdentity }) => {
+    await onIdentity({ loginUsername: 'hik', ...rootRuntimeIdentity })
+    return {
+      runtimeIdentity: rootRuntimeIdentity,
+      backend: { list: async () => { throw unavailable } },
+      release: async () => true
+    }
+  }
+  const { entry } = await createEntryHarness({ acquire })
+  const rootFile = {
+    id: 'root-app-conf',
+    name: 'app.conf',
+    path: '/root-only',
+    type: 'remote'
+  }
+  entry.state.remote = [rootFile]
+  entry.state.remoteFileTree = entry.buildTree(entry.state.remote)
+  entry.state.selectedType = 'remote'
+  entry.state.selectedFiles = new Set([rootFile.id])
+  entry.state.lastClickedFile = rootFile.id
+  entry.state.remoteFileIdentity = {
+    loginUsername: 'hik',
+    effectiveUid: '0',
+    effectiveUsername: 'root',
+    channel: 'pty-root'
+  }
+  entry.remoteDirectoryCache = {
+    get: key => {
+      entry.visibleRemoteDirectoryCacheKey = key
+      return { value: [structuredClone(rootFile)] }
+    },
+    set: () => {},
+    clear: () => {}
+  }
+  const pendingStateWrites = []
+  entry.setState = (update, callback) => {
+    pendingStateWrites.push({ update, callback })
+  }
+  const identityEpoch = entry.remoteFileIdentityEpoch + 1
+
+  await assert.rejects(
+    entry.remoteList(false, '/root-only', undefined, { rethrow: true }),
+    error => error === unavailable
+  )
+
+  const delayedCallbacks = []
+  for (const pending of pendingStateWrites) {
+    const next = typeof pending.update === 'function'
+      ? pending.update(entry.state)
+      : pending.update
+    if (next) Object.assign(entry.state, next)
+    if (pending.callback) delayedCallbacks.push(pending.callback)
+  }
+  for (const callback of delayedCallbacks.reverse()) callback()
+  await Promise.resolve()
+
+  assertRemoteSnapshotCleared(entry, {
+    identityEpoch,
+    identityChannel: 'unknown',
+    identityStatus: 'unavailable'
+  })
 })
 
 test('same identity refresh can recover from its own cached snapshot', async () => {

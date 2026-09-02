@@ -274,6 +274,7 @@ export default class Sftp extends Component {
     this.firstSftpReadyRecorded = false
     this.remoteDirectoryCache = createRemoteDirectoryCache()
     this.visibleRemoteDirectoryCacheKey = ''
+    this.remoteDirectoryCachePaintEpoch = 0
     this.remoteFileOperationBackends = new Map()
     this.remoteFileOperationBackendPins = new Map()
     this.transferSafetySessionPins = new Map()
@@ -381,6 +382,8 @@ export default class Sftp extends Component {
     this.remoteFileUnmounted = true
     this.disposeSftpReadiness?.()
     this.remoteDirectoryCache?.clear?.()
+    this.remoteDirectoryCachePaintEpoch =
+      (this.remoteDirectoryCachePaintEpoch || 0) + 1
     this.visibleRemoteDirectoryCacheKey = ''
     this.resetRemoteFileLeaseOutcome?.({ publish: false })
     const transferSettlement = this.quiesceActiveTransfers?.()
@@ -2456,6 +2459,8 @@ export default class Sftp extends Component {
     const nextGeneration = String(sshSessionGeneration || '')
     if (previousGeneration !== nextGeneration) {
       this.remoteDirectoryCache?.clear?.()
+      this.remoteDirectoryCachePaintEpoch =
+        (this.remoteDirectoryCachePaintEpoch || 0) + 1
       this.visibleRemoteDirectoryCacheKey = ''
     }
     return bindSftpEntryRemoteSession(this, {
@@ -3180,6 +3185,9 @@ export default class Sftp extends Component {
 
   applyCachedRemoteDirectory = (remote, generation, task, cacheKey) => {
     const startedAt = globalThis.performance?.now?.() ?? Date.now()
+    const cachePaintEpoch =
+      (this.remoteDirectoryCachePaintEpoch || 0) + 1
+    this.remoteDirectoryCachePaintEpoch = cachePaintEpoch
     let cachedPaintCommitted = false
     this.setState(prevState => {
       if (!generation.accepting ||
@@ -3208,7 +3216,8 @@ export default class Sftp extends Component {
       if (!cachedPaintCommitted ||
         !generation.accepting ||
         !isCurrentRemoteFileGeneration(this, generation) ||
-        !isCurrentSftpEntryRemoteTask(this, task)) return
+        !isCurrentSftpEntryRemoteTask(this, task) ||
+        this.remoteDirectoryCachePaintEpoch !== cachePaintEpoch) return
       this.visibleRemoteDirectoryCacheKey = cacheKey
       let acceptance
       try {
@@ -3543,6 +3552,9 @@ export default class Sftp extends Component {
         }
         assertCurrentGeneration()
         const renderCommit = beginSftpEntryRenderCommit(this)
+        const authoritativePaintEpoch =
+          (this.remoteDirectoryCachePaintEpoch || 0) + 1
+        this.remoteDirectoryCachePaintEpoch = authoritativePaintEpoch
         let remoteStatePrepared = false
         this.setState(prevState => {
           if (!generation.accepting ||
@@ -3572,7 +3584,9 @@ export default class Sftp extends Component {
             if (!remoteStatePrepared ||
               !generation.accepting ||
               !isCurrentRemoteFileGeneration(this, generation) ||
-              !isCurrentSftpEntryRemoteTask(this, task)) {
+              !isCurrentSftpEntryRemoteTask(this, task) ||
+              this.remoteDirectoryCachePaintEpoch !==
+                authoritativePaintEpoch) {
               renderCommit.settle(false)
               return
             }
@@ -3732,14 +3746,13 @@ export default class Sftp extends Component {
         '3',
         'EACCES',
         'EPERM',
+        'PERMISSION_DENIED',
+        'SSH_FX_PERMISSION_DENIED',
         'SFTP_PERMISSION_DENIED'
-      ].includes(code)) ||
+      ].includes(code) || code.endsWith('_PERMISSION_DENIED')) ||
         /permission denied|access denied|权限|拒绝/i.test(errorDetails)
       const identityFailure = errorCodes.some(code => (
-        code === 'REMOTE_FILE_IDENTITY_UNAVAILABLE' ||
-        code.startsWith('REMOTE_FILE_IDENTITY_MISMATCH') ||
-        code.startsWith('REMOTE_FILE_IDENTITY_CHANGED') ||
-        code.startsWith('REMOTE_FILE_IDENTITY_SWITCH')
+        code.startsWith('REMOTE_FILE_IDENTITY_')
       )) || /(?:identity|身份|端点).*(?:unavailable|unknown|mismatch|changed|switch|无法确认|不可用|未知|不一致|变化|切换)/i
         .test(errorDetails)
       const transientTransportFailure = errorCodes.some(code => [
@@ -3762,6 +3775,8 @@ export default class Sftp extends Component {
         ? (cachedRemoteFound ? cachedRemote : oldRemote)
         : []
       if (!safeIdentityFallback) {
+        this.remoteDirectoryCachePaintEpoch =
+          (this.remoteDirectoryCachePaintEpoch || 0) + 1
         this.visibleRemoteDirectoryCacheKey = ''
       }
       const update = {
@@ -3997,6 +4012,8 @@ export default class Sftp extends Component {
 
   handleReloadRemoteSftp = async () => {
     this.remoteDirectoryCache?.clear?.()
+    this.remoteDirectoryCachePaintEpoch =
+      (this.remoteDirectoryCachePaintEpoch || 0) + 1
     this.visibleRemoteDirectoryCacheKey = ''
     this.invalidateRemoteFileIdentity()
     this.sftpSafetyProgressHandlers.clear()
