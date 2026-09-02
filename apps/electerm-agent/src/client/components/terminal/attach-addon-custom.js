@@ -6,6 +6,7 @@ const terminalControlFlag = '__aigshellTerminalControl'
 const managedPtySessionNoncePattern = /^[a-f0-9]{32}$/
 const managedPtyFrameByteLimit = 3840
 const managedPtyLifecycleByteLimit = 8192
+const utf8Encoder = new TextEncoder()
 
 function serializeShellIntegrationValue (value) {
   return String(value || '')
@@ -32,8 +33,9 @@ export default class AttachAddonCustom {
     this.onSuppressionEndCallback = null
     this.publishSuppressionRemainder = false
     this.suppressionReleaseMarker = ''
+    this.suppressionReleaseMarkerBytes = new Uint8Array()
     this.suppressionScanBytes = new Uint8Array()
-    this.suppressionDecoder = new TextDecoder('utf-8')
+    this.suppressionStringCarry = ''
     this.managedPtyLifecycleBytes = new Uint8Array()
     this.managedPtyListenerBytes = new Uint8Array()
     this.managedPtyPromptReleaseBytes = new Uint8Array()
@@ -115,9 +117,7 @@ export default class AttachAddonCustom {
     this.onSuppressionEndCallback = onEnd
     this.publishSuppressionRemainder = publishRemainder === true
     this.managedPtyOutputStreamingActive = false
-    this.suppressionReleaseMarker = String(releaseMarker || '')
-    this.suppressionScanBytes = new Uint8Array()
-    this.suppressionDecoder = new TextDecoder('utf-8')
+    this._setSuppressionReleaseMarker(releaseMarker)
     this.managedPtyLifecycleBytes = new Uint8Array()
     this.managedPtyListenerBytes = new Uint8Array()
     this.managedPtyPromptReleaseBytes = new Uint8Array()
@@ -151,9 +151,7 @@ export default class AttachAddonCustom {
     this.consumeManagedPtyCommandRecord = false
     this.managedPtyOutputStreamingActive = false
     this.publishSuppressionRemainder = false
-    this.suppressionReleaseMarker = ''
-    this.suppressionScanBytes = new Uint8Array()
-    this.suppressionDecoder = new TextDecoder('utf-8')
+    this._setSuppressionReleaseMarker('')
     this.managedPtyLifecycleBytes = new Uint8Array()
     this.managedPtyListenerBytes = new Uint8Array()
     this.managedPtyPromptReleaseBytes = new Uint8Array()
@@ -198,12 +196,11 @@ export default class AttachAddonCustom {
     const nonce = this.managedPtySessionNonce
     if (!this.managedPtyEchoSuppressionActive ||
       !managedPtySessionNoncePattern.test(nonce)) return false
-    this.suppressionReleaseMarker =
+    this._setSuppressionReleaseMarker(
       `${String.fromCharCode(27)}]633;A;${nonce}${String.fromCharCode(7)}`
+    )
     this.managedPtyHoldSuppression = false
     this.consumeManagedPtyCommandRecord = false
-    this.suppressionScanBytes = new Uint8Array()
-    this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
     this.managedPtyListenerBytes = new Uint8Array()
     this.managedPtyPromptReleaseBytes = new Uint8Array()
@@ -341,33 +338,60 @@ export default class AttachAddonCustom {
     return str.includes(ESC + ']633;')
   }
 
-  _decodeSuppressionData = (data) => {
-    if (typeof data === 'string') return data
-    const bytes = data instanceof ArrayBuffer
-      ? new Uint8Array(data)
-      : data instanceof Uint8Array
-        ? data
-        : new Uint8Array(data)
-    return this.suppressionDecoder.decode(bytes, { stream: true })
+  _resetSuppressionScan = () => {
+    this.suppressionScanBytes = new Uint8Array()
+    this.suppressionStringCarry = ''
+  }
+
+  _setSuppressionReleaseMarker = (value) => {
+    this.suppressionReleaseMarker = String(value || '')
+    this.suppressionReleaseMarkerBytes = this.suppressionReleaseMarker
+      ? utf8Encoder.encode(this.suppressionReleaseMarker)
+      : new Uint8Array()
+    this._resetSuppressionScan()
   }
 
   _findSuppressionReleaseData = (str) => {
-    if (!this.suppressionReleaseMarker) return null
+    if (!this.suppressionReleaseMarkerBytes.length) return null
+    const combined = this.suppressionStringCarry + str
+    this.suppressionStringCarry = ''
+    const lastCodeUnit = combined.charCodeAt(combined.length - 1)
+    const hasTrailingHighSurrogate = lastCodeUnit >= 0xD800 &&
+      lastCodeUnit <= 0xDBFF
+    const encodable = hasTrailingHighSurrogate
+      ? combined.slice(0, -1)
+      : combined
+    if (hasTrailingHighSurrogate) {
+      this.suppressionStringCarry = combined.slice(-1)
+    }
     const releaseBytes = this._findSuppressionReleaseBytes(
-      new TextEncoder().encode(str)
+      utf8Encoder.encode(encodable),
+      true
     )
-    return releaseBytes === null
-      ? null
-      : new TextDecoder('utf-8').decode(releaseBytes)
+    if (releaseBytes === null) return null
+    const releaseData = new TextDecoder('utf-8').decode(releaseBytes)
+    if (!this.suppressionStringCarry) return releaseData
+    const trailingCarry = this.suppressionStringCarry
+    this.suppressionStringCarry = ''
+    return releaseData + trailingCarry
   }
 
-  _findSuppressionReleaseBytes = (data) => {
-    const bytes = data instanceof ArrayBuffer
+  _findSuppressionReleaseBytes = (data, preserveStringCarry = false) => {
+    let bytes = data instanceof ArrayBuffer
       ? new Uint8Array(data)
       : data instanceof Uint8Array
         ? data
         : new Uint8Array(data)
-    const markerBytes = new TextEncoder().encode(this.suppressionReleaseMarker)
+    if (!preserveStringCarry && this.suppressionStringCarry) {
+      const carryBytes = utf8Encoder.encode(this.suppressionStringCarry)
+      this.suppressionStringCarry = ''
+      const combined = new Uint8Array(carryBytes.length + bytes.length)
+      combined.set(carryBytes)
+      combined.set(bytes, carryBytes.length)
+      bytes = combined
+    }
+    const markerBytes = this.suppressionReleaseMarkerBytes
+    if (!markerBytes.length) return null
     const scanBytes = new Uint8Array(this.suppressionScanBytes.length + bytes.length)
     scanBytes.set(this.suppressionScanBytes)
     scanBytes.set(bytes, this.suppressionScanBytes.length)
@@ -398,7 +422,7 @@ export default class AttachAddonCustom {
 
   _extractManagedPtyListenerData = data => {
     const incoming = typeof data === 'string'
-      ? new TextEncoder().encode(data)
+      ? utf8Encoder.encode(data)
       : data instanceof ArrayBuffer
         ? new Uint8Array(data)
         : data instanceof Uint8Array
@@ -410,7 +434,7 @@ export default class AttachAddonCustom {
     scan.set(this.managedPtyListenerBytes)
     scan.set(incoming, this.managedPtyListenerBytes.length)
     this.managedPtyListenerBytes = new Uint8Array()
-    const prefix = new TextEncoder().encode(
+    const prefix = utf8Encoder.encode(
       `${String.fromCharCode(27)}]633;`
     )
     const publishChunks = []
@@ -497,7 +521,7 @@ export default class AttachAddonCustom {
     this.managedPtyLifecycleOverflowed = false
     this.managedPtyLifecyclePending = false
     const incoming = typeof data === 'string'
-      ? new TextEncoder().encode(data)
+      ? utf8Encoder.encode(data)
       : data instanceof ArrayBuffer
         ? new Uint8Array(data)
         : data instanceof Uint8Array
@@ -508,7 +532,7 @@ export default class AttachAddonCustom {
     )
     scan.set(this.managedPtyLifecycleBytes)
     scan.set(incoming, this.managedPtyLifecycleBytes.length)
-    const prefix = new TextEncoder().encode(
+    const prefix = utf8Encoder.encode(
       `${String.fromCharCode(27)}]633;`
     )
     const frames = []
@@ -599,7 +623,7 @@ export default class AttachAddonCustom {
     }
     if (promptReleaseWasPending) {
       const incomingBytes = typeof data === 'string'
-        ? new TextEncoder().encode(data)
+        ? utf8Encoder.encode(data)
         : data instanceof ArrayBuffer
           ? new Uint8Array(data)
           : data instanceof Uint8Array
@@ -635,7 +659,7 @@ export default class AttachAddonCustom {
       }
     }
     const toBytes = value => {
-      if (typeof value === 'string') return new TextEncoder().encode(value)
+      if (typeof value === 'string') return utf8Encoder.encode(value)
       if (value instanceof ArrayBuffer) return new Uint8Array(value)
       if (value instanceof Uint8Array) return value
       return new Uint8Array(value)
@@ -650,7 +674,7 @@ export default class AttachAddonCustom {
       this.suppressionReleaseMarker === promptFrame &&
       promptFrameIndex !== -1) {
       const releaseBytes = toBytes(releaseData)
-      const promptFrameLength = new TextEncoder().encode(promptFrame).length
+      const promptFrameLength = utf8Encoder.encode(promptFrame).length
       const promptReleaseBytes = releaseBytes.slice(promptFrameLength)
       if (promptReleaseBytes.byteLength > managedPtyLifecycleByteLimit) {
         this.managedPtyPromptReleaseBytes = new Uint8Array()
@@ -660,7 +684,7 @@ export default class AttachAddonCustom {
         this.prepareManagedPtyEchoRecovery()
         return
       }
-      const promptBytes = new TextEncoder().encode(promptFrame)
+      const promptBytes = utf8Encoder.encode(promptFrame)
       let promptIndex = -1
       for (let index = 0;
         index <= listenerData.publishData.length - promptBytes.length;
@@ -691,9 +715,7 @@ export default class AttachAddonCustom {
       writePrePromptLifecycleFrames()
       this.writeToTerminalDirect(promptFrame)
       if (inputFrameAfterPromptIndex === -1) {
-        this.suppressionReleaseMarker = inputFrame
-        this.suppressionScanBytes = new Uint8Array()
-        this.suppressionDecoder = new TextDecoder('utf-8')
+        this._setSuppressionReleaseMarker(inputFrame)
         return
       }
       releaseData = this.managedPtyPromptReleaseBytes
@@ -724,7 +746,7 @@ export default class AttachAddonCustom {
         ? toBytes(releaseData)
         : listenerData.publishData
       if (promptReleaseReady) {
-        const promptBytes = new TextEncoder().encode(promptFrame)
+        const promptBytes = utf8Encoder.encode(promptFrame)
         const prefixBytes = this.managedPtyPromptListenerPrefixBytes
         const releaseBytes = toBytes(releaseData)
         publishData = new Uint8Array(
@@ -757,7 +779,7 @@ export default class AttachAddonCustom {
         ? toBytes(releaseData)
         : listenerData.publishData
       if (promptReleaseReady) {
-        const promptBytes = new TextEncoder().encode(promptFrame)
+        const promptBytes = utf8Encoder.encode(promptFrame)
         const prefixBytes = this.managedPtyPromptListenerPrefixBytes
         const releaseBytes = toBytes(releaseData)
         publishData = new Uint8Array(
@@ -775,7 +797,7 @@ export default class AttachAddonCustom {
     let terminalReleaseData = releaseData
     if (promptReleaseReady && this.managedPtyHidePromptText) {
       const releaseBytes = toBytes(releaseData)
-      const inputFrameBytes = new TextEncoder().encode(inputFrame)
+      const inputFrameBytes = utf8Encoder.encode(inputFrame)
       let inputFrameIndex = -1
       for (let index = 0;
         index <= releaseBytes.length - inputFrameBytes.length;
@@ -797,8 +819,7 @@ export default class AttachAddonCustom {
         : releaseBytes.slice(inputFrameIndex)
     }
     if (this.managedPtyHoldSuppression) {
-      this.suppressionScanBytes = new Uint8Array()
-      this.suppressionDecoder = new TextDecoder('utf-8')
+      this._resetSuppressionScan()
       this.managedPtyLifecycleBytes = new Uint8Array()
       this.managedPtyListenerBytes = new Uint8Array()
       this.managedPtyPromptReleaseBytes = new Uint8Array()
@@ -882,16 +903,15 @@ export default class AttachAddonCustom {
               sessionNonce
             )
             const markerLength = integrationData instanceof Uint8Array
-              ? new TextEncoder().encode(releaseMarker).length
+              ? utf8Encoder.encode(releaseMarker).length
               : releaseMarker.length
             releasedData = integrationData.slice(markerLength)
             this.consumeManagedPtyCommandRecord = false
             this.managedPtyOutputStreamingActive = true
-            this.suppressionReleaseMarker =
+            this._setSuppressionReleaseMarker(
               `${String.fromCharCode(27)}]633;A;${sessionNonce}` +
               String.fromCharCode(7)
-            this.suppressionScanBytes = new Uint8Array()
-            this.suppressionDecoder = new TextDecoder('utf-8')
+            )
             this.managedPtyLifecycleBytes = new Uint8Array()
             this.managedPtyListenerBytes = new Uint8Array()
             this.managedPtyPromptReleaseBytes = new Uint8Array()
@@ -1035,7 +1055,7 @@ export default class AttachAddonCustom {
   submitManagedPtyCommand = (command, sessionNonce, options = {}) => {
     const nonce = String(sessionNonce || '')
     const hidePromptText = options.hidePromptText === true
-    if (new TextEncoder().encode(String(command || '')).byteLength >
+    if (utf8Encoder.encode(String(command || '')).byteLength >
       managedPtyFrameByteLimit) {
       const error = new Error('受控 PTY 命令帧超过安全上限')
       error.code = 'MANAGED_PTY_FRAME_LIMIT'
@@ -1051,9 +1071,7 @@ export default class AttachAddonCustom {
     const commandMarker = `${String.fromCharCode(27)}]633;E;${nonce};` +
       serializeShellIntegrationValue(command) + String.fromCharCode(7)
     if (continuingPlan) {
-      this.suppressionReleaseMarker = commandMarker
-      this.suppressionScanBytes = new Uint8Array()
-      this.suppressionDecoder = new TextDecoder('utf-8')
+      this._setSuppressionReleaseMarker(commandMarker)
       this.managedPtyLifecycleBytes = new Uint8Array()
       this.managedPtyListenerBytes = new Uint8Array()
       this.managedPtyPromptReleaseBytes = new Uint8Array()
@@ -1244,9 +1262,7 @@ export default class AttachAddonCustom {
     this.suppressedData = []
     this.publishSuppressionRemainder = false
     this.onSuppressionEndCallback = null
-    this.suppressionReleaseMarker = ''
-    this.suppressionScanBytes = new Uint8Array()
-    this.suppressionDecoder = new TextDecoder('utf-8')
+    this._setSuppressionReleaseMarker('')
     this.managedPtyLifecycleBytes = new Uint8Array()
     this.managedPtyListenerBytes = new Uint8Array()
     this.managedPtyPromptReleaseBytes = new Uint8Array()

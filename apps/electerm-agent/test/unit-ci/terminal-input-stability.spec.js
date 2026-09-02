@@ -620,6 +620,86 @@ test('managed PTY held prompt supports cross-type A and B splits', async (t) => 
   }
 })
 
+test('managed PTY preserves a Unicode E record split between surrogate halves', async () => {
+  const { addon, term } = await createDirectAttachHarness()
+  const writes = []
+  const output = []
+  let suppressionEnds = 0
+  term.write = value => writes.push(value)
+  addon.onRemoteOutput(chunk => output.push(chunk))
+  const command = 'printf 中文😀'
+  const commandRecord =
+    `\u001b]633;E;${testTrackerNonce};${command}\u0007`
+  const commandStarted = `\u001b]633;C;${testTrackerNonce}\u0007`
+  const fileMarker =
+    '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+  const promptFrame = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const inputFrame = `\u001b]633;B;${testTrackerNonce}\u0007`
+  const promptText = 'root@fixture:# '
+  const postPromptOutput = '中文-post-prompt-output\r\n'
+  const surrogateIndex = commandRecord.indexOf('😀')
+
+  assert.notEqual(surrogateIndex, -1)
+  assert.equal(commandRecord.charCodeAt(surrogateIndex), 0xD83D)
+  assert.equal(commandRecord.charCodeAt(surrogateIndex + 1), 0xDE00)
+  assert.equal(addon.submitManagedPtyCommand(
+    command,
+    testTrackerNonce,
+    { hidePromptText: true }
+  ), true)
+  addon.onSuppressionEndCallback = () => { suppressionEnds++ }
+
+  addon.writeToTerminal(commandRecord.slice(0, surrogateIndex + 1))
+  assert.equal(addon.managedPtyOutputStreamingActive, false)
+  assert.deepEqual(writes, [])
+  addon.writeToTerminal(
+    commandRecord.slice(surrogateIndex + 1) + commandStarted + fileMarker
+  )
+
+  assert.equal(addon.managedPtyOutputStreamingActive, true)
+  assert.equal(writes.join(''), commandStarted)
+  assert.equal(output.join(''), commandStarted + fileMarker)
+  addon.writeToTerminal(
+    promptFrame + promptText + inputFrame + postPromptOutput
+  )
+
+  assert.equal(addon.outputSuppressed, false)
+  assert.equal(suppressionEnds, 1)
+  assert.equal(
+    writes.join(''),
+    commandStarted + promptFrame + inputFrame + postPromptOutput
+  )
+  assert.equal(writes.join('').includes(promptText), false)
+  assert.equal(
+    output.join(''),
+    commandStarted + fileMarker + promptFrame + promptText +
+      inputFrame + postPromptOutput
+  )
+})
+
+test('suppression release scan preserves caller type and Unicode tail', async () => {
+  const { addon } = await createDirectAttachHarness()
+  const marker = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const tail = '中文-post-tail\r\n'
+  const encoder = new TextEncoder()
+
+  addon.startOutputSuppression(0, null, true, false, marker)
+  const stringRelease = addon._findSuppressionReleaseData(
+    'hidden-prefix' + marker + tail
+  )
+  assert.equal(typeof stringRelease, 'string')
+  assert.equal(stringRelease, marker + tail)
+
+  addon.startOutputSuppression(0, null, true, false, marker)
+  assert.equal(addon._findSuppressionReleaseData('hidden-prefix\uD83D'), null)
+  const byteRelease = addon._findSuppressionReleaseBytes(
+    encoder.encode(marker + tail)
+  )
+  assert.equal(byteRelease instanceof Uint8Array, true)
+  assert.equal(new TextDecoder().decode(byteRelease), marker + tail)
+  await addon.stopOutputSuppression(true)
+})
+
 test('current-child-shell reinjection hides injection echo and natural prompt', async () => {
   const { addon, term } = await createDirectAttachHarness()
   const writes = []
@@ -1787,7 +1867,8 @@ test('managed PTY suppression dispose clears hidden output and pending input', a
   assert.equal(addon.suppressionScanBytes.byteLength, 0)
   assert.deepEqual(addon.pendingInput, [])
   assert.equal(addon.term, null)
-  assert.equal(addon.suppressionDecoder instanceof TextDecoder, true)
+  assert.equal(addon.suppressionReleaseMarkerBytes.byteLength, 0)
+  assert.equal(addon.suppressionStringCarry, '')
   assert.deepEqual(writes, [])
 })
 
