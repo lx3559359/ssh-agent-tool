@@ -257,6 +257,7 @@ function createEntryHarness ({
   replaceTimer,
   client,
   beginProbe,
+  classifyRecoveryError,
   reportBackgroundError = () => {},
   reportOperationError = () => {},
   recordPerformanceDuration = () => true
@@ -405,6 +406,7 @@ function createEntryHarness ({
         remoteFileOperationUnmounted,
         remoteFileOperationStale,
         classifyRemoteFileRecoveryError:
+          classifyRecoveryError ||
           remoteFileErrors.classifyRemoteFileRecoveryError,
         replaceSftpEntryTimer: replaceTimer || (() => 1),
         unexpectedPacketErrorDesc: 'unexpected packet',
@@ -1267,6 +1269,48 @@ test('unsafe failure invalidates a delayed cached paint callback', async () => {
     identityChannel: 'unknown',
     identityStatus: 'unavailable'
   })
+})
+
+test('unexpected classifier failure still clears a privileged snapshot', async () => {
+  const transient = Object.assign(new Error('transport reset'), {
+    code: 'ECONNRESET'
+  })
+  const acquire = async ({ onIdentity }) => {
+    await onIdentity({ loginUsername: 'hik', ...rootRuntimeIdentity })
+    return {
+      runtimeIdentity: rootRuntimeIdentity,
+      backend: { list: async () => { throw transient } },
+      release: async () => true
+    }
+  }
+  const { entry } = await createEntryHarness({
+    acquire,
+    classifyRecoveryError: () => { throw new Error('classifier failed') }
+  })
+  const rootFile = {
+    id: 'root-app-conf',
+    name: 'app.conf',
+    path: '/root-only',
+    type: 'remote'
+  }
+  entry.state.remote = [rootFile]
+  entry.state.remoteFileTree = entry.buildTree(entry.state.remote)
+  entry.state.selectedType = 'remote'
+  entry.state.selectedFiles = new Set([rootFile.id])
+  entry.state.lastClickedFile = rootFile.id
+  entry.visibleRemoteDirectoryCacheKey = 'root-cache-key'
+  entry.remoteDirectoryCache = {
+    get: key => {
+      entry.visibleRemoteDirectoryCacheKey = key
+      return { value: [structuredClone(rootFile)] }
+    },
+    set: () => {},
+    clear: () => {}
+  }
+
+  await entry.remoteList(false, '/root-only')
+
+  assertRemoteSnapshotCleared(entry)
 })
 
 test('deep and structured sensitive failures never recover a visible cache', async t => {

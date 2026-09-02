@@ -3727,11 +3727,16 @@ export default class Sftp extends Component {
         })
       }
       const normalizedError = this.normalizeSftpError(error)
-      const failure = classifyRemoteFileRecoveryError(error)
+      let failure
+      try {
+        failure = classifyRemoteFileRecoveryError(error)
+      } catch {
+        failure = null
+      }
       const sameVisibleIdentity = Boolean(cacheKey) &&
         this.visibleRemoteDirectoryCacheKey === cacheKey
-      const safeIdentityFallback = !failure.failClosed &&
-        failure.transientTransportFailure && sameVisibleIdentity
+      const safeIdentityFallback = failure?.failClosed === false &&
+        failure?.transientTransportFailure === true && sameVisibleIdentity
       const fallbackRemote = safeIdentityFallback
         ? (cachedRemoteFound ? cachedRemote : oldRemote)
         : []
@@ -3754,7 +3759,7 @@ export default class Sftp extends Component {
         update.selectedFiles = new Set()
         update.lastClickedFile = null
       }
-      if (failure.identityFailure) {
+      if (failure?.identityFailure === true) {
         this.remoteFileIdentityEpoch =
           (this.remoteFileIdentityEpoch || 0) + 1
         update.remoteFileIdentity = {

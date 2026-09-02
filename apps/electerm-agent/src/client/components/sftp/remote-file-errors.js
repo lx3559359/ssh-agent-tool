@@ -50,6 +50,16 @@ const structuredFailureArrayKeys = [
 ]
 
 const recoveryErrorNodeBudget = 64
+const recoveryErrorEdgeBudget = 128
+
+const incompleteRecoveryClassification = Object.freeze({
+  accessDenied: false,
+  identityFailure: false,
+  transientTransportFailure: false,
+  settlementUncertain: true,
+  inspectionIncomplete: true,
+  failClosed: true
+})
 
 function isObjectLike (value) {
   return Boolean(value) && (
@@ -67,26 +77,148 @@ function readErrorProperty (error, key) {
 
 function hasOwnErrorProperty (error, key) {
   try {
-    return Object.prototype.hasOwnProperty.call(error, key)
+    return {
+      ok: true,
+      value: Object.prototype.hasOwnProperty.call(error, key)
+    }
   } catch {
-    return false
+    return { ok: false, value: false }
   }
 }
 
-export function classifyRemoteFileRecoveryError (error) {
-  const pending = [error]
+function coerceErrorText (value, uppercase = false) {
+  try {
+    const text = String(value ?? '').trim()
+    return {
+      ok: true,
+      value: uppercase ? text.toUpperCase() : text
+    }
+  } catch {
+    return { ok: false, value: '' }
+  }
+}
+
+function inspectRemoteFileRecoveryError (error) {
+  const pending = []
+  const queued = new Set()
   const visited = new Set()
   const codes = []
   const details = []
   let inspectionIncomplete = false
   let settlementUncertain = false
+  let edgeCount = 0
+  let pendingIndex = 0
 
-  while (pending.length) {
-    const current = pending.shift()
-    if (!isObjectLike(current)) {
+  const enqueue = value => {
+    if (edgeCount >= recoveryErrorEdgeBudget) {
       inspectionIncomplete = true
-      continue
+      return false
     }
+    edgeCount += 1
+    if (value === undefined || value === null) return true
+    if (!isObjectLike(value)) {
+      inspectionIncomplete = true
+      return true
+    }
+    if (visited.has(value) || queued.has(value)) return true
+    if (visited.size + queued.size >= recoveryErrorNodeBudget) {
+      inspectionIncomplete = true
+      return false
+    }
+    queued.add(value)
+    pending.push(value)
+    return true
+  }
+
+  const closeIterator = iterator => {
+    const returnMethod = readErrorProperty(iterator, 'return')
+    if (!returnMethod.ok) inspectionIncomplete = true
+    else if (typeof returnMethod.value === 'function') {
+      try {
+        Reflect.apply(returnMethod.value, iterator, [])
+      } catch {
+        inspectionIncomplete = true
+      }
+    }
+  }
+
+  const enqueueCollection = value => {
+    let isArray
+    try {
+      isArray = Array.isArray(value)
+    } catch {
+      inspectionIncomplete = true
+      return
+    }
+    if (!isArray) {
+      enqueue(value)
+      return
+    }
+    const iteratorMethod = readErrorProperty(value, Symbol.iterator)
+    if (!iteratorMethod.ok || typeof iteratorMethod.value !== 'function') {
+      inspectionIncomplete = true
+      return
+    }
+    let iterator
+    try {
+      iterator = Reflect.apply(iteratorMethod.value, value, [])
+    } catch {
+      inspectionIncomplete = true
+      return
+    }
+    if (!isObjectLike(iterator)) {
+      inspectionIncomplete = true
+      return
+    }
+    const nextMethod = readErrorProperty(iterator, 'next')
+    if (!nextMethod.ok || typeof nextMethod.value !== 'function') {
+      inspectionIncomplete = true
+      closeIterator(iterator)
+      return
+    }
+    while (true) {
+      if (edgeCount >= recoveryErrorEdgeBudget ||
+        visited.size + queued.size >= recoveryErrorNodeBudget) break
+      let step
+      try {
+        step = Reflect.apply(nextMethod.value, iterator, [])
+      } catch {
+        inspectionIncomplete = true
+        closeIterator(iterator)
+        return
+      }
+      if (!isObjectLike(step)) {
+        inspectionIncomplete = true
+        closeIterator(iterator)
+        return
+      }
+      const done = readErrorProperty(step, 'done')
+      if (!done.ok) {
+        inspectionIncomplete = true
+        closeIterator(iterator)
+        return
+      }
+      if (done.value) return
+      const item = readErrorProperty(step, 'value')
+      if (!item.ok || !enqueue(item.value)) {
+        inspectionIncomplete = true
+        closeIterator(iterator)
+        return
+      }
+    }
+    inspectionIncomplete = true
+    closeIterator(iterator)
+  }
+
+  if (!isObjectLike(error)) inspectionIncomplete = true
+  else {
+    queued.add(error)
+    pending.push(error)
+  }
+
+  while (pendingIndex < pending.length) {
+    const current = pending[pendingIndex++]
+    queued.delete(current)
     if (visited.has(current)) continue
     if (visited.size >= recoveryErrorNodeBudget) {
       inspectionIncomplete = true
@@ -98,14 +230,18 @@ export function classifyRemoteFileRecoveryError (error) {
     const name = readErrorProperty(current, 'name')
     const message = readErrorProperty(current, 'message')
     if (!code.ok || !name.ok || !message.ok) inspectionIncomplete = true
-    codes.push(String(code.value ?? '').trim().toUpperCase())
-    details.push(`${String(name.value || '')} ${String(message.value || '')}`)
+    const codeText = coerceErrorText(code.value, true)
+    const nameText = coerceErrorText(name.value)
+    const messageText = coerceErrorText(message.value)
+    if (!codeText.ok || !nameText.ok || !messageText.ok) {
+      inspectionIncomplete = true
+    }
+    codes.push(codeText.value)
+    details.push(`${nameText.value} ${messageText.value}`)
 
     const cause = readErrorProperty(current, 'cause')
     if (!cause.ok) inspectionIncomplete = true
-    else if (cause.value !== undefined && cause.value !== null) {
-      pending.push(cause.value)
-    }
+    else enqueue(cause.value)
 
     for (const key of structuredFailureKeys) {
       const nested = readErrorProperty(current, key)
@@ -114,7 +250,7 @@ export function classifyRemoteFileRecoveryError (error) {
         settlementUncertain = true
       } else if (nested.value !== undefined && nested.value !== null) {
         settlementUncertain = true
-        pending.push(nested.value)
+        enqueue(nested.value)
       }
     }
     for (const key of structuredFailureArrayKeys) {
@@ -124,8 +260,7 @@ export function classifyRemoteFileRecoveryError (error) {
         settlementUncertain = true
       } else if (nested.value !== undefined && nested.value !== null) {
         settlementUncertain = true
-        if (Array.isArray(nested.value)) pending.push(...nested.value)
-        else pending.push(nested.value)
+        enqueueCollection(nested.value)
       }
     }
 
@@ -137,7 +272,10 @@ export function classifyRemoteFileRecoveryError (error) {
       current,
       'cleanupSucceeded'
     )
-    if (cleanupAttempted || cleanupSucceeded) {
+    if (!cleanupAttempted.ok || !cleanupSucceeded.ok) {
+      inspectionIncomplete = true
+      settlementUncertain = true
+    } else if (cleanupAttempted.value || cleanupSucceeded.value) {
       const succeeded = readErrorProperty(current, 'cleanupSucceeded')
       if (!succeeded.ok || succeeded.value !== true) {
         settlementUncertain = true
@@ -150,7 +288,6 @@ export function classifyRemoteFileRecoveryError (error) {
     }
   }
 
-  if (pending.length) inspectionIncomplete = true
   const errorDetails = details.join(' ')
   const accessDenied = codes.some(code => (
     accessDeniedCodes.has(code) || code.endsWith('_PERMISSION_DENIED')
@@ -172,6 +309,14 @@ export function classifyRemoteFileRecoveryError (error) {
     failClosed: accessDenied || identityFailure || settlementUncertain ||
       inspectionIncomplete
   })
+}
+
+export function classifyRemoteFileRecoveryError (error) {
+  try {
+    return inspectRemoteFileRecoveryError(error)
+  } catch {
+    return incompleteRecoveryClassification
+  }
 }
 
 export function isAuthoritativeRemoteMissingError (error) {
