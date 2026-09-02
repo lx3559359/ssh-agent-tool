@@ -705,6 +705,51 @@ test('transfer settlement aggregation is bounded and keeps the original primary'
   assert.equal(primary.cleanupErrors.includes(secondary), true)
 })
 
+test('frozen transfer primary escapes in a bounded fail-closed cleanup wrapper', async () => {
+  const { quiesceSftpEntryTransfers } = await loadModule()
+  const { classifyRemoteFileRecoveryError } = await import(
+    pathToFileURL(path.resolve(
+      __dirname,
+      '../../src/client/components/sftp/remote-file-errors.js'
+    )).href
+  )
+  const primary = Object.freeze(Object.assign(
+    new Error('frozen transfer primary failed'),
+    { code: 'ECONNRESET' }
+  ))
+  const secondary = Object.assign(
+    new Error('transfer teardown settlement is uncertain'),
+    { code: 'TEARDOWN_TIMEOUT', uncertain: true }
+  )
+  const entry = {
+    props: { tab: { id: 'tab-root' } },
+    remoteFileGeneration: { accepting: true },
+    transferSafetySessionAliases: new Map(),
+    preparedTransferFileSessions: new Map()
+  }
+  const owners = [primary, secondary].map(error => ({
+    tabId: 'tab-root',
+    cancelAndWait: async () => { throw error }
+  }))
+
+  await assert.rejects(
+    quiesceSftpEntryTransfers(entry, { owners }),
+    error => {
+      assert.notEqual(error, primary)
+      assert.equal(error.cause, primary)
+      assert.equal(error.primaryCause, primary)
+      assert.deepEqual(Array.from(error.cleanupErrors), [secondary])
+      assert.equal(error.cleanupErrors.includes(primary), false)
+      assert.equal(error.cleanupErrors.includes(error), false)
+      assert.ok(error.cleanupErrors.length <= 32)
+      const classification = classifyRemoteFileRecoveryError(error)
+      assert.equal(classification.settlementUncertain, true)
+      assert.equal(classification.failClosed, true)
+      return true
+    }
+  )
+})
+
 test('remote reconnect drains active root cleanup before destroy and init', async () => {
   const { reconnectSftpEntryRemote } = await loadModule()
   const releaseGate = deferred()

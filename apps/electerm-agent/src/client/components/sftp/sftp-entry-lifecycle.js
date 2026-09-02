@@ -419,7 +419,10 @@ function preserveSettlementErrors (errors) {
       index += 1) {
       secondaryErrors.push(errors[index])
     }
-    appendRemoteFileCleanupErrors(primaryError, secondaryErrors)
+    return appendRemoteFileCleanupErrors(
+      primaryError,
+      secondaryErrors
+    ).error
   }
   return primaryError
 }

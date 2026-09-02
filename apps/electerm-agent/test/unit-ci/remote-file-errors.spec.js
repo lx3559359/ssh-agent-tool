@@ -246,3 +246,35 @@ test('formal cause overflow skips the wrapper and marks cleanup truncation', asy
     })
   }
 })
+
+test('frozen primary uses a bounded fail-closed cleanup wrapper', async () => {
+  const {
+    appendRemoteFileCleanupErrors,
+    classifyRemoteFileRecoveryError
+  } = await import(moduleUrl)
+  const primary = Object.freeze(Object.assign(
+    new Error('frozen primary operation failed'),
+    { code: 'ECONNRESET' }
+  ))
+  const secondary = Object.assign(
+    new Error('cleanup settlement is uncertain'),
+    { code: 'TEARDOWN_TIMEOUT', uncertain: true }
+  )
+
+  const result = appendRemoteFileCleanupErrors(primary, [secondary])
+  const throwable = result.error
+
+  assert.equal(result.attached, false)
+  assert.notEqual(throwable, primary)
+  assert.equal(throwable.cause, primary)
+  assert.equal(throwable.primaryCause, primary)
+  assert.ok(Object.isFrozen(throwable.cleanupErrors))
+  assert.ok(throwable.cleanupErrors.length <= 32)
+  assert.deepEqual(Array.from(throwable.cleanupErrors), [secondary])
+  assert.equal(throwable.cleanupErrors.includes(primary), false)
+  assert.equal(throwable.cleanupErrors.includes(throwable), false)
+
+  const classification = classifyRemoteFileRecoveryError(throwable)
+  assert.equal(classification.settlementUncertain, true)
+  assert.equal(classification.failClosed, true)
+})

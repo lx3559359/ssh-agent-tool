@@ -72,6 +72,18 @@ const cleanupErrorsTruncatedMarker = Object.freeze({
   message: 'Remote file cleanup errors were truncated'
 })
 
+function createRemoteFileCleanupErrorWrapper (primaryError, cleanupErrors) {
+  const wrapper = new Error(
+    'Remote file operation failed and cleanup did not settle'
+  )
+  wrapper.name = 'RemoteFileCleanupError'
+  wrapper.code = 'REMOTE_FILE_CLEANUP_FAILED'
+  wrapper.cause = primaryError
+  wrapper.primaryCause = primaryError
+  wrapper.cleanupErrors = cleanupErrors
+  return wrapper
+}
+
 const incompleteRecoveryClassification = Object.freeze({
   accessDenied: false,
   identityFailure: false,
@@ -359,15 +371,21 @@ export function appendRemoteFileCleanupErrors (primaryError, additions) {
         attached = true
       }
     } catch {}
+    const error = attached
+      ? primaryError
+      : createRemoteFileCleanupErrorWrapper(primaryError, frozenErrors)
     return Object.freeze({
       errors: frozenErrors,
+      error,
       attached,
       inspectionIncomplete: truncated,
       truncated
     })
   } catch {
+    const errors = Object.freeze([cleanupErrorsTruncatedMarker])
     return Object.freeze({
-      errors: Object.freeze([cleanupErrorsTruncatedMarker]),
+      errors,
+      error: createRemoteFileCleanupErrorWrapper(primaryError, errors),
       attached: false,
       inspectionIncomplete: true,
       truncated: true

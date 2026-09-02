@@ -252,6 +252,22 @@ function createBackend (calls, name = 'backend', options = {}) {
   }
 }
 
+function stableTestRemoteListRequestObjectIdentity (value) {
+  if (value?.requestEpoch !== undefined) {
+    return [
+      'task',
+      value.lifecycleEpoch,
+      value.requestEpoch,
+      value.sshSessionGeneration,
+      value.sshTerminalPid
+    ].join(':')
+  }
+  if (typeof value?.aborted === 'boolean') {
+    return `signal:${value.testRemoteListRequestIdentity || 'default'}`
+  }
+  return String(value || '')
+}
+
 function createEntryHarness ({
   acquire,
   replaceTimer,
@@ -377,6 +393,11 @@ function createEntryHarness ({
         trackSftpEntryMetric: lifecycle.trackSftpEntryMetric,
         typeMap
       })
+      installClassField(entry, 'buildRemoteListRequestKey', {
+        normalizeRemotePath: value => value,
+        remoteListRequestObjectIdentity:
+          stableTestRemoteListRequestObjectIdentity
+      })
       installClassField(entry, 'remoteListUncoalesced', {
         Client: client || (async () => {
           throw new Error('unexpected SFTP client construction')
@@ -420,6 +441,31 @@ function createEntryHarness ({
       entry.remoteList = entry.remoteListUncoalesced
       return { entry, stateWrites, lifecycle }
     })
+}
+
+async function enableRemoteListCoalescing (entry) {
+  const { createRemoteDirectoryCache } = await importModule(
+    'src/client/components/sftp/remote-directory-cache.js'
+  )
+  const cache = createRemoteDirectoryCache()
+  entry.remoteListRequestKeys = []
+  entry.remoteDirectoryCache = {
+    get: (...args) => cache.get(...args),
+    set: (...args) => cache.set(...args),
+    clear: (...args) => cache.clear(...args),
+    stats: (...args) => cache.stats(...args),
+    runRequest: (key, loader) => {
+      entry.remoteListRequestKeys.push(key)
+      return cache.runRequest(key, loader)
+    }
+  }
+  installClassField(entry, 'buildRemoteListRequestKey', {
+    normalizeRemotePath: value => value,
+    remoteListRequestObjectIdentity:
+      stableTestRemoteListRequestObjectIdentity
+  })
+  installClassField(entry, 'remoteList')
+  return entry.remoteDirectoryCache
 }
 
 test('remoteList rejects before constructing a client while its generation drains', async () => {
@@ -877,12 +923,75 @@ test('root to login refresh selects cache keys from each operation identity', as
   })), identities)
 })
 
+test('root to login cache miss clears privileged rows before deferred list resolves', async () => {
+  const loginListStarted = deferred()
+  const loginListGate = deferred()
+  const identities = [{
+    channel: 'pty-root',
+    effectiveUid: '0',
+    effectiveUsername: 'root'
+  }, {
+    channel: 'sftp',
+    effectiveUid: 'unknown',
+    effectiveUsername: 'hik'
+  }]
+  let acquireIndex = 0
+  const acquire = async ({ onIdentity }) => {
+    const runtimeIdentity = identities[acquireIndex++]
+    await onIdentity({ loginUsername: 'hik', ...runtimeIdentity })
+    return {
+      runtimeIdentity,
+      backend: {
+        list: async () => {
+          if (runtimeIdentity === identities[0]) {
+            return [{ name: 'root-secret.conf', type: 'f', size: 1 }]
+          }
+          loginListStarted.resolve()
+          return loginListGate.promise
+        }
+      },
+      release: async () => true
+    }
+  }
+  const { entry } = await createEntryHarness({ acquire })
+  const entries = new Map()
+  entry.remoteDirectoryCache = {
+    get: key => entries.has(key)
+      ? { value: structuredClone(entries.get(key)) }
+      : null,
+    set: (key, value) => entries.set(key, structuredClone(value)),
+    clear: () => entries.clear()
+  }
+
+  await entry.remoteList(false, '/root-only')
+  const rootFile = entry.state.remote[0]
+  entry.state.selectedType = 'remote'
+  entry.state.selectedFiles = new Set([rootFile.id])
+  entry.state.lastClickedFile = rootFile.id
+  const rootVisibleKey = entry.visibleRemoteDirectoryCacheKey
+  const rootPaintEpoch = entry.remoteDirectoryCachePaintEpoch
+
+  const loginRefresh = entry.remoteList(false, '/root-only')
+  await loginListStarted.promise
+
+  assert.equal(entry.state.remoteFileIdentity.effectiveUsername, 'hik')
+  assert.notEqual(rootVisibleKey, '')
+  assert.ok(entry.remoteDirectoryCachePaintEpoch > rootPaintEpoch)
+  assertRemoteSnapshotCleared(entry)
+
+  loginListGate.resolve([{ name: 'home.txt', type: 'f', size: 1 }])
+  await loginRefresh
+  assert.deepEqual(entry.state.remote.map(file => file.name), ['home.txt'])
+})
+
 test('remote list request identity changes when only terminal PID changes', async () => {
   const { entry } = await createEntryHarness({
     acquire: async () => { throw new Error('unused') }
   })
   installClassField(entry, 'buildRemoteListRequestKey', {
-    normalizeRemotePath: value => value
+    normalizeRemotePath: value => value,
+    remoteListRequestObjectIdentity:
+      stableTestRemoteListRequestObjectIdentity
   })
   entry.sshSessionGeneration = 'generation-1'
   entry.sshTerminalPid = '100'
@@ -900,6 +1009,168 @@ test('remote list request identity changes when only terminal PID changes', asyn
   })
 
   assert.notEqual(first, second)
+})
+
+test('remote list request key isolates identity lifecycle signal and policies', async () => {
+  const { entry } = await createEntryHarness({
+    acquire: async () => { throw new Error('unused') }
+  })
+  const objectIds = new WeakMap()
+  let objectSequence = 0
+  installClassField(entry, 'buildRemoteListRequestKey', {
+    normalizeRemotePath: value => value,
+    remoteListRequestObjectIdentity: value => {
+      if (!value || !['object', 'function'].includes(typeof value)) {
+        return String(value || '')
+      }
+      if (!objectIds.has(value)) objectIds.set(value, ++objectSequence)
+      return objectIds.get(value)
+    }
+  })
+  entry.sshSessionGeneration = 'generation-1'
+  entry.sshTerminalPid = '100'
+  const task = Object.freeze({
+    lifecycleEpoch: 1,
+    requestEpoch: 7,
+    sshSessionGeneration: 'generation-1',
+    sshTerminalPid: '100'
+  })
+  const signal = new AbortController().signal
+  const base = {
+    cacheKey: 'uid=0:/root-only',
+    task,
+    signal,
+    remotePath: '/root-only',
+    returnList: false,
+    commitList: false,
+    suppressLoading: false,
+    suppressVisibleError: false,
+    rethrow: true
+  }
+  const baseKey = entry.buildRemoteListRequestKey(base)
+  assert.equal(entry.buildRemoteListRequestKey(base), baseKey)
+  const keys = [
+    base,
+    { ...base, cacheKey: 'uid=1000:/root-only' },
+    { ...base, task: { ...task } },
+    { ...base, task: { ...task, requestEpoch: 8 } },
+    { ...base, signal: new AbortController().signal },
+    { ...base, suppressLoading: true },
+    { ...base, suppressVisibleError: true },
+    { ...base, rethrow: false },
+    { ...base, returnList: true },
+    { ...base, commitList: true }
+  ].map(options => entry.buildRemoteListRequestKey(options))
+
+  assert.equal(new Set(keys).size, keys.length)
+})
+
+test('stale and current list calls probe and load independently', async () => {
+  const firstListGate = deferred()
+  const firstListStarted = deferred()
+  const identities = [rootRuntimeIdentity, {
+    channel: 'sftp',
+    effectiveUid: '1000',
+    effectiveUsername: 'hik'
+  }]
+  let probeCount = 0
+  let listCount = 0
+  const acquire = async ({ onIdentity }) => {
+    const runtimeIdentity = identities[Math.min(probeCount, 1)]
+    probeCount += 1
+    await onIdentity({ loginUsername: 'hik', ...runtimeIdentity })
+    return {
+      runtimeIdentity,
+      backend: {
+        list: async () => {
+          listCount += 1
+          if (runtimeIdentity === identities[0]) {
+            firstListStarted.resolve()
+            await firstListGate.promise
+          }
+          return [{
+            name: runtimeIdentity.effectiveUsername,
+            type: 'f',
+            size: 1
+          }]
+        }
+      },
+      release: async () => true
+    }
+  }
+  const { entry, lifecycle } = await createEntryHarness({ acquire })
+  await enableRemoteListCoalescing(entry)
+  entry.sshSessionGeneration = 'generation-1'
+  entry.sshTerminalPid = '100'
+  const signal = new AbortController().signal
+  const oldTask = lifecycle.beginSftpEntryRemoteTask(entry)
+  const oldListing = entry.remoteList(false, '/root-only', undefined, {
+    lifecycleTask: oldTask,
+    signal,
+    rethrow: true
+  })
+  await firstListStarted.promise
+
+  const currentTask = lifecycle.beginSftpEntryRemoteTask(entry)
+  const currentListing = entry.remoteList(false, '/root-only', undefined, {
+    lifecycleTask: currentTask,
+    signal,
+    rethrow: true
+  })
+  const samePromise = oldListing === currentListing
+  firstListGate.resolve()
+  const [oldResult, currentResult] = await Promise.allSettled([
+    oldListing,
+    currentListing
+  ])
+
+  assert.equal(samePromise, false)
+  assert.equal(probeCount, 2)
+  assert.equal(listCount, 2)
+  assert.equal(currentResult.status, 'fulfilled')
+  assert.deepEqual(entry.state.remote.map(file => file.name), ['hik'])
+  assert.ok(['fulfilled', 'rejected'].includes(oldResult.status))
+})
+
+test('equivalent current list calls still validate each serialized operation', async () => {
+  const listGate = deferred()
+  const firstListStarted = deferred()
+  let probeCount = 0
+  let listCount = 0
+  const acquire = async ({ onIdentity }) => {
+    probeCount += 1
+    await onIdentity({ loginUsername: 'hik', ...rootRuntimeIdentity })
+    return {
+      runtimeIdentity: rootRuntimeIdentity,
+      backend: {
+        list: async () => {
+          listCount += 1
+          if (listCount === 1) firstListStarted.resolve()
+          await listGate.promise
+          return [{ name: 'root', type: 'f', size: 1 }]
+        }
+      },
+      release: async () => true
+    }
+  }
+  const { entry, lifecycle } = await createEntryHarness({ acquire })
+  const cache = await enableRemoteListCoalescing(entry)
+  entry.sshSessionGeneration = 'generation-1'
+  entry.sshTerminalPid = '100'
+  const task = lifecycle.beginSftpEntryRemoteTask(entry)
+  const signal = new AbortController().signal
+  const options = { lifecycleTask: task, signal, rethrow: true }
+  const first = entry.remoteList(false, '/root-only', undefined, options)
+  await firstListStarted.promise
+  const second = entry.remoteList(false, '/root-only', undefined, options)
+  listGate.resolve()
+  await Promise.all([first, second])
+
+  assert.notEqual(first, second)
+  assert.equal(probeCount, 2)
+  assert.equal(entry.remoteListRequestKeys[0], entry.remoteListRequestKeys[1])
+  assert.equal(listCount, 2)
+  assert.equal(cache.stats().coalesced, 0)
 })
 
 test('PID-only rebind cannot recover the prior terminal cached snapshot', async () => {
@@ -2681,6 +2952,40 @@ test('stale task remains primary when candidate teardown rejects', async () => {
   })
 })
 
+test('frozen candidate primary escapes in a bounded cleanup wrapper', async () => {
+  const primary = Object.freeze(Object.assign(
+    new Error('frozen candidate connect failed'),
+    { code: 'ECONNRESET' }
+  ))
+  const secondary = Object.assign(
+    new Error('candidate teardown uncertain'),
+    { code: 'TEARDOWN_TIMEOUT', uncertain: true }
+  )
+  const candidate = {
+    connect: async () => { throw primary },
+    destroy: async () => { throw secondary }
+  }
+  const { entry } = await createEntryHarness({
+    client: async () => candidate,
+    acquire: async () => { throw new Error('unexpected acquire') }
+  })
+  entry.sftp = null
+
+  await assert.rejects(
+    entry.remoteList(false, '/root', undefined, { rethrow: true }),
+    error => {
+      assert.notEqual(error, primary)
+      assert.equal(error.cause, primary)
+      assert.equal(error.primaryCause, primary)
+      assert.deepEqual(Array.from(error.cleanupErrors), [secondary])
+      assert.equal(error.cleanupErrors.includes(primary), false)
+      assert.equal(error.cleanupErrors.includes(error), false)
+      assert.ok(error.cleanupErrors.length <= 32)
+      return true
+    }
+  )
+})
+
 test('generation drain and stale remoteList share one prepared release before destroy', async () => {
   const connectGate = deferred()
   const connectStarted = deferred()
@@ -2855,6 +3160,107 @@ test('operation failure remains primary when release also fails', async () => {
     }
   )
   assert.equal(entry.remoteFileOperations.size, 0)
+})
+
+test('frozen operation failure wraps an uncertain release failure', async () => {
+  const remoteFileErrors = await importModule(
+    'src/client/components/sftp/remote-file-errors.js'
+  )
+  const workError = Object.freeze(Object.assign(
+    new Error('frozen list failure'),
+    { code: 'ECONNRESET' }
+  ))
+  const releaseError = Object.assign(
+    new Error('release settlement uncertain'),
+    { code: 'TEARDOWN_TIMEOUT', uncertain: true }
+  )
+  const entry = {
+    remoteFileOperations: new Set(),
+    remoteFileUnmounted: false,
+    acquireRemoteFileOperation: async () => ({
+      backend: {},
+      release: async () => { throw releaseError }
+    })
+  }
+  installClassField(entry, 'withRemoteFileOperation', {
+    abortRemoteFileOperation,
+    initializeRemoteFileGeneration,
+    remoteFileOperationUnmounted,
+    appendRemoteFileCleanupErrors:
+      remoteFileErrors.appendRemoteFileCleanupErrors
+  })
+
+  await assert.rejects(
+    entry.withRemoteFileOperation({}, async () => { throw workError }),
+    error => {
+      assert.notEqual(error, workError)
+      assert.equal(error.cause, workError)
+      assert.equal(error.primaryCause, workError)
+      assert.deepEqual(Array.from(error.cleanupErrors), [releaseError])
+      const classification = remoteFileErrors
+        .classifyRemoteFileRecoveryError(error)
+      assert.equal(classification.settlementUncertain, true)
+      assert.equal(classification.failClosed, true)
+      return true
+    }
+  )
+  assert.equal(entry.remoteFileOperations.size, 0)
+})
+
+test('frozen transfer acquisition failure wraps uncertain release cleanup', async () => {
+  const remoteFileErrors = await importModule(
+    'src/client/components/sftp/remote-file-errors.js'
+  )
+  const primary = Object.freeze(Object.assign(
+    new Error('frozen transfer facade failure'),
+    { code: 'ECONNRESET' }
+  ))
+  const secondary = Object.assign(
+    new Error('transfer capability release uncertain'),
+    { code: 'TEARDOWN_TIMEOUT', uncertain: true }
+  )
+  const entry = {
+    remoteFileOperations: new Set(),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileUnmounted: false,
+    acquireRemoteFileOperation: async () => ({
+      release: async () => { throw secondary }
+    })
+  }
+  installClassField(entry, 'acquireTransferFileCapability', {
+    abortRemoteFileOperation,
+    initializeRemoteFileGeneration,
+    isCurrentRemoteFileGeneration: (target, generation) => (
+      target.remoteFileGeneration === generation
+    ),
+    remoteFileOperationStale,
+    remoteFileOperationUnmounted,
+    createRemoteFileTransferCapability: () => { throw primary },
+    appendRemoteFileCleanupErrors:
+      remoteFileErrors.appendRemoteFileCleanupErrors
+  })
+
+  await assert.rejects(
+    entry.acquireTransferFileCapability({ transferId: 'frozen-primary' }),
+    error => {
+      assert.equal(
+        error.message,
+        'Remote file operation failed and cleanup did not settle'
+      )
+      assert.equal(error.name, 'RemoteFileCleanupError')
+      assert.notEqual(error, primary)
+      assert.equal(error.cause, primary)
+      assert.equal(error.primaryCause, primary)
+      assert.deepEqual(Array.from(error.cleanupErrors), [secondary])
+      const classification = remoteFileErrors
+        .classifyRemoteFileRecoveryError(error)
+      assert.equal(classification.settlementUncertain, true)
+      assert.equal(classification.failClosed, true)
+      return true
+    }
+  )
+  assert.equal(entry.remoteFileOperations.size, 0)
+  assert.equal(entry.remoteFileOperationSettlements.size, 0)
 })
 
 test('identity is not published when capability final validation fails', async () => {
@@ -3758,7 +4164,10 @@ test('routing source exposes only fixed backend operations to file items', () =>
   assert.match(entrySource, /sftpList = async \(backend, remotePath/)
   assert.match(entrySource, /await backend\.list\(\s*remotePath/)
   assert.match(remoteList, /withRemoteFileOperation\(/)
-  assert.match(remoteList, /await this\.updateRemoteList\([^)]*backend/)
+  assert.match(
+    remoteList,
+    /(?:await|return) this\.updateRemoteList\([\s\S]{0,100}backend/
+  )
   assert.doesNotMatch(remoteList, /replaceSftpEntryTimer\(this, 'timer5'/)
   assert.match(entrySource, /resolveRemoteLink = async \([^)]*backend/)
   assert.match(entrySource, /remoteDel = async \(file, backend\)/)
