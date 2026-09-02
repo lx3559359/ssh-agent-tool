@@ -428,6 +428,46 @@ test('local SSH fixture rejects altered compact privileged command shapes', asyn
     )
     expect(parsePrivilegedFileCommand(noncanonical)).toBeNull()
   }
+
+  const reviewerToken = 'acaaacaaacaaacaaacaaacaaacaaacaa'
+  const reviewerPath = '/aa' + Buffer.from(
+    reviewerToken,
+    'base64'
+  ).toString('utf8')
+  const reviewerList = buildPrivilegedFileCommand({
+    token: reviewerToken,
+    request: {
+      operation: 'list-bound',
+      args: {
+        path: reviewerPath,
+        sourceParentRealPath: '/',
+        sourceParentDevice: '3001',
+        sourceParentInode: '3002',
+        sourceDevice: '3003',
+        sourceInode: '3004'
+      }
+    }
+  })
+  const reviewerFirstArgument = /\bA0='([A-Za-z0-9+/=]+)'/.exec(
+    reviewerList
+  )?.[1]
+  expect(reviewerFirstArgument).toContain(reviewerToken)
+  expect(parsePrivilegedFileCommand(reviewerList)?.operation)
+    .toBe('list-bound')
+
+  const tokenField = `SHELLPILOT_TOKEN='${reviewerToken}'`
+  expect(parsePrivilegedFileCommand(reviewerList.replace(
+    tokenField,
+    `${tokenField} ${tokenField}`
+  ))).toBeNull()
+  expect(parsePrivilegedFileCommand(reviewerList.replace(
+    tokenField,
+    "SHELLPILOT_TOKEN='ACAAACAAACAAACAAACAAACAAACAAACAA'"
+  ))).toBeNull()
+  expect(parsePrivilegedFileCommand(reviewerList.replace(
+    tokenField,
+    tokenField + 'X'
+  ))).toBeNull()
 })
 
 test('operations and the complete remote file panel inherit su root then return to the login identity', async () => {

@@ -275,9 +275,24 @@ const privilegedFileCommandShapeDigests = Object.freeze({
     '0dfef336488e706d5e4b0b09667c0c410d36b36a6d43a3aa4ed21368ff3054ac'
 })
 
+function normalizeCurrentPtyCommandShape (command, token) {
+  const tokenField = `SHELLPILOT_TOKEN='${token}'`
+  const tokenFieldIndex = command.indexOf(tokenField)
+  if (tokenFieldIndex === -1 || command.indexOf(
+    tokenField,
+    tokenFieldIndex + tokenField.length
+  ) !== -1) {
+    return ''
+  }
+  return command.slice(0, tokenFieldIndex) +
+    "SHELLPILOT_TOKEN='<token>'" +
+    command.slice(tokenFieldIndex + tokenField.length)
+}
+
 function privilegedFileCommandShapeDigest (command, token) {
-  const normalized = command
-    .replaceAll(token, '<token>')
+  const currentShape = normalizeCurrentPtyCommandShape(command, token)
+  if (!currentShape) return ''
+  const normalized = currentShape
     .replace(/\bA([0-9]+)='[A-Za-z0-9+/=]+'/g, "A$1='<arg>'")
     .replace(
       /SHELLPILOT_ARG_([A-Za-z0-9_]+)='[A-Za-z0-9+/=]+'/g,
