@@ -123,6 +123,12 @@ async function sessionServerErrorPayload (action, error) {
         dispose: () => {}
       })
     }],
+    ['./managed-terminal-channel', {
+      createManagedTerminalChannel: () => ({
+        handle: () => false,
+        dispose: () => {}
+      })
+    }],
     ['./ssh-tunnel-runtime', {
       serializeTunnelError: error => ({
         code: String(error?.code || 'SSH_TUNNEL_ERROR'),

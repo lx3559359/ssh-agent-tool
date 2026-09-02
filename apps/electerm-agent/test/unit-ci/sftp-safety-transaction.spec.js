@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
+const { createHash } = require('node:crypto')
 const { pathToFileURL } = require('node:url')
 const parser = require('@babel/parser')
 const traverse = require('@babel/traverse').default
@@ -1504,6 +1505,50 @@ test('SFTP bounded digest reports actual monotonic bytes', async () => {
   )
   assert.equal(result.size, 180000)
   assert.deepEqual(progress, [65536, 65536, 48928])
+})
+
+test('SFTP bounded digest prefers one authoritative remote proof', async () => {
+  const { digestRemoteFile } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const content = Buffer.alloc(32 * 1024 * 1024, 7)
+  const expectedDigest = createHash('sha256').update(content).digest('hex')
+  const calls = []
+  const progress = []
+  const sftp = {
+    async digestFile (remotePath, options) {
+      calls.push([remotePath, options])
+      return {
+        size: content.length,
+        digest: expectedDigest,
+        digestAlgorithm: 'SHA-256'
+      }
+    },
+    async readFileChunk () {
+      throw new Error('remote digest must not export content chunks')
+    }
+  }
+  const controller = new AbortController()
+  const result = await digestRemoteFile(
+    sftp,
+    '/srv/app/big.bin',
+    content.length,
+    controller.signal,
+    bytes => progress.push(bytes)
+  )
+  assert.deepEqual(result, {
+    size: content.length,
+    digest: expectedDigest,
+    digestAlgorithm: 'SHA-256'
+  })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0][0], '/srv/app/big.bin')
+  assert.deepEqual(calls[0][1], {
+    expectedSize: content.length,
+    signal: controller.signal
+  })
+  assert.deepEqual(progress, [content.length])
 })
 
 test('SFTP delete prepare reads source and staging once without rereading final snapshot', async () => {
@@ -3768,7 +3813,7 @@ test('root safe delete binds every prepared target to one backend and clears all
   installSftpEntryClassField(entry, 'deleteRemoteFilesWithSafety', {
     generate: () => `delete-${++id}`,
     openSafeDeleteDialog: () => dialog,
-    wait: async () => {},
+    waitForSafeDeleteDialogPaint: async () => {},
     resolve: (parent, name) => `${parent}/${name}`.replace(/\/+/g, '/'),
     e: value => value
   })
@@ -3832,7 +3877,7 @@ test('root safe delete mixed cancellation retries authoritatively and keeps fail
   installSftpEntryClassField(entry, 'deleteRemoteFilesWithSafety', {
     generate: () => `mixed-delete-${++token}`,
     openSafeDeleteDialog: () => dialog,
-    wait: async () => {},
+    waitForSafeDeleteDialogPaint: async () => {},
     resolve: (parent, name) => `${parent}/${name}`.replace(/\/+/g, '/'),
     e: value => value
   })
@@ -5484,7 +5529,15 @@ test('SFTP UI routes editor save chmod rename and delete through modern transact
   )
   assert.match(safeDeleteSource, /prepareSftpSafetyOperation\(\{[\s\S]*signal:\s*dialog\.signal/)
   assert.ok(safeDeleteSource.indexOf('openSafeDeleteDialog') < safeDeleteSource.indexOf('prepareSftpSafetyOperation'))
-  assert.match(safeDeleteSource, /openSafeDeleteDialog\([\s\S]{0,300}await wait\(0\)[\s\S]{0,120}dialog\.signal\.aborted/)
+  assert.match(
+    entrySource,
+    /const waitForSafeDeleteDialogPaint = \(\) => new Promise/
+  )
+  assert.match(
+    safeDeleteSource,
+    /openSafeDeleteDialog\([\s\S]{0,300}await waitForSafeDeleteDialogPaint\(\)[\s\S]{0,120}dialog\.signal\.aborted/
+  )
+  assert.doesNotMatch(safeDeleteSource, /await wait\(0\)/)
   assert.ok(safeDeleteSource.indexOf('dialog.ready') < safeDeleteSource.indexOf('sftpSafetyRunner.execute'))
   assert.ok(safeDeleteSource.indexOf('bindPreparedProof') < safeDeleteSource.indexOf('dialog.ready'))
   assert.match(safeDeleteSource, /onProgress:\s*progress\s*=>\s*dialog\.progress/)

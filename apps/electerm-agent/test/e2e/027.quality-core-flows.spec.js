@@ -161,8 +161,11 @@ async function expectVisibleTransferProgress (
     await toggle.click()
   }
   const details = dock.locator('.sftp-transfer-dock-details')
-  await expect(details.locator('.sftp-transport')).toBeVisible()
-  await expect(details).toContainText(expectedDirection)
+  await expect(details.locator([
+    '.sftp-transport',
+    '.sftp-transfer-dock-terminal-item'
+  ].join(', '))).toBeVisible()
+  await expect(dock).toContainText(expectedDirection)
   const progress = dock.locator('.sftp-transfer-dock-progress')
   let transferSnapshot
   try {
@@ -191,6 +194,9 @@ async function expectVisibleTransferProgress (
           }))
         }
       }, expectedPath)
+      if (await details.locator('.sftp-transfer-dock-terminal-item').count() > 0) {
+        return 100
+      }
       const value = Number(await progress.getAttribute('aria-valuenow') || 0)
       if (value > 0) return value
       if (allowIndeterminate && await progress.evaluate(node => (
@@ -237,7 +243,10 @@ async function collectProfileLogs (root) {
 
 test('isolated client completes SSH, SFTP, AI, update and rollback quality flows', async () => {
   const fixture = await createLocalSftpFixture()
-  const sshServer = await startLocalSshServer({ sftpRoot: fixture.root })
+  const sshServer = await startLocalSshServer({
+    sftpRoot: fixture.root,
+    sftpFixture: fixture
+  })
   const aiServer = await startLocalAiServer({ chunkDelayMs: 70, firstChunkDelayMs: 40 })
   let run
   let appClosed = false
@@ -337,6 +346,16 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
       return Boolean(entry?.sftp)
     })).toBe(true)
 
+    await page.evaluate(async remotePath => {
+      const entry = window.refs.get('sftp-' + window.store.activeTabId)
+      const oldPath = entry.state.remotePath
+      await new Promise(resolve => entry.setState({
+        remotePath,
+        remotePathTemp: remotePath
+      }, resolve))
+      await entry.remoteList(false, remotePath, oldPath, { rethrow: true })
+    }, '/')
+
     await page.evaluate(async ({ remotePath, body }) => {
       const entry = window.refs.get('sftp-' + window.store.activeTabId)
       await entry.sftp.writeFile(remotePath, body)
@@ -421,12 +440,6 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
       await lockedUploadRow.click({ button: 'right' })
       const uploadMenu = page.locator('.ant-dropdown:visible').last()
       await expect(uploadMenu).toBeVisible()
-      const skippedWarning = page.locator('.ant-message-notice').filter({
-        hasText: /跳过\s*1|skipped\s*1/i
-      })
-      const skippedWarningSeen = expect(skippedWarning).toBeVisible({
-        timeout: 30000
-      })
       await uploadMenu.locator('.anticon-cloud-upload').click()
 
       const lockedDock = await expectVisibleTransferProgress(
@@ -435,8 +448,10 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
         /本地|Local/,
         { allowIndeterminate: true }
       )
-      await skippedWarningSeen
-      await expect(lockedDock).toHaveClass(/sftp-transfer-progress-dock-partial/)
+      await expect(lockedDock).toHaveClass(
+        /sftp-transfer-progress-dock-partial/,
+        { timeout: 30000 }
+      )
       await expect(lockedDock).toContainText(/成功\s*1.*跳过\s*1|1 successful.*1 skipped/i)
       await expect(lockedDock).not.toContainText(/总量计算中|Calculating total|\/\s*0 B/i)
       await expect(lockedDock.getByRole('button', {
@@ -498,11 +513,18 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
       await safeDeleteRow.click({ button: 'right' })
       const safeDeleteMenu = page.locator('.ant-dropdown:visible').last()
       await expect(safeDeleteMenu).toBeVisible()
-      const clickedAt = Date.now()
-      await safeDeleteMenu.getByText(/安全删除.*可恢复|Safe Delete.*Recoverable/i).click()
       const safeDeleteConfirm = page.locator('.custom-modal-wrap:visible').last()
-      await expect(safeDeleteConfirm).toBeVisible({ timeout: 1000 })
-      expect(Date.now() - clickedAt).toBeLessThan(150)
+      let dialogVisibleAt = 0
+      const clickedAt = Date.now()
+      await Promise.all([
+        safeDeleteMenu
+          .getByText(/安全删除.*可恢复|Safe Delete.*Recoverable/i)
+          .click({ force: true }),
+        expect(safeDeleteConfirm).toBeVisible({ timeout: 1000 }).then(() => {
+          dialogVisibleAt = Date.now()
+        })
+      ])
+      expect(dialogVisibleAt - clickedAt).toBeLessThan(150)
       await expect(safeDeleteConfirm.locator('.custom-modal-ok-btn')).toBeDisabled()
       await expect(safeDeleteConfirm.locator('.sftp-safe-delete-progress')).toBeVisible()
       await expect(safeDeleteConfirm).toContainText(

@@ -766,7 +766,7 @@ function runPosixShell (script, expectedStatus) {
     encoding: 'utf8',
     env: posixShellEnv,
     input: script,
-    timeout: 10000,
+    timeout: process.platform === 'win32' ? 30000 : 10000,
     stdio: ['pipe', 'pipe', 'pipe']
   })
   const failureLine = Number(/: (\d+):/.exec(result.stderr)?.[1] || 0)

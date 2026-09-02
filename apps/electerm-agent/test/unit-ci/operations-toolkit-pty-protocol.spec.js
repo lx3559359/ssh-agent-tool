@@ -31,9 +31,24 @@ test('PTY wrapper probes effective identity and transports script as Base64', as
   assert.match(command, /id -un/)
   assert.match(command, /base64 -d \| sh/)
   assert.match(command, /SHELLPILOT_OPS/)
-  assert.match(command, /sh -c "exit \$__sp_status"/)
+  assert.match(command, /exit "\$__sp_status"/)
   assert.doesNotMatch(command, new RegExp(rawScript.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
   assert.equal(command.includes('\n'), false)
+})
+
+test('PTY wrapper exposes one exact top-level command to shell integration', async () => {
+  const { buildPtyTaskCommand } = await importModule(protocolModule)
+  const command = buildPtyTaskCommand({
+    token: '9'.repeat(48),
+    script: "printf 'managed output\\n'; uname -s"
+  })
+
+  assert.match(command, /^sh -c '/)
+  assert.equal(command.includes('\n'), false)
+  assert.equal(command.slice('sh -c '.length).startsWith("'"), true)
+  assert.equal(command.endsWith("'"), true)
+  assert.match(command, /SHELLPILOT_OPS/)
+  assert.doesNotMatch(command, /^__sp_token=/)
 })
 
 test('PTY wrapper rejects caller-supplied invalid boundary tokens', async () => {

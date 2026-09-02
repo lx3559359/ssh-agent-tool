@@ -224,7 +224,10 @@ function createEntryHarness ({
   acquire,
   replaceTimer,
   client,
-  reportBackgroundError = () => {}
+  beginProbe,
+  reportBackgroundError = () => {},
+  reportOperationError = () => {},
+  recordPerformanceDuration = () => true
 } = {}) {
   const stateWrites = []
   const entry = {
@@ -260,6 +263,11 @@ function createEntryHarness ({
     remoteFileIdentityEpoch: 0,
     activeRemoteFileLeases: new Set(),
     uncertainRemoteFileLeases: new Set(),
+    remoteDirectoryCache: {
+      get: () => null,
+      set: () => {},
+      clear: () => {}
+    },
     buildTree: remote => new Map(remote.map(file => [file.id, file])),
     updateRemoteList: async remote => remote,
     normalizeSftpError: error => error,
@@ -283,7 +291,8 @@ function createEntryHarness ({
   installClassField(entry, 'withRemoteFileOperation', {
     abortRemoteFileOperation,
     initializeRemoteFileGeneration,
-    remoteFileOperationUnmounted
+    remoteFileOperationUnmounted,
+    window: { store: { onError: reportOperationError } }
   })
   installClassField(entry, 'sftpList', {
     abortRemoteFileOperation,
@@ -320,9 +329,12 @@ function createEntryHarness ({
         task,
         { reportError: reportBackgroundError }
       )
-      installClassField(entry, 'remoteList', {
+      installClassField(entry, 'remoteListUncoalesced', {
         Client: client || (async () => {
           throw new Error('unexpected SFTP client construction')
+        }),
+        beginRemoteFileCapabilityProbe: beginProbe || (() => {
+          throw new Error('unexpected prepared probe')
         }),
         refs: { get: () => null },
         getProxy: () => null,
@@ -333,20 +345,26 @@ function createEntryHarness ({
         isCurrentSftpEntryRemoteTask: lifecycle.isCurrentSftpEntryRemoteTask,
         isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration,
         initializeRemoteFileGeneration: lifecycle.initializeRemoteFileGeneration,
+        beginSftpEntryRenderCommit: lifecycle.beginSftpEntryRenderCommit,
+        trackSftpEntryMetric: lifecycle.trackSftpEntryMetric,
+        getSftpEntryReadinessSnapshot: lifecycle.getSftpEntryReadinessSnapshot,
         commitSftpEntryRemoteClient: lifecycle.commitSftpEntryRemoteClient,
         destroySftpEntryClientOnce: lifecycle.destroySftpEntryClientOnce,
         deepCopy: value => structuredClone(value),
         normalizeRemotePath: value => value,
+        buildRemoteDirectoryCacheKey: value => JSON.stringify(value),
         typeMap,
         uniq: values => [...new Set(values)],
         preserveSftpDraftItems: (_oldRemote, remote) => remote,
         reconcileSelectedFileIds: (_oldRemote, _remote, selected) => selected,
+        recordPerformanceDuration,
         remoteFileOperationUnmounted,
         remoteFileOperationStale,
         replaceSftpEntryTimer: replaceTimer || (() => 1),
         unexpectedPacketErrorDesc: 'unexpected packet',
         sftpRetryInterval: 1
       })
+      entry.remoteList = entry.remoteListUncoalesced
       return { entry, stateWrites, lifecycle }
     })
 }
@@ -708,7 +726,7 @@ test('unmount waits for an active root AI preview before transport destroy', asy
   assert.deepEqual(calls, ['read', 'release', 'released', 'destroy'])
 })
 
-test('one-second compensation refresh acquires a new backend and never captures a released backend', async () => {
+test('ordinary remote refresh performs one authoritative backend read', async () => {
   const calls = []
   const timers = []
   let capabilityIndex = 0
@@ -742,17 +760,15 @@ test('one-second compensation refresh acquires a new backend and never captures 
   }
 
   await entry.remoteList(false, '/root')
-  assert.equal(timers.length, 1)
-  await timers[0]()
 
-  assert.equal(capabilityIndex, 2)
+  assert.equal(timers.length, 0)
+  assert.equal(capabilityIndex, 1)
   assert.deepEqual(calls.map(call => call[0]), [
-    'list', 'readlink', 'stat', 'release',
     'list', 'readlink', 'stat', 'release'
   ])
 })
 
-test('compensation timer observes aborts and reports non-abort failures once', async () => {
+test('ordinary remote refresh schedules no delayed compensation callback', async () => {
   const timers = []
   const reports = []
   const acquire = async () => ({
@@ -769,19 +785,732 @@ test('compensation timer observes aborts and reports non-abort failures once', a
   })
   entry.updateRemoteList = async remote => remote
   await entry.remoteList(false, '/root')
-  assert.equal(timers.length, 1)
+  assert.equal(timers.length, 0)
+  assert.deepEqual(reports, [])
+})
 
-  const abort = new Error('unmounted')
-  abort.name = 'AbortError'
-  abort.code = 'ABORT_ERR'
-  entry.remoteList = () => Promise.reject(abort)
-  assert.equal(await timers[0](), undefined)
+test('remote list waits for committed paint and metric acceptance', async () => {
+  const committed = deferred()
+  const metricsAccepted = deferred()
+  const metricNames = []
+  const acquire = async () => ({
+    backend: { list: async () => [] },
+    release: async () => true
+  })
+  const { entry, lifecycle } = await createEntryHarness({
+    acquire,
+    recordPerformanceDuration: name => {
+      metricNames.push(name)
+      return metricsAccepted.promise
+    }
+  })
+  entry.updateRemoteList = async remote => remote
+  entry.props.editTab = (_id, update) => Object.assign(entry.props.tab, update)
+  let commitCallback
+  entry.setState = (update, callback) => {
+    const next = typeof update === 'function' ? update(entry.state) : update
+    if (next) Object.assign(entry.state, next)
+    if (next?.inited) {
+      commitCallback = callback
+      committed.resolve()
+      return
+    }
+    callback?.()
+  }
+  let listingSettled = false
+  const listing = entry.remoteList(false, '/root').finally(() => {
+    listingSettled = true
+  })
+
+  await committed.promise
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(entry.state.inited, true)
+  assert.equal(listingSettled, false)
+  assert.deepEqual(
+    lifecycle.getSftpEntryReadinessSnapshot(entry),
+    {
+      explicitOpenPending: false,
+      sessionBindingPending: false,
+      backgroundTaskCount: 0,
+      renderCommitCount: 1,
+      metricTaskCount: 0,
+      directoryRequestCount: 0,
+      requestEpoch: 1,
+      visibleRemoteCommitted: false,
+      firstReadyCommitted: false,
+      fullySettled: false
+    }
+  )
+
+  commitCallback()
+  await Promise.resolve()
+  assert.deepEqual(metricNames, [
+    'sftp_refresh_ms',
+    'first_sftp_ready_ms'
+  ])
+  assert.equal(listingSettled, false)
+  const accepting = lifecycle.getSftpEntryReadinessSnapshot(entry)
+  assert.equal(accepting.renderCommitCount, 1)
+  assert.equal(accepting.metricTaskCount, 2)
+  assert.equal(accepting.fullySettled, false)
+
+  metricsAccepted.resolve(true)
+  await listing
+  assert.deepEqual(
+    lifecycle.getSftpEntryReadinessSnapshot(entry),
+    {
+      explicitOpenPending: false,
+      sessionBindingPending: false,
+      backgroundTaskCount: 0,
+      renderCommitCount: 0,
+      metricTaskCount: 0,
+      directoryRequestCount: 0,
+      requestEpoch: 1,
+      visibleRemoteCommitted: true,
+      firstReadyCommitted: true,
+      fullySettled: true
+    }
+  )
+})
+
+test('authoritative SSH list paints before capability release while readiness stays pending', async () => {
+  const listStarted = deferred()
+  const listFinished = deferred()
+  const releaseStarted = deferred()
+  const releaseFinished = deferred()
+  const metricNames = []
+  const acquire = async () => ({
+    backend: {
+      async list () {
+        listStarted.resolve()
+        await listFinished.promise
+        return [{ name: 'authoritative', type: '-', size: 0 }]
+      }
+    },
+    async release () {
+      releaseStarted.resolve()
+      await releaseFinished.promise
+      return true
+    }
+  })
+  const { entry, lifecycle } = await createEntryHarness({
+    acquire,
+    recordPerformanceDuration: name => {
+      metricNames.push(name)
+      return true
+    }
+  })
+  entry.updateRemoteList = async remote => remote
+  let listingSettled = false
+  const listing = entry.remoteList(false, '/root', undefined, {
+    rethrow: true
+  }).finally(() => { listingSettled = true })
+
+  await listStarted.promise
+  assert.equal(entry.state.inited, undefined)
+  assert.deepEqual(metricNames, [])
+  listFinished.resolve(true)
+  await releaseStarted.promise
+  assert.equal(entry.state.inited, true)
+  assert.deepEqual(entry.state.remote.map(file => file.name), [
+    'authoritative'
+  ])
+  assert.deepEqual(metricNames, [
+    'sftp_refresh_ms',
+    'first_sftp_ready_ms'
+  ])
+  assert.equal(listingSettled, false)
+  assert.equal(
+    lifecycle.getSftpEntryReadinessSnapshot(entry).fullySettled,
+    false
+  )
+
+  releaseFinished.resolve(true)
+  await listing
+  assert.equal(
+    lifecycle.getSftpEntryReadinessSnapshot(entry).fullySettled,
+    true
+  )
+})
+
+test('post-paint release failure stays observable and blocks settled readiness', async () => {
+  const releaseError = new Error('visible list release failed')
+  const reports = []
+  const acquire = async ({ onLeaseState }) => {
+    onLeaseState({
+      state: 'acquired',
+      operationId: 'visible-list'
+    })
+    return {
+      backend: { list: async () => [] },
+      async release () {
+        onLeaseState({
+          state: 'release-failed',
+          operationId: 'visible-list',
+          error: releaseError
+        })
+        throw releaseError
+      }
+    }
+  }
+  const harness = await createEntryHarness({
+    acquire,
+    reportOperationError: error => reports.push(error)
+  })
+  const { entry } = harness
+  entry.updateRemoteList = async remote => remote
+
+  await assert.doesNotReject(entry.remoteList(false, '/root', undefined, {
+    rethrow: true
+  }))
+  assert.equal(entry.state.inited, true)
+  assert.deepEqual(reports, [releaseError])
+  assert.equal(entry.state.remoteRefreshError, '')
+  assert.equal(entry.state.remoteFileStatus, 'uncertain')
+  assert.deepEqual([...entry.uncertainRemoteFileLeases], ['visible-list'])
+  assert.equal(
+    harness.lifecycle.getSftpEntryReadinessSnapshot(entry).fullySettled,
+    false
+  )
+})
+
+test('rejected performance acceptance never fails an SFTP list', async () => {
+  const metricFailure = new Error('metrics unavailable')
+  const acquire = async () => ({
+    backend: { list: async () => [] },
+    release: async () => true
+  })
+  const { entry } = await createEntryHarness({
+    acquire,
+    recordPerformanceDuration: () => Promise.reject(metricFailure)
+  })
+  entry.updateRemoteList = async remote => remote
+
+  await assert.doesNotReject(entry.remoteList(false, '/root'))
+  assert.equal(entry.state.inited, true)
+  assert.equal(entry.state.remoteLoading, false)
+  assert.equal(entry.firstSftpReadyRecorded, true)
+})
+
+test('remote owner initialization waits for its render commit', async () => {
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  const committed = deferred()
+  const entry = {
+    props: { pid: 42 },
+    state: {},
+    setState (update, callback) {
+      const next = typeof update === 'function'
+        ? update(this.state)
+        : update
+      if (next) Object.assign(this.state, next)
+      committed.resolve(callback)
+    }
+  }
+  installClassField(entry, 'remoteListOwner', {
+    beginSftpEntryRenderCommit: lifecycle.beginSftpEntryRenderCommit,
+    isCurrentSftpEntryRemoteTask: () => true,
+    owner: {
+      remoteListUsers: async () => ({ root: 0 }),
+      remoteListGroups: async () => ({ root: 0 })
+    }
+  })
+  let ownerSettled = false
+  const owners = entry.remoteListOwner({ requestEpoch: 1 }).finally(() => {
+    ownerSettled = true
+  })
+
+  const callback = await committed.promise
+  await Promise.resolve()
+  assert.equal(ownerSettled, false)
+  callback()
+  await owners
+  assert.deepEqual(entry.state.remoteUidTree, { root: 0 })
+  assert.deepEqual(entry.state.remoteGidTree, { root: 0 })
+})
+
+test('remote owner user and group RPCs overlap before either settles', async () => {
+  const usersFinished = deferred()
+  const groupsFinished = deferred()
+  const calls = []
+  const entry = {
+    props: { pid: 42 },
+    state: {},
+    setState (update, callback) {
+      const next = typeof update === 'function'
+        ? update(this.state)
+        : update
+      if (next) Object.assign(this.state, next)
+      callback?.()
+    }
+  }
+  installClassField(entry, 'remoteListOwner', {
+    beginSftpEntryRenderCommit: () => ({
+      promise: Promise.resolve(true),
+      settle: () => true
+    }),
+    isCurrentSftpEntryRemoteTask: () => true,
+    owner: {
+      remoteListUsers: async () => {
+        calls.push('users')
+        await usersFinished.promise
+        return { root: 0 }
+      },
+      remoteListGroups: async () => {
+        calls.push('groups')
+        await groupsFinished.promise
+        return { root: 0 }
+      }
+    }
+  })
+  const owners = entry.remoteListOwner({ requestEpoch: 1 })
+  await Promise.resolve()
+  await Promise.resolve()
+  let overlapError
+  try {
+    assert.deepEqual(calls, ['users', 'groups'])
+  } catch (error) {
+    overlapError = error
+  } finally {
+    usersFinished.resolve()
+    groupsFinished.resolve()
+  }
+  await owners
+  if (overlapError) throw overlapError
+  assert.deepEqual(entry.state.remoteUidTree, { root: 0 })
+  assert.deepEqual(entry.state.remoteGidTree, { root: 0 })
+})
+
+test('remote initialization tracks owner RPC before it starts', async () => {
+  const ownerStarted = deferred()
+  const ownerFinished = deferred()
+  const { entry, lifecycle } = await createEntryHarness({
+    acquire: async () => ({
+      backend: { list: async () => [] },
+      release: async () => true
+    })
+  })
+  entry.remoteList = async () => true
+  entry.remoteListOwner = async () => {
+    ownerStarted.resolve()
+    await ownerFinished.promise
+    return true
+  }
+  installClassField(entry, 'initRemoteAll', {
+    beginSftpEntryRemoteTask: lifecycle.beginSftpEntryRemoteTask,
+    isCurrentSftpEntryRemoteTask: lifecycle.isCurrentSftpEntryRemoteTask,
+    trackSftpEntryBackgroundTask: lifecycle.trackSftpEntryBackgroundTask
+  })
+
+  const initialization = entry.initRemoteAll()
+  await ownerStarted.promise
+  assert.equal(
+    lifecycle.getSftpEntryReadinessSnapshot(entry).backgroundTaskCount,
+    1
+  )
+
+  ownerFinished.resolve()
+  await initialization
+  assert.equal(
+    lifecycle.getSftpEntryReadinessSnapshot(entry).backgroundTaskCount,
+    0
+  )
+})
+
+test('initial SSH home lookup overlaps remote capability acquisition', async () => {
+  const homeReady = deferred()
+  const capabilityStarted = deferred()
+  const calls = []
+  const capability = createBackend(calls, 'initial-home')
+  const acquire = async () => {
+    capabilityStarted.resolve()
+    return {
+      backend: capability.backend,
+      runtimeIdentity: {
+        channel: 'sftp',
+        effectiveUsername: 'hik'
+      },
+      release: capability.release
+    }
+  }
+  const { entry } = await createEntryHarness({ acquire })
+  entry.state.remotePath = ''
+  entry.getPwd = () => homeReady.promise
+  entry.updateRemoteList = async remote => remote
+
+  const listing = entry.remoteList(false, undefined, undefined, {
+    rethrow: true
+  })
+  await capabilityStarted.promise
+
+  homeReady.resolve('/home/hik')
+  await listing
+  assert.deepEqual(
+    calls.filter(call => call[0] === 'list'),
+    [['list', 'initial-home', '/home/hik']]
+  )
+  assert.equal(entry.state.remotePath, '/home/hik')
+})
+
+test('real entry bind chain keeps hidden SSH login lazy and initial full SFTP eager', async () => {
+  const calls = []
+  let clientCount = 0
+  let preparedProbeCount = 0
+  let acquireCount = 0
+  const backend = createBackend(calls, 'bind-list')
+  const acquire = async ({ onIdentity }) => {
+    acquireCount += 1
+    await onIdentity({
+      loginUsername: 'hik',
+      effectiveUid: '1000',
+      effectiveUsername: 'hik',
+      channel: 'sftp'
+    })
+    return {
+      backend: backend.backend,
+      runtimeIdentity: {
+        channel: 'sftp',
+        effectiveUsername: 'hik'
+      },
+      release: backend.release
+    }
+  }
+  const { entry, lifecycle } = await createEntryHarness({
+    acquire,
+    client: async () => {
+      clientCount += 1
+      return {
+        sshSessionGeneration: `candidate-${clientCount}`,
+        sshTerminalPid: 4242,
+        connect: async () => true,
+        destroy: async () => true
+      }
+    },
+    beginProbe: () => {
+      preparedProbeCount += 1
+      throw new Error('hidden bind started a prepared probe')
+    }
+  })
+  const reports = []
+  const localCalls = []
+  entry.props.tab = {
+    ...entry.props.tab,
+    host: 'fixture.invalid',
+    type: 'ssh'
+  }
+  entry.props.isFtp = false
+  entry.props.enableSftp = false
+  entry.localListOwner = () => localCalls.push('owner')
+  entry.localList = () => localCalls.push('list')
+  entry.remoteListOwner = async () => calls.push(['remote-owner'])
+  entry.updateRemoteList = async remote => remote
+  installClassField(entry, 'initData', {
+    bindSftpEntryRemoteSession: lifecycle.bindSftpEntryRemoteSession,
+    window: { store: { onError: error => reports.push(error) } }
+  })
+  installClassField(entry, 'shouldRenderRemote', {
+    terminalSerialType: 'serial'
+  })
+  installClassField(entry, 'shouldInitializeRemoteOnBind')
+  installClassField(entry, 'initRemoteAll', {
+    beginSftpEntryRemoteTask: lifecycle.beginSftpEntryRemoteTask,
+    isCurrentSftpEntryRemoteTask: lifecycle.isCurrentSftpEntryRemoteTask
+  })
+  installClassField(entry, 'initLocalAll')
+
+  await entry.initData('tab-1', 41001, 'generation-login', '1001')
+
+  assert.equal(clientCount, 0)
+  assert.equal(preparedProbeCount, 0)
+  assert.equal(acquireCount, 0)
+  assert.deepEqual(localCalls, ['owner', 'list'])
   assert.deepEqual(reports, [])
 
-  const failure = new Error('refresh transport failed')
-  entry.remoteList = () => Promise.reject(failure)
-  assert.equal(await timers[0](), undefined)
-  assert.deepEqual(reports, [failure])
+  entry.props.enableSftp = true
+  await entry.initData('tab-1', 41002, 'generation-full', '1002')
+
+  assert.equal(clientCount, 1)
+  assert.equal(preparedProbeCount, 0)
+  assert.equal(acquireCount, 1)
+  assert.deepEqual(localCalls, ['owner', 'list', 'owner', 'list'])
+  assert.deepEqual(reports, [])
+})
+
+test('explicit first open overlaps one prepared probe with native connect', async () => {
+  const connectGate = deferred()
+  const connectStarted = deferred()
+  const probeStarted = deferred()
+  const calls = []
+  const backend = createBackend(calls, 'prepared-list')
+  let beginCount = 0
+  let acquireCount = 0
+  let consumeCount = 0
+  let preparedReleaseCount = 0
+  const prepared = Object.freeze({
+    consume: async () => {
+      consumeCount += 1
+      return {
+        backend: backend.backend,
+        runtimeIdentity: {
+          channel: 'pty-root',
+          effectiveUsername: 'root'
+        },
+        release: backend.release
+      }
+    },
+    abort: async () => { preparedReleaseCount += 1 },
+    release: async () => { preparedReleaseCount += 1 }
+  })
+  const candidate = {
+    sshSessionGeneration: 'generation-1',
+    sshTerminalPid: 4242,
+    async connect () {
+      connectStarted.resolve()
+      await connectGate.promise
+      return true
+    },
+    async destroy () { calls.push(['destroy-candidate']) }
+  }
+  const { entry } = await createEntryHarness({
+    client: async () => candidate,
+    beginProbe: options => {
+      beginCount += 1
+      assert.equal(Object.hasOwn(options, 'sftp'), false)
+      probeStarted.resolve()
+      return prepared
+    },
+    acquire: async options => {
+      acquireCount += 1
+      throw new Error(`unexpected normal acquire: ${options.operationId}`)
+    }
+  })
+  entry.sftp = null
+  entry.updateRemoteList = async remote => remote
+
+  const listing = entry.remoteList(false, '/root', undefined, {
+    explicitOpen: true,
+    rethrow: true
+  })
+  await connectStarted.promise
+  let overlapError
+  try {
+    assert.equal(beginCount, 1)
+    await probeStarted.promise
+    assert.equal(consumeCount, 0)
+    assert.equal(acquireCount, 0)
+  } catch (error) {
+    overlapError = error
+  } finally {
+    connectGate.resolve()
+  }
+  await listing
+  if (overlapError) throw overlapError
+
+  assert.equal(beginCount, 1)
+  assert.equal(acquireCount, 0)
+  assert.equal(consumeCount, 1)
+  assert.equal(preparedReleaseCount, 0)
+  assert.deepEqual(
+    calls.filter(call => call[0] === 'list'),
+    [['list', 'prepared-list', '/root']]
+  )
+})
+
+test('explicit probe release settles before failed candidate destroy', async () => {
+  const releaseGate = deferred()
+  const abortStarted = deferred()
+  const probeStarted = deferred()
+  const connectError = new Error('native connect failed')
+  const calls = []
+  let releasePromise
+  let releaseCount = 0
+  const release = () => {
+    if (releasePromise) return releasePromise
+    releaseCount += 1
+    calls.push('abort-start')
+    abortStarted.resolve()
+    releasePromise = releaseGate.promise.then(() => {
+      calls.push('abort-end')
+      return true
+    })
+    return releasePromise
+  }
+  const prepared = Object.freeze({
+    consume: async () => { throw new Error('unexpected consume') },
+    abort: release,
+    release
+  })
+  const candidate = {
+    sshSessionGeneration: 'generation-1',
+    sshTerminalPid: 4242,
+    async connect () { throw connectError },
+    async destroy () {
+      calls.push('destroy')
+      return true
+    }
+  }
+  const { entry } = await createEntryHarness({
+    client: async () => candidate,
+    beginProbe: () => {
+      probeStarted.resolve()
+      return prepared
+    },
+    acquire: async () => { throw new Error('unexpected acquire') }
+  })
+  entry.sftp = null
+
+  const listing = entry.remoteList(false, '/root', undefined, {
+    explicitOpen: true,
+    rethrow: true
+  })
+  await probeStarted.promise
+  await abortStarted.promise
+  assert.deepEqual(calls, ['abort-start'])
+  releaseGate.resolve()
+  await assert.rejects(listing, error => error === connectError)
+  assert.equal(releaseCount, 1)
+  assert.deepEqual(calls, ['abort-start', 'abort-end', 'destroy'])
+})
+
+test('native connect failure keeps uncertain prepared abort sticky', async () => {
+  const connectError = new Error('native connect failed')
+  const abortError = Object.assign(new Error('prepared abort timed out'), {
+    code: 'TEARDOWN_TIMEOUT',
+    uncertain: true
+  })
+  let clientCount = 0
+  let probeCount = 0
+  let abortCount = 0
+  let destroyCount = 0
+  let abortPromise
+  const release = () => {
+    abortCount += 1
+    abortPromise ||= Promise.reject(abortError)
+    return abortPromise
+  }
+  const prepared = Object.freeze({
+    consume: async () => { throw new Error('unexpected consume') },
+    abort: release,
+    release
+  })
+  const candidate = {
+    sshSessionGeneration: 'generation-1',
+    sshTerminalPid: 4242,
+    async connect () { throw connectError },
+    async destroy () {
+      destroyCount += 1
+      return true
+    }
+  }
+  const { entry, lifecycle } = await createEntryHarness({
+    client: async () => {
+      clientCount += 1
+      return candidate
+    },
+    beginProbe: () => {
+      probeCount += 1
+      return prepared
+    },
+    acquire: async () => { throw new Error('unexpected acquire') }
+  })
+  entry.sftp = null
+  entry.initRemoteAll = () => entry.remoteList(
+    false,
+    '/root',
+    undefined,
+    { explicitOpen: true, rethrow: true }
+  )
+
+  await assert.rejects(
+    entry.remoteList(false, '/root', undefined, {
+      explicitOpen: true,
+      rethrow: true
+    }),
+    error => {
+      assert.equal(error, connectError)
+      assert.equal(error.cleanupErrors.length, 1)
+      assert.equal(error.cleanupErrors[0], abortError)
+      return true
+    }
+  )
+  let stickyError
+  await assert.rejects(lifecycle.reconnectSftpEntryRemote(entry), error => {
+    stickyError = error
+    assert.equal(error instanceof AggregateError, true)
+    assert.deepEqual(error.errors, [abortError])
+    return true
+  })
+  await assert.rejects(
+    lifecycle.reconnectSftpEntryRemote(entry),
+    error => error === stickyError
+  )
+  assert.equal(clientCount, 1)
+  assert.equal(probeCount, 1)
+  assert.equal(abortCount, 2)
+  assert.equal(destroyCount, 1)
+  assert.equal(entry.remoteFileGeneration.accepting, false)
+})
+
+test('generation drain and stale remoteList share one prepared release before destroy', async () => {
+  const connectGate = deferred()
+  const connectStarted = deferred()
+  const releaseGate = deferred()
+  const calls = []
+  let releasePromise
+  let releaseCount = 0
+  const release = () => {
+    if (releasePromise) return releasePromise
+    releaseCount += 1
+    calls.push('abort-start')
+    releasePromise = releaseGate.promise.then(() => {
+      calls.push('abort-end')
+      return true
+    })
+    return releasePromise
+  }
+  const prepared = Object.freeze({
+    consume: async () => { throw new Error('unexpected consume') },
+    abort: release,
+    release
+  })
+  const candidate = {
+    sshSessionGeneration: 'generation-1',
+    sshTerminalPid: 4242,
+    async connect () {
+      connectStarted.resolve()
+      await connectGate.promise
+      return true
+    },
+    async destroy () {
+      calls.push('destroy')
+      return true
+    }
+  }
+  const { entry, lifecycle } = await createEntryHarness({
+    client: async () => candidate,
+    beginProbe: () => prepared,
+    acquire: async () => { throw new Error('unexpected acquire') }
+  })
+  entry.sftp = null
+
+  const listing = entry.remoteList(false, '/root', undefined, {
+    explicitOpen: true,
+    rethrow: true
+  })
+  await connectStarted.promise
+  const drain = lifecycle.drainRemoteFileGeneration(entry)
+  await Promise.resolve()
+  assert.deepEqual(calls, ['abort-start'])
+  releaseGate.resolve()
+  await drain.promise
+  assert.deepEqual(calls, ['abort-start', 'abort-end'])
+
+  connectGate.resolve()
+  await assert.rejects(listing, error => error?.name === 'AbortError')
+  assert.equal(releaseCount, 1)
+  assert.deepEqual(calls, ['abort-start', 'abort-end', 'destroy'])
 })
 
 test('operation acquired after unmount releases once without running work or setting state', async () => {
@@ -860,10 +1589,11 @@ test('remote list rejects after unmount without starting lifecycle or setting st
     remoteFileUnmounted: true,
     setState: () => calls.push('set-state')
   }
-  installClassField(entry, 'remoteList', {
+  installClassField(entry, 'remoteListUncoalesced', {
     remoteFileOperationUnmounted,
     beginSftpEntryRemoteTask: () => calls.push('begin-task')
   })
+  entry.remoteList = entry.remoteListUncoalesced
 
   await assert.rejects(entry.remoteList(false, '/root'), error => (
     error.name === 'AbortError' && error.code === 'ABORT_ERR'
@@ -1481,6 +2211,8 @@ test('unmount destroys the detached transport after rejected and synchronous rel
     'src/client/components/sftp/sftp-entry-lifecycle.js'
   )
   const rejectedRelease = deferred()
+  const asynchronousError = new Error('asynchronous release failure')
+  const synchronousError = new Error('synchronous release failure')
   let destroyCount = 0
   const entry = {
     id: 'sftp-tab-1',
@@ -1489,7 +2221,7 @@ test('unmount destroys the detached transport after rejected and synchronous rel
     remoteFileOperations: new Set([{
       release: () => rejectedRelease.promise
     }, {
-      release: () => { throw new Error('synchronous release failure') }
+      release: () => { throw synchronousError }
     }]),
     remoteFileOperationSettlements: new Set(),
     remoteFileOperationBackends: new Map(),
@@ -1505,11 +2237,73 @@ test('unmount destroys the detached transport after rejected and synchronous rel
 
   const disposal = entry.componentWillUnmount()
   assert.equal(destroyCount, 0)
-  rejectedRelease.reject(new Error('asynchronous release failure'))
-  await disposal
+  rejectedRelease.reject(asynchronousError)
+  let observedError
+  await assert.rejects(disposal, error => {
+    observedError = error
+    assert.equal(error instanceof AggregateError, true)
+    assert.deepEqual(error.errors, [asynchronousError, synchronousError])
+    return true
+  })
   assert.equal(destroyCount, 1)
-  assert.equal(await entry.componentWillUnmount(), true)
+  assert.equal(entry.componentWillUnmount(), disposal)
+  await assert.rejects(
+    entry.componentWillUnmount(),
+    error => error === observedError
+  )
   assert.equal(destroyCount, 1)
+})
+
+test('React-style unmount observes and reports disposal rejection', async () => {
+  const lifecycle = await importModule(
+    'src/client/components/sftp/sftp-entry-lifecycle.js'
+  )
+  const rejectedRelease = deferred()
+  const releaseError = new Error('unmount release failed')
+  const reports = []
+  const unhandled = []
+  let destroyCount = 0
+  const entry = {
+    id: 'sftp-tab-1',
+    sftp: { destroy: async () => { destroyCount += 1 } },
+    remoteFileUnmounted: false,
+    remoteFileOperations: new Set([{
+      release: () => rejectedRelease.promise
+    }]),
+    remoteFileOperationSettlements: new Set(),
+    remoteFileOperationBackends: new Map(),
+    sftpSafetyProgressHandlers: { clear: () => {} },
+    sftpSafetyAdapter: { discardAllPreparedProofs: () => {} },
+    _sortCache: { clear: () => {} },
+    runSftpBackgroundTask: task => lifecycle.runSftpBackgroundTask(task, {
+      reportError: error => reports.push(error)
+    })
+  }
+  installClassMethod(entry, 'componentWillUnmount', {
+    refs: { remove: () => {} },
+    drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
+    disposeSftpEntryScheduling: () => {}
+  })
+  const onUnhandled = error => unhandled.push(error)
+  process.on('unhandledRejection', onUnhandled)
+
+  try {
+    const disposal = entry.componentWillUnmount()
+    rejectedRelease.reject(releaseError)
+    await new Promise(resolve => setImmediate(resolve))
+
+    assert.deepEqual(unhandled, [])
+    assert.equal(reports.length, 1)
+    await assert.rejects(disposal, error => {
+      assert.equal(error, reports[0])
+      assert.equal(error instanceof AggregateError, true)
+      assert.deepEqual(error.errors, [releaseError])
+      return true
+    })
+    assert.equal(destroyCount, 1)
+  } finally {
+    process.removeListener('unhandledRejection', onUnhandled)
+  }
 })
 
 test('overlapping reloads drain the old generation and only latest initializes', async () => {
@@ -1651,7 +2445,7 @@ test('overlapping lists release both capabilities and only the latest request co
 })
 
 test('routing source exposes only fixed backend operations to file items', () => {
-  const remoteListStart = entrySource.indexOf('remoteList = async')
+  const remoteListStart = entrySource.indexOf('remoteListUncoalesced = async')
   const remoteListEnd = entrySource.indexOf('\n  updateRemoteList = async', remoteListStart)
   const remoteList = entrySource.slice(remoteListStart, remoteListEnd)
   const filePropsStart = entrySource.indexOf('getFileProps = (file, type) =>')
@@ -1668,8 +2462,7 @@ test('routing source exposes only fixed backend operations to file items', () =>
   assert.match(entrySource, /await backend\.list\(\s*remotePath/)
   assert.match(remoteList, /withRemoteFileOperation\(/)
   assert.match(remoteList, /await this\.updateRemoteList\([^)]*backend/)
-  assert.match(remoteList, /remoteList\(\s*true,\s*remotePath/)
-  assert.doesNotMatch(remoteList, /timer5[\s\S]*updateRemoteList\(/)
+  assert.doesNotMatch(remoteList, /replaceSftpEntryTimer\(this, 'timer5'/)
   assert.match(entrySource, /resolveRemoteLink = async \([^)]*backend/)
   assert.match(entrySource, /remoteDel = async \(file, backend\)/)
   assert.match(fileProps, /'readRemoteFile'/)

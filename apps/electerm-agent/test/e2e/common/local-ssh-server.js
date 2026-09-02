@@ -421,8 +421,12 @@ function finishShellCommand (stream, nonce, status = 0, scheduleTimer = setTimeo
 }
 
 function parseManagedPtyCommand (command) {
-  const token = /__sp_token='([a-f0-9]{32,128})'/.exec(command)?.[1]
-  const encodedScript = /__sp_script='([A-Za-z0-9+/=]+)'/.exec(command)?.[1]
+  const wrapped = /^sh -c '([\s\S]*)'$/.exec(command)
+  const body = wrapped
+    ? wrapped[1].replace(/'"'"'/g, "'")
+    : command
+  const token = /__sp_token='([a-f0-9]{32,128})'/.exec(body)?.[1]
+  const encodedScript = /__sp_script='([A-Za-z0-9+/=]+)'/.exec(body)?.[1]
   if (!token || !encodedScript) return null
   return {
     token,

@@ -40,6 +40,30 @@ function loadClassMethod (source, name, dependencies = {}) {
   }).code})`, dependencies)
 }
 
+function startSingleExplicitInitialization (entry, task) {
+  if (entry.sftpExplicitInitialization) {
+    return entry.sftpExplicitInitialization
+  }
+  let resolveStart
+  let rejectStart
+  const start = new Promise((resolve, reject) => {
+    resolveStart = resolve
+    rejectStart = reject
+  })
+  const shared = start.finally(() => {
+    if (entry.sftpExplicitInitialization === shared) {
+      entry.sftpExplicitInitialization = null
+    }
+  })
+  entry.sftpExplicitInitialization = shared
+  try {
+    resolveStart(task())
+  } catch (error) {
+    rejectStart(error)
+  }
+  return shared
+}
+
 test('sftp file item refresh reloads the active side list', () => {
   const source = readSftpSource('file-item.jsx')
   const start = source.indexOf('refresh = () => {')
@@ -92,16 +116,20 @@ test('sftp history click updates path temp and reloads that side', () => {
   assert.match(body, /this\[`\$\{type\}List`\]\(undefined,\s*undefined,\s*oldPath\)/)
 })
 
-test('opening SFTP retries a hidden preload failure without repeating an initialized remote', () => {
+test('only an explicit full or split SFTP open starts or retries remote loading', () => {
   const source = readSftpSource('sftp-entry.jsx')
   const componentDidUpdate = loadClassMethod(source, 'componentDidUpdate', {
     paneMap: { fileManager: 'fileManager' },
-    typeMap: { local: 'local', remote: 'remote' }
+    typeMap: { local: 'local', remote: 'remote' },
+    startSftpEntryExplicitInitialization: (_entry, task) => task()
   })
   let retries = 0
+  const initOptions = []
   const entry = {
     props: {
       pane: 'fileManager',
+      sshSftpSplitView: false,
+      enableSftp: false,
       tab: { sftpCreated: false },
       config: { autoRefreshWhenSwitchToSftp: false }
     },
@@ -115,7 +143,10 @@ test('opening SFTP retries a hidden preload failure without repeating an initial
     },
     sftp: { isSshFsFallback: true },
     shouldRenderRemote: () => true,
-    initRemoteAll: async () => { retries += 1 },
+    initRemoteAll: async options => {
+      retries += 1
+      initOptions.push(options)
+    },
     runSftpBackgroundTask: task => task(),
     onGoto: () => {},
     setState: () => {}
@@ -126,7 +157,17 @@ test('opening SFTP retries a hidden preload failure without repeating an initial
     pane: 'terminal'
   }, { ...entry.state })
 
+  assert.equal(retries, 0)
+
+  entry.props.enableSftp = true
+  componentDidUpdate.call(entry, {
+    ...entry.props,
+    pane: 'terminal'
+  }, { ...entry.state })
+
   assert.equal(retries, 1)
+  assert.equal(initOptions.length, 1)
+  assert.equal(initOptions[0].explicitOpen, true)
 
   entry.props.tab.sftpCreated = true
   componentDidUpdate.call(entry, {
@@ -135,11 +176,85 @@ test('opening SFTP retries a hidden preload failure without repeating an initial
   }, { ...entry.state })
 
   assert.equal(retries, 1)
+
+  entry.props.pane = 'terminal'
+  entry.props.sshSftpSplitView = true
+  entry.props.tab.sftpCreated = false
+  componentDidUpdate.call(entry, {
+    ...entry.props,
+    sshSftpSplitView: false
+  }, { ...entry.state })
+
+  assert.equal(retries, 2)
+  assert.equal(initOptions.length, 2)
+  assert.equal(initOptions[0].explicitOpen, true)
+  assert.equal(initOptions[1].explicitOpen, true)
+})
+
+test('rapid explicit SFTP close and reopen shares the first initialization', async () => {
+  const source = readSftpSource('sftp-entry.jsx')
+  const componentDidUpdate = loadClassMethod(source, 'componentDidUpdate', {
+    paneMap: { fileManager: 'fileManager' },
+    typeMap: { local: 'local', remote: 'remote' },
+    startSftpEntryExplicitInitialization:
+      startSingleExplicitInitialization
+  })
+  let resolveInitialization
+  const initialization = new Promise(resolve => {
+    resolveInitialization = resolve
+  })
+  let attempts = 0
+  const entry = {
+    props: {
+      pane: 'terminal',
+      sshSftpSplitView: true,
+      enableSftp: true,
+      tab: { sftpCreated: false },
+      config: { autoRefreshWhenSwitchToSftp: false }
+    },
+    state: {
+      inited: false,
+      loadingSftp: false,
+      remoteLoading: false,
+      selectedType: '',
+      localPath: 'C:\\Users\\shellpilot',
+      remotePath: ''
+    },
+    shouldRenderRemote: () => true,
+    initRemoteAll: async () => {
+      attempts += 1
+      return initialization
+    },
+    runSftpBackgroundTask: task => task(),
+    onGoto: () => {},
+    setState: () => {}
+  }
+
+  componentDidUpdate.call(entry, {
+    ...entry.props,
+    sshSftpSplitView: false
+  }, { ...entry.state })
+
+  entry.props.sshSftpSplitView = false
+  componentDidUpdate.call(entry, {
+    ...entry.props,
+    sshSftpSplitView: true
+  }, { ...entry.state })
+
+  entry.props.sshSftpSplitView = true
+  componentDidUpdate.call(entry, {
+    ...entry.props,
+    sshSftpSplitView: false
+  }, { ...entry.state })
+
+  assert.equal(attempts, 1)
+  resolveInitialization()
+  await initialization
 })
 
 test('hidden SFTP preload failures are cleaned up without interrupting SSH', () => {
   const source = readSftpSource('sftp-entry.jsx')
-  const start = source.indexOf('remoteList = async (')
+  const start = source.indexOf('remoteListUncoalesced = async (')
   const end = source.indexOf('updateRemoteList = async (', start)
   const body = source.slice(start, end)
 
@@ -149,7 +264,8 @@ test('hidden SFTP preload failures are cleaned up without interrupting SSH', () 
   assert.match(body, /await destroyCandidate\(\)/)
   assert.match(body, /sftpCreated: false/)
   assert.match(body, /if \(this\.isSftpVisible\(\)\) \{/)
-  assert.match(body, /this\.onError\(this\.normalizeSftpError\(error\)\)/)
+  assert.match(body, /const normalizedError = this\.normalizeSftpError\(error\)/)
+  assert.match(body, /this\.onError\(normalizedError\)/)
 })
 
 test('SFTP transport supplies a localized fallback for empty backend errors', () => {
@@ -183,8 +299,57 @@ test('background safe delete calibration can surface one actionable warning', ()
 
 test('background safe delete calibration does not block the remote file list', () => {
   const source = readSftpSource('sftp-entry.jsx')
-  const start = source.indexOf('remoteList = async')
+  const start = source.indexOf('remoteListUncoalesced = async')
   const end = source.indexOf('\n  updateRemoteList = async', start)
   const body = source.slice(start, end)
   assert.match(body, /if \(!returnList && !options\.suppressLoading\)/)
+})
+
+test('SFTP cached refresh preserves visible rows and exposes live status', () => {
+  const source = readSftpSource('sftp-entry.jsx')
+  assert.match(source, /remoteDirectoryCache\.get\(cacheKey\)/)
+  assert.match(source, /remoteRefreshState:\s*'cached-refreshing'/)
+  assert.match(source, /shellpilotSftpShowingCachedRefreshing/)
+  assert.doesNotMatch(
+    source.slice(
+      source.indexOf('applyCachedRemoteDirectory'),
+      source.indexOf('remoteListUncoalesced')
+    ),
+    /remote:\s*\[\]/
+  )
+})
+
+test('ordinary remote refresh does not schedule an unconditional second list', () => {
+  const source = readSftpSource('sftp-entry.jsx')
+  const start = source.indexOf('remoteListUncoalesced = async')
+  const end = source.indexOf('updateRemoteList = async', start)
+  const body = source.slice(start, end)
+
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+  assert.doesNotMatch(body, /replaceSftpEntryTimer\(this, 'timer5'/)
+})
+
+test('SFTP records cached paint, first authoritative ready and refresh duration at render boundaries', () => {
+  const source = readSftpSource('sftp-entry.jsx')
+  const cachedStart = source.indexOf('applyCachedRemoteDirectory =')
+  const refreshStart = source.indexOf('remoteListUncoalesced = async')
+  const refreshEnd = source.indexOf('updateRemoteList = async', refreshStart)
+  const cachedBody = source.slice(cachedStart, refreshStart)
+  const refreshBody = source.slice(refreshStart, refreshEnd)
+
+  assert.match(cachedBody, /'sftp_cached_paint_ms'/)
+  assert.match(cachedBody, /let cachedPaintCommitted = false/)
+  assert.match(cachedBody, /cachedPaintCommitted = true/)
+  assert.match(cachedBody, /if \(!cachedPaintCommitted \|\|/)
+  assert.match(cachedBody, /isCurrentSftpEntryRemoteTask\(this, task\)/)
+  assert.match(cachedBody, /trackSftpEntryMetric\(this,/)
+  assert.match(cachedBody, /Promise\.allSettled/)
+  assert.match(
+    refreshBody,
+    /globalThis\.performance\?\.now\?\.\(\) \?\? Date\.now\(\)/
+  )
+  assert.match(refreshBody, /'sftp_refresh_ms'/)
+  assert.match(refreshBody, /'first_sftp_ready_ms'/)
+  assert.match(refreshBody, /this\.firstSftpReadyRecorded/)
 })

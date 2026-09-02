@@ -167,14 +167,18 @@ class Term extends Component {
       ),
       prepareSubmissionOutputRecovery: () => this.attachAddon?.prepareManagedPtyEchoRecovery(),
       cancelSubmissionOutput: () => this.attachAddon?.cancelManagedPtyEchoSuppression(),
-      submitCommand: command => (
+      submitCommand: (command, options) => (
         this.attachAddon?.submitManagedPtyCommand(
           command,
-          this.cmdAddon?.getSessionNonce()
-        ) === true
+          this.cmdAddon?.getSessionNonce(),
+          options
+        )
       ),
       interrupt: () => (
         this.attachAddon?.interruptManagedPtyCommand() === true
+      ),
+      onIdle: () => (
+        this.attachAddon?.flushPendingInput?.()
       ),
       subscribeOutput: listener => this.attachAddon.onRemoteOutput(listener),
       createToken: createPtyTaskToken
@@ -1454,13 +1458,14 @@ class Term extends Component {
   }
 
   ensureOperationsPtyTrackerReady = async () => {
+    if (!this.term || !this.attachAddon || !this.pid || this.onClose) {
+      throw new Error('当前终端未连接，运维任务尚未开始。')
+    }
+    await this.attachAddon.ensureManagedPtyTransportReady()
     if (this.commandSafetyEntrypoint.hasPending()) {
       throw new Error('当前终端已有安全命令正在处理，请等待完成。')
     }
     if (this.isCommandSafetyTrackerReady()) return true
-    if (!this.term || !this.attachAddon || !this.pid || this.onClose) {
-      throw new Error('当前终端未连接，运维任务尚未开始。')
-    }
     if (this.term.buffer?.active?.type === 'alternate') {
       throw new Error('当前交互程序无法执行受控 PTY 运维任务。')
     }
@@ -1572,6 +1577,10 @@ class Term extends Component {
     return handled
   }
 
+  handleTerminalCommandInputStarted = () => {
+    return this.operationsPtyTaskController.handleCommandInputStarted()
+  }
+
   loadRenderer = async (term, config) => {
     // xterm 6.x: only the built-in DOM renderer and the WebGL addon exist
     // (the canvas renderer addon was removed in 6.x). 'dom' = no addon loaded
@@ -1678,6 +1687,7 @@ class Term extends Component {
       }
     })
     this.cmdAddon.onPromptStarted(this.handleTerminalPromptStarted)
+    this.cmdAddon.onCommandInputStarted(this.handleTerminalCommandInputStarted)
     this.cmdAddon.onCommandFinished(this.handleTerminalCommandFinished)
     this.cmdAddon.onCwdChanged((cwd) => {
       this.setCwd(cwd)

@@ -185,6 +185,30 @@ async function digestRemoteFile (
   signal,
   onBytes
 ) {
+  if (typeof sftp.digestFile === 'function') {
+    throwIfAborted(signal)
+    const remote = await sftp.digestFile(path, {
+      expectedSize,
+      signal
+    })
+    throwIfAborted(signal)
+    if (!remote || typeof remote !== 'object' || Array.isArray(remote) ||
+      !Number.isSafeInteger(remote.size) || remote.size < 0 ||
+      (expectedSize !== undefined && remote.size !== expectedSize) ||
+      remote.digestAlgorithm !== 'SHA-256' ||
+      typeof remote.digest !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(remote.digest)) {
+      throw new Error('SFTP 权威摘要结果无效，已停止操作。')
+    }
+    if (typeof onBytes === 'function' && remote.size > 0) {
+      onBytes(remote.size)
+    }
+    return {
+      size: remote.size,
+      digest: remote.digest,
+      digestAlgorithm: remote.digestAlgorithm
+    }
+  }
   if (typeof sftp.readFileChunk !== 'function') {
     throw new Error('当前 SFTP 连接不支持有界文件摘要读取。')
   }

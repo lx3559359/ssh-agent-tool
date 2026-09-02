@@ -128,6 +128,12 @@ function createTransferRouteHarness ({
         dispose: () => {}
       })
     }],
+    ['./managed-terminal-channel', {
+      createManagedTerminalChannel: () => ({
+        handle: () => false,
+        dispose: () => {}
+      })
+    }],
     ['./session-common', {
       serializeRunCmdError: error => ({ message: error?.message })
     }],

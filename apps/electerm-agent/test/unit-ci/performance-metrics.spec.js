@@ -61,6 +61,39 @@ test('records AI first token once per request at the caller boundary and total o
   assert.equal(summary.metrics.ai_total_ms.sampleCount, 2)
 })
 
+test('records low-cardinality SSH responsiveness metrics without sensitive dimensions', () => {
+  const metrics = createPerformanceMetrics({ persist: false, runId: 'run-a' })
+  const names = [
+    'managed_input_ack_ms',
+    'operations_first_output_ms',
+    'operations_total_ms',
+    'first_sftp_ready_ms',
+    'sftp_cached_paint_ms',
+    'sftp_refresh_ms'
+  ]
+
+  for (const name of names) {
+    assert.equal(metrics.recordDuration(name, 125, {
+      outcome: 'completed'
+    }), true, name)
+  }
+  assert.equal(metrics.recordDuration('sftp_refresh_ms', 1, {
+    host: 'server.example.com'
+  }), false)
+  assert.equal(metrics.recordDuration('sftp_refresh_ms', 1, {
+    path: '/root'
+  }), false)
+  assert.equal(metrics.recordDuration('operations_total_ms', 1, {
+    command: 'uptime'
+  }), false)
+
+  const summary = metrics.getSummary()
+  for (const name of names) {
+    assert.equal(summary.metrics[name].latest, 125, name)
+  }
+  assert.equal(summary.recordCount, names.length)
+})
+
 test('rate limits memory samples to one per sixty seconds', () => {
   let now = 1000
   const metrics = createPerformanceMetrics({
@@ -318,6 +351,55 @@ test('renderer metric helpers validate requests and fail silently across IPC', a
   ])
 })
 
+test('renderer helpers accept SSH responsiveness metrics and reject endpoint details', async (t) => {
+  const calls = []
+  const previousWindow = globalThis.window
+  globalThis.window = {
+    pre: {
+      runGlobalAsync: (...args) => {
+        calls.push(args)
+        return Promise.resolve(true)
+      }
+    }
+  }
+  t.after(() => { globalThis.window = previousWindow })
+  const qualityEventsUrl = pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/common/quality/quality-events.js'
+  ))
+  qualityEventsUrl.search = `responsiveness=${Date.now()}`
+  const { recordPerformanceDuration } = await import(qualityEventsUrl)
+  const names = [
+    'managed_input_ack_ms',
+    'operations_first_output_ms',
+    'operations_total_ms',
+    'first_sftp_ready_ms',
+    'sftp_cached_paint_ms',
+    'sftp_refresh_ms'
+  ]
+
+  for (const name of names) {
+    assert.equal(await recordPerformanceDuration(name, 125, {
+      outcome: 'completed'
+    }), true, name)
+  }
+  assert.equal(await recordPerformanceDuration('sftp_refresh_ms', 1, {
+    path: '/root'
+  }), false)
+  assert.equal(await recordPerformanceDuration('operations_total_ms', 1, {
+    command: 'uptime'
+  }), false)
+  assert.equal(await recordPerformanceDuration('first_sftp_ready_ms', 1, {
+    host: 'server.example.com'
+  }), false)
+
+  assert.equal(calls.length, names.length)
+  assert.deepEqual(calls.map(call => call[1].name), names)
+  assert.equal(JSON.stringify(calls).includes('/root'), false)
+  assert.equal(JSON.stringify(calls).includes('server.example.com'), false)
+  assert.equal(JSON.stringify(calls).includes('uptime'), false)
+})
+
 test('AI request tracker emits only the first non-empty content and one terminal duration', async () => {
   const qualityEventsUrl = pathToFileURL(path.resolve(
     __dirname,
@@ -354,6 +436,70 @@ test('AI request tracker emits only the first non-empty content and one terminal
       name: 'ai_total_ms',
       value: 720,
       dimensions: { requestType: 'chat', outcome: 'completed' }
+    }
+  ])
+})
+
+test('operations responsiveness tracker records first output once and one terminal outcome', async () => {
+  const qualityEventsUrl = pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/common/quality/quality-events.js'
+  ))
+  qualityEventsUrl.search = `operations=${Date.now()}`
+  const { createOperationsPerformanceTracker } = await import(qualityEventsUrl)
+  let now = 1000
+  const calls = []
+  const tracker = createOperationsPerformanceTracker({
+    now: () => now,
+    recordDuration: (name, value, dimensions) => {
+      calls.push({ name, value, dimensions })
+      return Promise.resolve(true)
+    }
+  })
+
+  assert.equal(tracker.observe({ id: 'before', status: 'running' }), false)
+  assert.equal(tracker.begin('ops-1'), true)
+  assert.equal(tracker.begin('ops-1'), false)
+  now = 1120
+  assert.equal(tracker.observe({
+    id: 'ops-1',
+    status: 'running',
+    steps: [{ output: '  ' }]
+  }), false)
+  now = 1250
+  assert.equal(tracker.observe({
+    id: 'ops-1',
+    status: 'running',
+    steps: [{ output: 'ready\n' }]
+  }), true)
+  now = 1300
+  assert.equal(tracker.observe({
+    id: 'ops-1',
+    status: 'running',
+    steps: [{ output: 'more output' }]
+  }), false)
+  now = 1500
+  assert.equal(tracker.observe({
+    id: 'ops-1',
+    status: 'completed',
+    steps: [{ output: 'done' }]
+  }), true)
+  assert.equal(tracker.observe({
+    id: 'ops-1',
+    status: 'completed',
+    steps: [{ output: 'done' }]
+  }), false)
+
+  assert.deepEqual(calls, [
+    {
+      name: 'operations_first_output_ms',
+      value: 250,
+      dimensions: { outcome: 'available' }
+    },
+    {
+      name: 'operations_total_ms',
+      value: 500,
+      dimensions: { outcome: 'completed' }
     }
   ])
 })

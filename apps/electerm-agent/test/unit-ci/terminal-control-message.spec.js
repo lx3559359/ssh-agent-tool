@@ -2,7 +2,11 @@ process.env.NODE_ENV = 'development'
 
 const { describe, test } = require('node:test')
 const assert = require('node:assert/strict')
-const { parseTerminalControlMessage } = require('../../src/app/server/terminal-control-message')
+const {
+  buildManagedInputCapabilities,
+  buildManagedInputStatus,
+  parseTerminalControlMessage
+} = require('../../src/app/server/terminal-control-message')
 
 describe('terminal websocket control message parsing', () => {
   test('treats user pasted json as regular terminal input', () => {
@@ -51,14 +55,17 @@ describe('terminal websocket control message parsing', () => {
         action: 'managed-input-interrupt'
       }
     )
-    assert.equal(
+    assert.deepEqual(
       parseTerminalControlMessage(JSON.stringify({
         __aigshellTerminalControl: true,
         action: 'managed-input',
         requestId: 'invalid',
         command: 'printf forged'
       })),
-      null
+      {
+        __aigshellTerminalControl: true,
+        action: 'invalid-control'
+      }
     )
   })
 
@@ -78,10 +85,44 @@ describe('terminal websocket control message parsing', () => {
     })
   })
 
-  test('ignores marked messages with unknown actions', () => {
-    assert.equal(
+  test('consumes marked messages with unknown actions', () => {
+    assert.deepEqual(
       parseTerminalControlMessage('{"__aigshellTerminalControl":true,"action":"paste"}'),
-      null
+      {
+        __aigshellTerminalControl: true,
+        action: 'invalid-control'
+      }
+    )
+  })
+
+  test('accepts managed input capability requests', () => {
+    assert.deepEqual(
+      parseTerminalControlMessage('{"__aigshellTerminalControl":true,"action":"managed-input-capabilities-request"}'),
+      {
+        __aigshellTerminalControl: true,
+        action: 'managed-input-capabilities-request'
+      }
+    )
+  })
+
+  test('builds bounded capability and managed input status messages', () => {
+    assert.deepEqual(JSON.parse(buildManagedInputCapabilities()), {
+      __aigshellTerminalControl: true,
+      action: 'managed-input-capabilities',
+      protocolVersion: 2
+    })
+    assert.deepEqual(
+      JSON.parse(buildManagedInputStatus('a'.repeat(32), 'accepted')),
+      {
+        __aigshellTerminalControl: true,
+        action: 'managed-input-status',
+        requestId: 'a'.repeat(32),
+        status: 'accepted'
+      }
+    )
+    assert.throws(
+      () => buildManagedInputStatus('a'.repeat(32), 'command-body'),
+      /status/
     )
   })
 })
