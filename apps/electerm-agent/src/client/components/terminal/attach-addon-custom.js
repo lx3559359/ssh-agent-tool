@@ -32,7 +32,6 @@ export default class AttachAddonCustom {
     this.onSuppressionEndCallback = null
     this.publishSuppressionRemainder = false
     this.suppressionReleaseMarker = ''
-    this.suppressionScanText = ''
     this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
@@ -117,7 +116,6 @@ export default class AttachAddonCustom {
     this.publishSuppressionRemainder = publishRemainder === true
     this.managedPtyOutputStreamingActive = false
     this.suppressionReleaseMarker = String(releaseMarker || '')
-    this.suppressionScanText = ''
     this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
@@ -154,7 +152,6 @@ export default class AttachAddonCustom {
     this.managedPtyOutputStreamingActive = false
     this.publishSuppressionRemainder = false
     this.suppressionReleaseMarker = ''
-    this.suppressionScanText = ''
     this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
@@ -205,7 +202,6 @@ export default class AttachAddonCustom {
       `${String.fromCharCode(27)}]633;A;${nonce}${String.fromCharCode(7)}`
     this.managedPtyHoldSuppression = false
     this.consumeManagedPtyCommandRecord = false
-    this.suppressionScanText = ''
     this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
@@ -356,19 +352,13 @@ export default class AttachAddonCustom {
   }
 
   _findSuppressionReleaseData = (str) => {
-    const marker = this.suppressionReleaseMarker
-    if (!marker) return null
-    this.suppressionScanText += str
-    const markerIndex = this.suppressionScanText.indexOf(marker)
-    if (markerIndex !== -1) {
-      const releaseData = this.suppressionScanText.slice(markerIndex)
-      this.suppressionScanText = ''
-      return releaseData
-    }
-    this.suppressionScanText = this.suppressionScanText.slice(
-      -(marker.length - 1)
+    if (!this.suppressionReleaseMarker) return null
+    const releaseBytes = this._findSuppressionReleaseBytes(
+      new TextEncoder().encode(str)
     )
-    return null
+    return releaseBytes === null
+      ? null
+      : new TextDecoder('utf-8').decode(releaseBytes)
   }
 
   _findSuppressionReleaseBytes = (data) => {
@@ -702,7 +692,6 @@ export default class AttachAddonCustom {
       this.writeToTerminalDirect(promptFrame)
       if (inputFrameAfterPromptIndex === -1) {
         this.suppressionReleaseMarker = inputFrame
-        this.suppressionScanText = ''
         this.suppressionScanBytes = new Uint8Array()
         this.suppressionDecoder = new TextDecoder('utf-8')
         return
@@ -808,7 +797,6 @@ export default class AttachAddonCustom {
         : releaseBytes.slice(inputFrameIndex)
     }
     if (this.managedPtyHoldSuppression) {
-      this.suppressionScanText = ''
       this.suppressionScanBytes = new Uint8Array()
       this.suppressionDecoder = new TextDecoder('utf-8')
       this.managedPtyLifecycleBytes = new Uint8Array()
@@ -902,7 +890,6 @@ export default class AttachAddonCustom {
             this.suppressionReleaseMarker =
               `${String.fromCharCode(27)}]633;A;${sessionNonce}` +
               String.fromCharCode(7)
-            this.suppressionScanText = ''
             this.suppressionScanBytes = new Uint8Array()
             this.suppressionDecoder = new TextDecoder('utf-8')
             this.managedPtyLifecycleBytes = new Uint8Array()
@@ -1065,7 +1052,6 @@ export default class AttachAddonCustom {
       serializeShellIntegrationValue(command) + String.fromCharCode(7)
     if (continuingPlan) {
       this.suppressionReleaseMarker = commandMarker
-      this.suppressionScanText = ''
       this.suppressionScanBytes = new Uint8Array()
       this.suppressionDecoder = new TextDecoder('utf-8')
       this.managedPtyLifecycleBytes = new Uint8Array()
@@ -1259,7 +1245,6 @@ export default class AttachAddonCustom {
     this.publishSuppressionRemainder = false
     this.onSuppressionEndCallback = null
     this.suppressionReleaseMarker = ''
-    this.suppressionScanText = ''
     this.suppressionScanBytes = new Uint8Array()
     this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()

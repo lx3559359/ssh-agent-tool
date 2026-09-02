@@ -133,6 +133,20 @@ function createDirectAttachHarness () {
   })
 }
 
+function writeCrossTypeSplit (
+  addon,
+  value,
+  splitAt,
+  binaryFirst,
+  suffix = ''
+) {
+  const encode = text => new TextEncoder().encode(text)
+  const first = value.slice(0, splitAt)
+  const second = value.slice(splitAt) + suffix
+  addon.writeToTerminal(binaryFirst ? encode(first) : first)
+  addon.writeToTerminal(binaryFirst ? second : encode(second))
+}
+
 test('AttachAddon publishes remote output and blocks managed terminal input', async () => {
   const { addon, sent, parent, term } = await createDirectAttachHarness()
   const writes = []
@@ -401,6 +415,207 @@ test('managed PTY held hidden prompt handles split authenticated B', async (t) =
       assert.equal(addon.outputSuppressed, false)
       assert.equal(sent.length, 2)
       assert.equal(writes.join('').includes('final-hidden@fixture:$ '), false)
+    })
+  }
+})
+
+test('managed PTY authenticates command E across string and binary splits', async (t) => {
+  const wrongNonce = 'fedcba0987654321fedcba0987654321'
+  const fileMarker =
+    '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+  const commandStarted = `\u001b]633;C;${testTrackerNonce}\u0007`
+
+  for (const holdSuppression of [false, true]) {
+    for (const binaryFirst of [false, true]) {
+      const direction = binaryFirst
+        ? 'Uint8Array to string'
+        : 'string to Uint8Array'
+      const mode = holdSuppression ? 'held' : 'final'
+      await t.test(`${mode}: ${direction}`, async () => {
+        const { addon, term } = await createDirectAttachHarness()
+        const writes = []
+        const output = []
+        term.write = value => writes.push(value)
+        addon.onRemoteOutput(chunk => output.push(chunk))
+        const command = `cross-type-e-${mode}-${binaryFirst}`
+        const commandRecord =
+          `\u001b]633;E;${testTrackerNonce};${command}\u0007`
+
+        assert.equal(addon.submitManagedPtyCommand(
+          command,
+          testTrackerNonce,
+          { holdSuppression, hidePromptText: true }
+        ), true)
+        addon.writeToTerminal(
+          `\u001b]633;E;${wrongNonce};forged\u0007`
+        )
+        assert.equal(addon.managedPtyOutputStreamingActive, false)
+        assert.deepEqual(writes, [])
+        writeCrossTypeSplit(
+          addon,
+          commandRecord,
+          Math.floor(commandRecord.length / 2),
+          binaryFirst,
+          commandStarted + fileMarker
+        )
+
+        assert.equal(addon.managedPtyOutputStreamingActive, true)
+        assert.equal(output.join(''), commandStarted + fileMarker)
+        assert.equal(writes.join(''), commandStarted)
+        assert.equal(writes.join('').includes('forged'), false)
+        addon.cancelManagedPtyEchoSuppression()
+      })
+    }
+  }
+})
+
+test('managed PTY final prompt supports cross-type A and B splits', async (t) => {
+  const promptFrame = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const inputFrame = `\u001b]633;B;${testTrackerNonce}\u0007`
+  const wrongNonce = 'fedcba0987654321fedcba0987654321'
+  const promptText = 'cross-type-final@fixture:$ '
+  const tail = 'post-prompt-output\r\n'
+
+  for (const binaryFirst of [false, true]) {
+    const direction = binaryFirst
+      ? 'Uint8Array to string'
+      : 'string to Uint8Array'
+    await t.test(direction, async () => {
+      const { addon, term } = await createDirectAttachHarness()
+      const writes = []
+      const output = []
+      term.write = value => writes.push(value)
+      addon.onRemoteOutput(chunk => output.push(chunk))
+      const command = `cross-type-final-${binaryFirst}`
+
+      assert.equal(addon.submitManagedPtyCommand(
+        command,
+        testTrackerNonce,
+        { hidePromptText: true }
+      ), true)
+      addon.writeToTerminal(
+        `\u001b]633;E;${testTrackerNonce};${command}\u0007` +
+        `\u001b]633;C;${testTrackerNonce}\u0007`
+      )
+      writes.length = 0
+      output.length = 0
+      addon.writeToTerminal(
+        `\u001b]633;A;${wrongNonce}\u0007forged:# ` +
+        `\u001b]633;B;${wrongNonce}\u0007`
+      )
+      assert.equal(addon.outputSuppressed, true)
+      assert.deepEqual(writes, [])
+      output.length = 0
+
+      writeCrossTypeSplit(
+        addon,
+        promptFrame,
+        Math.floor(promptFrame.length / 2),
+        binaryFirst,
+        promptText
+      )
+      writeCrossTypeSplit(
+        addon,
+        inputFrame,
+        Math.floor(inputFrame.length / 2),
+        binaryFirst,
+        tail
+      )
+
+      assert.equal(addon.outputSuppressed, false)
+      assert.equal(writes.join(''), promptFrame + inputFrame + tail)
+      assert.equal(
+        output.join(''),
+        promptFrame + promptText + inputFrame + tail
+      )
+      assert.equal(writes.join('').includes('forged'), false)
+      assert.equal(writes.join('').includes(promptText), false)
+    })
+  }
+})
+
+test('managed PTY held prompt supports cross-type A and B splits', async (t) => {
+  const promptFrame = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const inputFrame = `\u001b]633;B;${testTrackerNonce}\u0007`
+  const promptText = 'cross-type-held@fixture:$ '
+  const tail = 'held-post-prompt-output\r\n'
+  const finalTail = 'final-post-prompt-output\r\n'
+
+  for (const binaryFirst of [false, true]) {
+    const direction = binaryFirst
+      ? 'Uint8Array to string'
+      : 'string to Uint8Array'
+    await t.test(direction, async () => {
+      const { addon, sent, term } = await createDirectAttachHarness()
+      const writes = []
+      const output = []
+      term.write = value => writes.push(value)
+      addon.onRemoteOutput(chunk => output.push(chunk))
+      const first = `cross-type-held-first-${binaryFirst}`
+      const final = `cross-type-held-final-${binaryFirst}`
+
+      assert.equal(addon.submitManagedPtyCommand(
+        first,
+        testTrackerNonce,
+        { holdSuppression: true, hidePromptText: true }
+      ), true)
+      addon.writeToTerminal(
+        `\u001b]633;E;${testTrackerNonce};${first}\u0007` +
+        `\u001b]633;C;${testTrackerNonce}\u0007`
+      )
+      writes.length = 0
+      output.length = 0
+      writeCrossTypeSplit(
+        addon,
+        promptFrame,
+        Math.floor(promptFrame.length / 2),
+        binaryFirst,
+        promptText
+      )
+      writeCrossTypeSplit(
+        addon,
+        inputFrame,
+        Math.floor(inputFrame.length / 2),
+        binaryFirst,
+        tail
+      )
+
+      assert.equal(addon.outputSuppressed, true)
+      assert.equal(writes.join(''), promptFrame + inputFrame)
+      assert.equal(
+        output.join(''),
+        promptFrame + promptText + inputFrame + tail
+      )
+      assert.equal(addon.submitManagedPtyCommand(
+        final,
+        testTrackerNonce,
+        { holdSuppression: false, hidePromptText: true }
+      ), true)
+      addon.writeToTerminal(
+        `\u001b]633;E;${testTrackerNonce};${final}\u0007` +
+        `\u001b]633;C;${testTrackerNonce}\u0007`
+      )
+      writes.length = 0
+      output.length = 0
+      writeCrossTypeSplit(
+        addon,
+        promptFrame,
+        Math.floor(promptFrame.length / 2),
+        binaryFirst,
+        'final-cross-type@fixture:$ '
+      )
+      writeCrossTypeSplit(
+        addon,
+        inputFrame,
+        Math.floor(inputFrame.length / 2),
+        binaryFirst,
+        finalTail
+      )
+
+      assert.equal(addon.outputSuppressed, false)
+      assert.equal(sent.length, 2)
+      assert.equal(writes.join(''), promptFrame + inputFrame + finalTail)
+      assert.equal(writes.join('').includes('fixture:$ '), false)
     })
   }
 })
@@ -1569,7 +1784,7 @@ test('managed PTY suppression dispose clears hidden output and pending input', a
   assert.equal(addon.prepareManagedPtyEchoRecovery(), false)
   assert.deepEqual(addon.suppressedData, [])
   assert.equal(addon.suppressionReleaseMarker, '')
-  assert.equal(addon.suppressionScanText, '')
+  assert.equal(addon.suppressionScanBytes.byteLength, 0)
   assert.deepEqual(addon.pendingInput, [])
   assert.equal(addon.term, null)
   assert.equal(addon.suppressionDecoder instanceof TextDecoder, true)
