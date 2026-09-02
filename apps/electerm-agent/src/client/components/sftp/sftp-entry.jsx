@@ -3715,20 +3715,49 @@ export default class Sftp extends Component {
         })
       }
       const normalizedError = this.normalizeSftpError(error)
-      const accessDenied = [
-        3,
+      const errorChain = []
+      let currentError = error
+      while (currentError && errorChain.length < 8 &&
+        !errorChain.includes(currentError)) {
+        errorChain.push(currentError)
+        currentError = currentError.cause
+      }
+      const errorCodes = errorChain.map(item => (
+        String(item?.code ?? '').trim().toUpperCase()
+      ))
+      const errorDetails = errorChain.map(item => (
+        `${String(item?.name || '')} ${String(item?.message || '')}`
+      )).join(' ')
+      const accessDenied = errorCodes.some(code => [
+        '3',
         'EACCES',
         'EPERM',
         'SFTP_PERMISSION_DENIED'
-      ].includes(error?.code) ||
-        /permission denied|access denied|权限|拒绝/i.test(
-          String(error?.message || '')
-        )
+      ].includes(code)) ||
+        /permission denied|access denied|权限|拒绝/i.test(errorDetails)
+      const identityFailure = errorCodes.some(code => (
+        code === 'REMOTE_FILE_IDENTITY_UNAVAILABLE' ||
+        code.startsWith('REMOTE_FILE_IDENTITY_MISMATCH') ||
+        code.startsWith('REMOTE_FILE_IDENTITY_CHANGED') ||
+        code.startsWith('REMOTE_FILE_IDENTITY_SWITCH')
+      )) || /(?:identity|身份|端点).*(?:unavailable|unknown|mismatch|changed|switch|无法确认|不可用|未知|不一致|变化|切换)/i
+        .test(errorDetails)
+      const transientTransportFailure = errorCodes.some(code => [
+        'ECONNRESET',
+        'ECONNABORTED',
+        'EPIPE',
+        'ETIMEDOUT',
+        'ENETDOWN',
+        'ENETRESET',
+        'ENETUNREACH',
+        'EHOSTDOWN',
+        'EHOSTUNREACH',
+        'ENOTCONN'
+      ].includes(code))
       const sameVisibleIdentity = Boolean(cacheKey) &&
         this.visibleRemoteDirectoryCacheKey === cacheKey
-      const safeIdentityFallback = !accessDenied && Boolean(cacheKey) && (
-        cachedRemoteFound || sameVisibleIdentity
-      )
+      const safeIdentityFallback = !accessDenied && !identityFailure &&
+        transientTransportFailure && sameVisibleIdentity
       const fallbackRemote = safeIdentityFallback
         ? (cachedRemoteFound ? cachedRemote : oldRemote)
         : []
@@ -3747,6 +3776,22 @@ export default class Sftp extends Component {
       }
       if (!safeIdentityFallback) {
         update.selectedFiles = new Set()
+        update.lastClickedFile = null
+      }
+      if (identityFailure) {
+        this.remoteFileIdentityEpoch =
+          (this.remoteFileIdentityEpoch || 0) + 1
+        update.remoteFileIdentity = {
+          loginUsername: this.props.tab?.username || '',
+          effectiveUid: '',
+          effectiveUsername: '',
+          channel: 'unknown'
+        }
+        update.remoteFileStatus = this.uncertainRemoteFileLeases.size > 0
+          ? 'uncertain'
+          : this.activeRemoteFileLeases.size > 0
+            ? 'busy'
+            : 'unavailable'
       }
       if (oldPath && !(safeIdentityFallback && cachedRemoteFound)) {
         update.remotePath = oldPath

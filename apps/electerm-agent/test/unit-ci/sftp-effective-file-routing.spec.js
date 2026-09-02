@@ -142,6 +142,19 @@ const rootRuntimeIdentity = Object.freeze({
   effectiveUsername: 'root'
 })
 
+function assertRemoteSnapshotCleared (entry) {
+  assert.deepEqual(Array.from(entry.state.remote, file => ({
+    id: file.id,
+    name: file.name
+  })), [])
+  assert.deepEqual(Array.from(
+    entry.state.remoteFileTree || [],
+    ([id, file]) => [id, file?.name]
+  ), [])
+  assert.deepEqual(Array.from(entry.state.selectedFiles), [])
+  assert.equal(entry.state.lastClickedFile, null)
+}
+
 async function installRemoteFileIdentityFields (entry) {
   const lifecycle = await importModule(
     'src/client/components/sftp/sftp-entry-lifecycle.js'
@@ -852,6 +865,10 @@ test('unknown identity clears a visible privileged directory snapshot', async ()
     path: '/root-only',
     type: 'remote'
   }]
+  entry.state.remoteFileTree = entry.buildTree(entry.state.remote)
+  entry.state.selectedType = 'remote'
+  entry.state.selectedFiles = new Set(['root-app-conf'])
+  entry.state.lastClickedFile = 'root-app-conf'
   entry.state.remoteFileIdentity = {
     loginUsername: 'hik',
     effectiveUid: '0',
@@ -864,7 +881,7 @@ test('unknown identity clears a visible privileged directory snapshot', async ()
     error => error === unavailable
   )
 
-  assert.equal(entry.state.remote.length, 0)
+  assertRemoteSnapshotCleared(entry)
   assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
   assert.equal(entry.state.remoteFileStatus, 'unavailable')
 })
@@ -909,14 +926,108 @@ test('login denial after root clears stale privileged rows', async () => {
   assert.deepEqual(entry.state.remote.map(file => file.name), [
     'app.conf', 'cancel.bin'
   ])
+  entry.state.selectedType = 'remote'
+  entry.state.selectedFiles = new Set([entry.state.remote[0].id])
+  entry.state.lastClickedFile = entry.state.remote[0].id
 
   await assert.rejects(
     entry.remoteList(false, '/root-only', undefined, { rethrow: true }),
     error => error === permissionError
   )
 
-  assert.equal(entry.state.remote.length, 0)
+  assertRemoteSnapshotCleared(entry)
   assert.equal(entry.state.remoteFileIdentity.channel, 'sftp')
+})
+
+test('cached root list fails closed when its guarded operation loses identity', async () => {
+  const unavailable = Object.assign(new Error('identity unavailable'), {
+    code: 'REMOTE_FILE_IDENTITY_UNAVAILABLE'
+  })
+  let acquisition = 0
+  const acquire = async ({ onIdentity }) => {
+    const attempt = ++acquisition
+    await onIdentity({ loginUsername: 'hik', ...rootRuntimeIdentity })
+    return {
+      runtimeIdentity: rootRuntimeIdentity,
+      backend: {
+        list: async () => {
+          if (attempt > 1) throw unavailable
+          return [{ name: 'app.conf', type: 'f', size: 12 }]
+        }
+      },
+      release: async () => true
+    }
+  }
+  const { entry } = await createEntryHarness({ acquire })
+  const entries = new Map()
+  entry.remoteDirectoryCache = {
+    get: key => entries.has(key)
+      ? { value: structuredClone(entries.get(key)) }
+      : null,
+    set: (key, value) => entries.set(key, structuredClone(value)),
+    clear: () => entries.clear()
+  }
+
+  await entry.remoteList(false, '/root-only')
+  entry.state.selectedType = 'remote'
+  entry.state.selectedFiles = new Set([entry.state.remote[0].id])
+  entry.state.lastClickedFile = entry.state.remote[0].id
+  await assert.rejects(
+    entry.remoteList(false, '/root-only', undefined, { rethrow: true }),
+    error => error === unavailable
+  )
+
+  assertRemoteSnapshotCleared(entry)
+  assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
+  assert.equal(entry.state.remoteFileStatus, 'unavailable')
+})
+
+test('cached root metadata fails closed on a later identity mismatch', async () => {
+  const mismatch = Object.assign(new Error('runtime identity mismatch'), {
+    code: 'REMOTE_FILE_IDENTITY_MISMATCH'
+  })
+  let acquisition = 0
+  const acquire = async ({ onIdentity }) => {
+    const attempt = ++acquisition
+    await onIdentity({ loginUsername: 'hik', ...rootRuntimeIdentity })
+    return {
+      runtimeIdentity: rootRuntimeIdentity,
+      backend: {
+        list: async () => [{ name: 'app.conf', type: 'f', size: 12 }],
+        stat: async () => {
+          if (attempt > 1) throw mismatch
+          return { type: 'f', size: 12 }
+        }
+      },
+      release: async () => true
+    }
+  }
+  const { entry } = await createEntryHarness({ acquire })
+  const entries = new Map()
+  entry.remoteDirectoryCache = {
+    get: key => entries.has(key)
+      ? { value: structuredClone(entries.get(key)) }
+      : null,
+    set: (key, value) => entries.set(key, structuredClone(value)),
+    clear: () => entries.clear()
+  }
+  entry.updateRemoteList = async (remote, remotePath, backend) => {
+    await backend.stat(`${remotePath}/app.conf`)
+    return remote
+  }
+
+  await entry.remoteList(false, '/root-only')
+  entry.state.selectedType = 'remote'
+  entry.state.selectedFiles = new Set([entry.state.remote[0].id])
+  entry.state.lastClickedFile = entry.state.remote[0].id
+  await assert.rejects(
+    entry.remoteList(false, '/root-only', undefined, { rethrow: true }),
+    error => error === mismatch
+  )
+
+  assertRemoteSnapshotCleared(entry)
+  assert.equal(entry.state.remoteFileIdentity.channel, 'unknown')
+  assert.equal(entry.state.remoteFileStatus, 'unavailable')
 })
 
 test('same identity refresh can recover from its own cached snapshot', async () => {
@@ -2169,7 +2280,10 @@ test('symlink metadata denial commits no partial or stale remote list', async ()
     entry.remoteList(false, '/root', undefined, { rethrow: true }),
     error => error === permissionError
   )
-  assert.equal(entry.state.remote.length, 0)
+  assert.deepEqual(Array.from(entry.state.remote, file => ({
+    id: file.id,
+    name: file.name
+  })), [])
   assert.deepEqual(calls, ['release'])
 })
 

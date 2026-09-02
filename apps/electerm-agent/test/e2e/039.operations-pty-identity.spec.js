@@ -1013,6 +1013,12 @@ test('operations and the complete remote file panel inherit su root then return 
     await expect(remoteRow(page, 'folder-a')).toBeVisible()
     await gotoRemotePath(page, '/home/shellpilot/folder-a')
     await expect(remoteRow(page, 'folder-b')).toBeVisible()
+    const ordinaryBrowseEpoch = await remoteRequestEpoch(page)
+    await remoteRow(page, 'folder-b').dblclick()
+    await waitForRemoteRequestCycle(page, ordinaryBrowseEpoch)
+    await expect(page.locator(
+      '.session-current .sftp-remote-section .sftp-title input'
+    )).toHaveValue('/home/shellpilot/folder-a/folder-b')
     await expect(page.locator('.notification:visible').last())
       .toContainText(/EACCES|permission|denied|权限|拒绝|OSC 698/i)
     await expect(page.locator('.sftp-login-identity'))
