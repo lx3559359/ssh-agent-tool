@@ -7,6 +7,10 @@ const workflowPath = path.resolve(
   __dirname,
   '../../../../.github/workflows/windows-electerm-agent-release.yml'
 )
+const cscLinkMapping = '          CSC_LINK: $' +
+  '{{ secrets.WINDOWS_CSC_LINK }}'
+const cscPasswordMapping = '          CSC_KEY_PASSWORD: $' +
+  '{{ secrets.WINDOWS_CSC_KEY_PASSWORD }}'
 
 function extractNamedStepBlock (source, stepName) {
   const lines = source.split(/\r?\n/)
@@ -36,6 +40,39 @@ function assertImmediateNamedStepOrder (source, expectedNames) {
   )
 }
 
+function extractJobEnvironmentBlock (source) {
+  const start = source.indexOf('\n    env:')
+  const end = source.indexOf('\n    steps:')
+
+  assert.notEqual(start, -1, 'Missing job environment block')
+  assert.notEqual(end, -1, 'Missing workflow steps block')
+  assert.equal(start < end, true)
+  return source.slice(start, end)
+}
+
+function assertSigningSecretsAreStepLocal (stepBlock) {
+  assert.match(
+    stepBlock,
+    /^ {10}CSC_LINK: \$\{\{ secrets\.WINDOWS_CSC_LINK \}\}$/m
+  )
+  assert.match(
+    stepBlock,
+    /^ {10}CSC_KEY_PASSWORD: \$\{\{ secrets\.WINDOWS_CSC_KEY_PASSWORD \}\}$/m
+  )
+}
+
+function assertStableSignatureStep (stepBlock) {
+  assert.match(
+    stepBlock,
+    /^ {8}if: \$\{\{ github\.event\.inputs\.release_channel == 'stable' \}\}$/m
+  )
+  assert.match(
+    stepBlock,
+    /^ {8}run: npm run release:windows:verify-signatures$/m
+  )
+  assert.doesNotMatch(stepBlock, /^ {8}continue-on-error:/m)
+}
+
 function assertStableWindowsReleaseSigningWorkflow (source) {
   const confirmationGate = source.indexOf(
     'name: Verify manual stable release confirmation'
@@ -50,39 +87,57 @@ function assertStableWindowsReleaseSigningWorkflow (source) {
   const signatureGate = source.indexOf(
     'name: Verify stable release signatures'
   )
+  const portableSignatureGate = source.indexOf(
+    'name: Verify stable release signatures after portable build'
+  )
   const assetPreparation = source.indexOf(
     'name: Prepare approved online update assets'
+  )
+  const artifactUpload = source.indexOf('name: Upload Windows artifacts')
+  const releaseCreation = source.indexOf(
+    'name: Create draft GitHub Release after manual confirmation'
+  )
+  const jobEnvironment = extractJobEnvironmentBlock(source)
+  const installerBuildStep = extractNamedStepBlock(
+    source,
+    'Build NSIS installer'
+  )
+  const portableBuildStep = extractNamedStepBlock(
+    source,
+    'Build portable package'
   )
   const signatureStep = extractNamedStepBlock(
     source,
     'Verify stable release signatures'
   )
+  const portableSignatureStep = extractNamedStepBlock(
+    source,
+    'Verify stable release signatures after portable build'
+  )
 
-  assert.match(
-    source,
-    /^ {6}CSC_LINK: \$\{\{ secrets\.WINDOWS_CSC_LINK \}\}$/m
-  )
-  assert.match(
-    source,
-    /^ {6}CSC_KEY_PASSWORD: \$\{\{ secrets\.WINDOWS_CSC_KEY_PASSWORD \}\}$/m
-  )
-  assert.match(
-    signatureStep,
-    /^ {8}if: \$\{\{ github\.event\.inputs\.release_channel == 'stable' \}\}$/m
-  )
-  assert.match(
-    signatureStep,
-    /^ {8}run: npm run release:windows:verify-signatures$/m
-  )
+  assert.doesNotMatch(jobEnvironment, /^ {6}CSC_LINK:/m)
+  assert.doesNotMatch(jobEnvironment, /^ {6}CSC_KEY_PASSWORD:/m)
+  assertSigningSecretsAreStepLocal(installerBuildStep)
+  assertSigningSecretsAreStepLocal(portableBuildStep)
+  assertStableSignatureStep(signatureStep)
+  assertStableSignatureStep(portableSignatureStep)
   assert.equal(confirmationGate >= 0, true)
   assert.equal(confirmationGate < credentialGate, true)
   assert.equal(credentialGate < dependencyInstall, true)
   assert.equal(credentialGate < installerBuild, true)
   assert.equal(signatureGate < assetPreparation, true)
+  assert.equal(portableSignatureGate < assetPreparation, true)
+  assert.equal(portableSignatureGate < artifactUpload, true)
+  assert.equal(portableSignatureGate < releaseCreation, true)
   assertImmediateNamedStepOrder(source, [
     'Build NSIS installer',
     'Verify stable release signatures',
     'Smoke test packaged ShellPilot app'
+  ])
+  assertImmediateNamedStepOrder(source, [
+    'Verify portable package',
+    'Verify stable release signatures after portable build',
+    'Prepare approved online update assets'
   ])
 }
 
@@ -113,6 +168,68 @@ test('rejects a named step between the installer build and signature gate', () =
       '        run: echo unexpected',
       '',
       signatureStep
+    ].join('\n')
+  )
+
+  assert.notEqual(mutated, source)
+  assert.throws(() => assertStableWindowsReleaseSigningWorkflow(mutated))
+})
+
+test('rejects removal of the final portable signature gate', () => {
+  const source = fs.readFileSync(workflowPath, 'utf8')
+  const finalGate = extractNamedStepBlock(
+    source,
+    'Verify stable release signatures after portable build'
+  )
+  const mutated = source.replace(finalGate, '')
+
+  assert.notEqual(mutated, source)
+  assert.throws(() => assertStableWindowsReleaseSigningWorkflow(mutated))
+})
+
+test('rejects a named build step after the final signature gate', () => {
+  const source = fs.readFileSync(workflowPath, 'utf8')
+  const assetStep = '      - name: Prepare approved online update assets'
+  const mutated = source.replace(
+    assetStep,
+    [
+      '      - name: Unexpected post-signature build',
+      '        run: npm run unexpected-build',
+      '',
+      assetStep
+    ].join('\n')
+  )
+
+  assert.notEqual(mutated, source)
+  assert.throws(() => assertStableWindowsReleaseSigningWorkflow(mutated))
+})
+
+test('rejects missing secrets from either packaging step', () => {
+  const source = fs.readFileSync(workflowPath, 'utf8')
+  const mutations = [
+    ['Build NSIS installer', cscLinkMapping],
+    ['Build NSIS installer', cscPasswordMapping],
+    ['Build portable package', cscLinkMapping],
+    ['Build portable package', cscPasswordMapping]
+  ]
+
+  for (const [stepName, mapping] of mutations) {
+    const stepBlock = extractNamedStepBlock(source, stepName)
+    const mutatedStep = stepBlock.replace(mapping, '')
+    const mutated = source.replace(stepBlock, mutatedStep)
+
+    assert.notEqual(mutatedStep, stepBlock)
+    assert.throws(() => assertStableWindowsReleaseSigningWorkflow(mutated))
+  }
+})
+
+test('rejects signing credentials in the job environment', () => {
+  const source = fs.readFileSync(workflowPath, 'utf8')
+  const mutated = source.replace(
+    '      CI: true',
+    [
+      '      CI: true',
+      '      CSC_LINK: $' + '{{ secrets.WINDOWS_CSC_LINK }}'
     ].join('\n')
   )
 
