@@ -11,6 +11,8 @@ const cscLinkMapping = '          CSC_LINK: $' +
   '{{ secrets.WINDOWS_CSC_LINK }}'
 const cscPasswordMapping = '          CSC_KEY_PASSWORD: $' +
   '{{ secrets.WINDOWS_CSC_KEY_PASSWORD }}'
+const stableConditionLine = '        if: $' +
+  "{{ github.event.inputs.release_channel == 'stable' }}"
 
 function extractNamedStepBlock (source, stepName) {
   const lines = source.split(/\r?\n/)
@@ -73,6 +75,14 @@ function assertStableSignatureStep (stepBlock) {
   assert.doesNotMatch(stepBlock, /^ {8}continue-on-error:/m)
 }
 
+function assertStableCredentialStep (stepBlock) {
+  assert.match(
+    stepBlock,
+    /^ {8}if: \$\{\{ github\.event\.inputs\.release_channel == 'stable' \}\}$/m
+  )
+  assert.doesNotMatch(stepBlock, /^ {8}continue-on-error:/m)
+}
+
 function assertStableWindowsReleaseSigningWorkflow (source) {
   const confirmationGate = source.indexOf(
     'name: Verify manual stable release confirmation'
@@ -98,6 +108,10 @@ function assertStableWindowsReleaseSigningWorkflow (source) {
     'name: Create draft GitHub Release after manual confirmation'
   )
   const jobEnvironment = extractJobEnvironmentBlock(source)
+  const credentialStep = extractNamedStepBlock(
+    source,
+    'Require Windows signing credentials for stable release'
+  )
   const installerBuildStep = extractNamedStepBlock(
     source,
     'Build NSIS installer'
@@ -117,6 +131,7 @@ function assertStableWindowsReleaseSigningWorkflow (source) {
 
   assert.doesNotMatch(jobEnvironment, /^ {6}CSC_LINK:/m)
   assert.doesNotMatch(jobEnvironment, /^ {6}CSC_KEY_PASSWORD:/m)
+  assertStableCredentialStep(credentialStep)
   assertSigningSecretsAreStepLocal(installerBuildStep)
   assertSigningSecretsAreStepLocal(portableBuildStep)
   assertStableSignatureStep(signatureStep)
@@ -237,19 +252,32 @@ test('rejects signing credentials in the job environment', () => {
   assert.throws(() => assertStableWindowsReleaseSigningWorkflow(mutated))
 })
 
+test('rejects moving the stable condition out of the credential gate', () => {
+  const source = fs.readFileSync(workflowPath, 'utf8')
+  const credentialStep = extractNamedStepBlock(
+    source,
+    'Require Windows signing credentials for stable release'
+  )
+  const mutatedCredentialStep = credentialStep.replace(
+    `${stableConditionLine}\n`,
+    ''
+  )
+  const nextStep = '      - name: Setup Node.js 22'
+  const mutated = source
+    .replace(credentialStep, mutatedCredentialStep)
+    .replace(nextStep, [nextStep, stableConditionLine].join('\n'))
+
+  assert.notEqual(mutatedCredentialStep, credentialStep)
+  assert.notEqual(mutated, source)
+  assert.throws(() => assertStableWindowsReleaseSigningWorkflow(mutated))
+})
+
 test('the signing credential gate applies only to stable releases', () => {
   const source = fs.readFileSync(workflowPath, 'utf8')
-  const credentialGate = source.indexOf(
-    'name: Require Windows signing credentials for stable release'
+  const credentialStep = extractNamedStepBlock(
+    source,
+    'Require Windows signing credentials for stable release'
   )
-  const dependencyInstall = source.indexOf(
-    'name: Install dependencies and rebuild native modules'
-  )
-  const credentialStep = source.slice(credentialGate, dependencyInstall)
 
-  assert.equal(credentialGate >= 0, true)
-  assert.match(
-    credentialStep,
-    /if: \$\{\{ github\.event\.inputs\.release_channel == 'stable' \}\}/
-  )
+  assertStableCredentialStep(credentialStep)
 })
