@@ -8,6 +8,10 @@ const { resolveVirtualPath } = require('./local-sftp-fixture')
 
 const TEST_USERNAME = 'shellpilot-e2e'
 const TEST_PASSWORD = 'shellpilot-e2e-password'
+const PRIVILEGED_FILE_FRAME_BYTE_LIMIT = 3840
+const PRIVILEGED_FILE_FRAME_CHUNK_CHARACTERS = 2600
+const MAX_PRIVILEGED_FILE_PLAN_ENCODED_BYTES = 300 * 1024
+const MAX_PRIVILEGED_FILE_PLAN_FRAMES = 128
 const { privateKey: HOST_KEY } = generateKeyPairSync('rsa', {
   modulusLength: 2048,
   privateKeyEncoding: {
@@ -136,6 +140,99 @@ function privilegedFileMarker (token, phase, ...fields) {
   return `\u001b]698;SHELLPILOT_FILE;${token};${phase};${fields.join(';')}\u0007`
 }
 
+function privilegedFileFrameMarker (
+  token, sequence, total, digest, status
+) {
+  return `\u001b]698;SHELLPILOT_FILE_FRAME;${token};${sequence};` +
+    `${total};${digest};${status}\u0007`
+}
+
+function privilegedFileFrameAcknowledgementCommand (
+  token, sequence, total, digest, status = 'ok'
+) {
+  return `printf '\\033]698;SHELLPILOT_FILE_FRAME;${token};${sequence};` +
+    `${total};${digest};${status}\\007'`
+}
+
+const privilegedFileFrameCleanupState = [
+  'unset __sp_pf_t __sp_pf_h __sp_pf_n __sp_pf_i',
+  '__sp_pf_z __sp_pf_b __sp_pf_c __sp_pf_v'
+].join(' ')
+
+function fixedPrivilegedFileFrameCommand ({
+  token, sequence, total, digest, kind, chunk,
+  chunkCount, encodedLength
+}) {
+  const acknowledgement = privilegedFileFrameAcknowledgementCommand(
+    token, sequence, total, digest
+  )
+  if (kind === 'init') {
+    return [
+      privilegedFileFrameCleanupState + ';',
+      `__sp_pf_t='${token}';`,
+      `__sp_pf_h='${digest}';`,
+      `__sp_pf_n=${chunkCount};`,
+      '__sp_pf_i=0;',
+      `__sp_pf_z=${encodedLength};`,
+      "__sp_pf_b='';",
+      acknowledgement
+    ].join(' ')
+  }
+  if (kind === 'chunk') {
+    return [
+      `if [ "$__sp_pf_t" = '${token}' ] &&`,
+      `[ "$__sp_pf_h" = '${digest}' ] &&`,
+      `[ "$__sp_pf_n" -eq ${total - 2} ] &&`,
+      `[ "$__sp_pf_i" -eq ${sequence - 1} ]; then`,
+      '__sp_pf_b="$' + '{__sp_pf_b}' + chunk + '";',
+      `__sp_pf_i=${sequence};`,
+      acknowledgement + ';',
+      'else',
+      privilegedFileFrameCleanupState + ';',
+      privilegedFileFrameAcknowledgementCommand(
+        token, sequence, total, digest, 'error'
+      ) + ';',
+      'fi'
+    ].join(' ')
+  }
+  if (kind === 'final') {
+    return [
+      `if [ "$__sp_pf_t" = '${token}' ] &&`,
+      `[ "$__sp_pf_h" = '${digest}' ] &&`,
+      `[ "$__sp_pf_i" -eq ${total - 2} ] &&`,
+      '[ "$__sp_pf_z" -eq "$' + '{#__sp_pf_b}" ]; then',
+      '__sp_pf_v="$(printf %s "$__sp_pf_b" | sha256sum 2>/dev/null)" ||',
+      '__sp_pf_v="$(printf %s "$__sp_pf_b" | shasum -a 256 2>/dev/null)";',
+      '__sp_pf_v=$' + '{__sp_pf_v%% *};',
+      `if [ "$__sp_pf_v" = '${digest}' ] &&`,
+      '__sp_pf_c="$(printf %s "$__sp_pf_b" | base64 -d)"; then',
+      privilegedFileFrameCleanupState.replace(' __sp_pf_c', '') + ';',
+      acknowledgement + ';',
+      'eval "$__sp_pf_c"; __sp_pf_s=$?; unset __sp_pf_c; (exit "$__sp_pf_s");',
+      'else',
+      privilegedFileFrameCleanupState + ';',
+      privilegedFileFrameAcknowledgementCommand(
+        token, sequence, total, digest, 'error'
+      ) + ';',
+      'fi; else',
+      privilegedFileFrameCleanupState + ';',
+      privilegedFileFrameAcknowledgementCommand(
+        token, sequence, total, digest, 'error'
+      ) + ';',
+      'fi'
+    ].join(' ')
+  }
+  if (kind === 'cleanup') {
+    return [
+      'if [ "$' + `{__sp_pf_t-}" = '${token}' ]; then`,
+      privilegedFileFrameCleanupState + ';',
+      'fi;',
+      acknowledgement
+    ].join(' ')
+  }
+  return ''
+}
+
 function privilegedOperationFrom (body, args) {
   if (Object.keys(args).length === 0 && body.trim() === ':') return 'probe'
   if (args.challengeName) return 'stage-handshake'
@@ -164,23 +261,220 @@ function privilegedOperationFrom (body, args) {
   return null
 }
 
+const listBoundArgumentNames = Object.freeze([
+  'path', 'sourceParentRealPath', 'sourceParentDevice',
+  'sourceParentInode', 'sourceDevice', 'sourceInode'
+])
+
+const privilegedFileCommandShapeDigests = Object.freeze({
+  standaloneProbe:
+    'c4ccd0a7b636352cb8180703dd7578964d0b0d029a847583609e315b7c2ee191',
+  compactList:
+    '6d626f23c047604763b4e1bb3ea1f1d6e774412f85da78f5420de925dbc85a1a',
+  compactListBound:
+    '0dfef336488e706d5e4b0b09667c0c410d36b36a6d43a3aa4ed21368ff3054ac'
+})
+
+function normalizeCurrentPtyCommandShape (command, token) {
+  const tokenField = `SHELLPILOT_TOKEN='${token}'`
+  const tokenFieldIndex = command.indexOf(tokenField)
+  if (tokenFieldIndex === -1 || command.indexOf(
+    tokenField,
+    tokenFieldIndex + tokenField.length
+  ) !== -1) {
+    return ''
+  }
+  return command.slice(0, tokenFieldIndex) +
+    "SHELLPILOT_TOKEN='<token>'" +
+    command.slice(tokenFieldIndex + tokenField.length)
+}
+
+function privilegedFileCommandShapeDigest (command, token) {
+  const currentShape = normalizeCurrentPtyCommandShape(command, token)
+  if (!currentShape) return ''
+  const normalized = currentShape
+    .replace(/\bA([0-9]+)='[A-Za-z0-9+/=]+'/g, "A$1='<arg>'")
+    .replace(
+      /SHELLPILOT_ARG_([A-Za-z0-9_]+)='[A-Za-z0-9+/=]+'/g,
+      "SHELLPILOT_ARG_$1='<arg>'"
+    )
+  return sha256(normalized)
+}
+
+function decodeCanonicalBase64 (value) {
+  if (typeof value !== 'string' || value.length === 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    return null
+  }
+  const decoded = Buffer.from(value, 'base64')
+  if (decoded.toString('base64') !== value) return null
+  return decoded.toString('utf8')
+}
+
 function parsePrivilegedFileCommand (command) {
   const token = /SHELLPILOT_TOKEN='([a-f0-9]{32,128})'/.exec(command)?.[1]
   if (!token || !command.includes('SHELLPILOT_FILE')) return null
   const args = {}
   const argumentPattern = /SHELLPILOT_ARG_([A-Z0-9_]+)='([A-Za-z0-9+/=]+)'/g
   for (const match of command.matchAll(argumentPattern)) {
+    const decoded = decodeCanonicalBase64(match[2])
+    if (decoded === null) return null
     const key = privilegedArgumentNames[match[1]]
     if (!key) continue
-    args[key] = Buffer.from(match[2], 'base64').toString('utf8')
+    args[key] = decoded
   }
-  const body = /__sp_run_operation\(\) \{ ([\s\S]*); \}; __sp_status=125;/.exec(command)?.[1] || ''
-  const operation = privilegedOperationFrom(body, args)
+  const positionalArgs = []
+  const positionalPattern = /\bA([0-9]+)='([A-Za-z0-9+/=]+)'/g
+  for (const match of command.matchAll(positionalPattern)) {
+    const decoded = decodeCanonicalBase64(match[2])
+    if (decoded === null) return null
+    positionalArgs[Number(match[1])] = decoded
+  }
+  const wrappedBody = /__sp_run_operation\(\) \{ ([\s\S]*); \}; __sp_status=125;/.exec(command)?.[1]
+  const canonicalCommand = command
+  const shapeDigest = privilegedFileCommandShapeDigest(
+    canonicalCommand,
+    token
+  )
+  const compactList = shapeDigest === (
+    positionalArgs.length === listBoundArgumentNames.length
+      ? privilegedFileCommandShapeDigests.compactListBound
+      : privilegedFileCommandShapeDigests.compactList
+  )
+  const standaloneProbe = shapeDigest ===
+    privilegedFileCommandShapeDigests.standaloneProbe
+  const body = wrappedBody || (compactList
+    ? '__sp_emit_entry'
+    : standaloneProbe ? ':' : '')
+  let operation = privilegedOperationFrom(body, args)
+  if (operation === 'list' &&
+    positionalArgs.length === listBoundArgumentNames.length &&
+    positionalArgs.every(value => typeof value === 'string')) {
+    listBoundArgumentNames.forEach((name, index) => {
+      args[name] = positionalArgs[index]
+    })
+    operation = 'list-bound'
+  }
   return operation ? { token, operation, args, body } : null
+}
+
+function parsePrivilegedFileFrameCommand (command) {
+  if (!command.includes('SHELLPILOT_FILE_FRAME')) return null
+  const marker = /SHELLPILOT_FILE_FRAME;([a-f0-9]{32,128});([0-9]+);([0-9]+);([a-f0-9]{64});(ok|error)/.exec(command)
+  if (!marker) return { valid: false }
+  const sequence = Number(marker[2])
+  const total = Number(marker[3])
+  const frame = {
+    token: marker[1],
+    sequence,
+    total,
+    digest: marker[4]
+  }
+  const bounded = Buffer.byteLength(command, 'utf8') <=
+    PRIVILEGED_FILE_FRAME_BYTE_LIMIT &&
+    Number.isSafeInteger(sequence) && Number.isSafeInteger(total) &&
+    total >= 3 && total <= MAX_PRIVILEGED_FILE_PLAN_FRAMES &&
+    sequence >= 0 && sequence <= total && marker[5] === 'ok'
+  if (!bounded) return { ...frame, valid: false }
+  if (sequence === 0) {
+    const chunks = /__sp_pf_n=([0-9]+);/.exec(command)?.[1]
+    const encodedLength = /__sp_pf_z=([0-9]+);/.exec(command)?.[1]
+    const chunkCount = Number(chunks)
+    const byteLength = Number(encodedLength)
+    const frameCommand = {
+      ...frame,
+      kind: 'init',
+      chunkCount,
+      encodedLength: byteLength
+    }
+    return {
+      ...frameCommand,
+      valid: command === fixedPrivilegedFileFrameCommand(frameCommand) &&
+        Number.isSafeInteger(chunkCount) &&
+        chunkCount === total - 2 &&
+        Number.isSafeInteger(byteLength) && byteLength > 0 &&
+        byteLength <= MAX_PRIVILEGED_FILE_PLAN_ENCODED_BYTES
+    }
+  }
+  if (sequence === total) {
+    const frameCommand = { ...frame, kind: 'cleanup' }
+    return {
+      ...frameCommand,
+      valid: command === fixedPrivilegedFileFrameCommand(frameCommand)
+    }
+  }
+  if (sequence === total - 1) {
+    const frameCommand = { ...frame, kind: 'final' }
+    return {
+      ...frameCommand,
+      valid: command === fixedPrivilegedFileFrameCommand(frameCommand)
+    }
+  }
+  const chunk = /__sp_pf_b="\$\{__sp_pf_b\}([A-Za-z0-9+/=]+)";/.exec(
+    command
+  )?.[1]
+  const frameCommand = { ...frame, kind: 'chunk', chunk }
+  return {
+    ...frameCommand,
+    valid: command === fixedPrivilegedFileFrameCommand(frameCommand) &&
+      typeof chunk === 'string' && chunk.length > 0 &&
+      chunk.length <= PRIVILEGED_FILE_FRAME_CHUNK_CHARACTERS
+  }
 }
 
 function sha256 (value) {
   return createHash('sha256').update(value).digest('hex')
+}
+
+function consumePrivilegedFileFrame (shellState, frame) {
+  const fail = () => {
+    shellState.privilegedFileFrameState = null
+    return { status: 'error' }
+  }
+  if (!frame?.valid) return fail()
+  if (frame.kind === 'init') {
+    shellState.privilegedFileFrameState = {
+      token: frame.token,
+      total: frame.total,
+      digest: frame.digest,
+      chunkCount: frame.chunkCount,
+      encodedLength: frame.encodedLength,
+      nextSequence: 1,
+      encodedCommand: ''
+    }
+    return { status: 'ok' }
+  }
+  const current = shellState.privilegedFileFrameState
+  const matches = current?.token === frame.token &&
+    current?.total === frame.total && current?.digest === frame.digest
+  if (frame.kind === 'cleanup') {
+    if (current && !matches) return fail()
+    shellState.privilegedFileFrameState = null
+    return { status: 'ok' }
+  }
+  if (!matches || current.nextSequence !== frame.sequence) return fail()
+  if (frame.kind === 'chunk') {
+    if (frame.sequence > current.chunkCount) return fail()
+    const encodedCommand = current.encodedCommand + frame.chunk
+    if (encodedCommand.length > current.encodedLength ||
+      encodedCommand.length > MAX_PRIVILEGED_FILE_PLAN_ENCODED_BYTES) {
+      return fail()
+    }
+    current.encodedCommand = encodedCommand
+    current.nextSequence += 1
+    return { status: 'ok' }
+  }
+  if (frame.kind !== 'final' ||
+    frame.sequence !== current.chunkCount + 1 ||
+    current.encodedCommand.length !== current.encodedLength ||
+    current.encodedCommand.length % 4 !== 0 ||
+    sha256(current.encodedCommand) !== current.digest) {
+    return fail()
+  }
+  const decoded = Buffer.from(current.encodedCommand, 'base64')
+  if (decoded.toString('base64') !== current.encodedCommand) return fail()
+  shellState.privilegedFileFrameState = null
+  return { status: 'ok', command: decoded.toString('utf8') }
 }
 
 function rootMetadata (fixture, remotePath, entry, includeBinding = true) {
@@ -918,12 +1212,28 @@ async function writePrivilegedFileResult (
   )
 }
 
+function activateRootShell (stream, state, shellState, options) {
+  shellState.identity = { uid: '0', username: 'root' }
+  shellState.shellIntegrationActive = false
+  state.effectiveIdentity = { ...shellState.identity }
+  options.scheduleFixtureTimer(() => {
+    if (stream.destroyed) return
+    if (!shellState.promptCommandProcessLocal) {
+      stream.write('bash: __e_cmd: command not found\r\n')
+    }
+    stream.write('root shell active\r\nroot@fixture:# ')
+  }, 30)
+}
+
 function runCommand (stream, command, state, sessionId, shellState, options) {
   const integration = command.match(/__e_nonce=[\s\S]*?([a-f0-9]{32})/)
   if (integration) {
     shellState.shellIntegrationNonce = integration[1]
     shellState.shellIntegrationActive = true
+    shellState.promptCommandProcessLocal =
+      /export -n PROMPT_COMMAND/.test(command)
     state.shellIntegrationNonce = shellState.shellIntegrationNonce
+    state.promptCommandProcessLocal = shellState.promptCommandProcessLocal
     if (/^unset ELECTERM_SHELL_INTEGRATION;/.test(command)) {
       state.shellIntegrationRearms += 1
     }
@@ -936,8 +1246,11 @@ function runCommand (stream, command, state, sessionId, shellState, options) {
     return
   }
 
-  state.commands.push(command)
-  state.commandEvents.push({ sessionId, command })
+  const privilegedFrame = parsePrivilegedFileFrameCommand(command)
+  if (!privilegedFrame) {
+    state.commands.push(command)
+    state.commandEvents.push({ sessionId, command })
+  }
   const managed = options.managedPtyTasks
     ? parseManagedPtyCommand(command)
     : null
@@ -953,15 +1266,13 @@ function runCommand (stream, command, state, sessionId, shellState, options) {
       osc633(nonce, 'C')
     )
   }
+  if (command === 'su') {
+    shellState.pendingSuPassword = true
+    stream.write('Password: ')
+    return
+  }
   if (command === 'su root') {
-    shellState.identity = { uid: '0', username: 'root' }
-    shellState.shellIntegrationActive = false
-    state.effectiveIdentity = { ...shellState.identity }
-    options.scheduleFixtureTimer(() => {
-      if (!stream.destroyed) {
-        stream.write('root shell active\r\nroot@fixture:# ')
-      }
-    }, 30)
+    activateRootShell(stream, state, shellState, options)
     return
   }
   if (command === 'exit' && shellState.identity.uid === '0') {
@@ -971,6 +1282,55 @@ function runCommand (stream, command, state, sessionId, shellState, options) {
     }
     state.effectiveIdentity = { ...shellState.identity }
     stream.write('login shell active\r\n')
+  } else if (privilegedFrame) {
+    const frameResult = consumePrivilegedFileFrame(
+      shellState,
+      privilegedFrame
+    )
+    let framedRequest = null
+    if (frameResult.command) {
+      framedRequest = parsePrivilegedFileCommand(frameResult.command)
+      if (framedRequest?.token !== privilegedFrame.token) {
+        framedRequest = null
+        frameResult.status = 'error'
+      }
+    }
+    if (privilegedFrame.token) {
+      stream.write(privilegedFileFrameMarker(
+        privilegedFrame.token,
+        privilegedFrame.sequence,
+        privilegedFrame.total,
+        privilegedFrame.digest,
+        frameResult.status
+      ))
+    }
+    if (framedRequest && frameResult.status === 'ok') {
+      const handler = writePrivilegedFileResult(
+        stream,
+        framedRequest,
+        state,
+        sessionId,
+        shellState,
+        options,
+        nonce
+      )
+      options.trackPrivilegedHandler(handler)
+      handler.catch(() => finishShellCommand(
+        stream,
+        nonce,
+        1,
+        options.scheduleFixtureTimer
+      ))
+      return
+    }
+    const frameExitCode = frameResult.status === 'ok' ? 0 : 1
+    if (nonce) {
+      stream.write(osc633(nonce, 'D', String(frameExitCode)))
+      writeTrackedPrompt(stream, nonce)
+    } else {
+      stream.write('$ ')
+    }
+    return
   } else if (managed) {
     writeManagedPtyResult(
       stream,
@@ -1024,7 +1384,10 @@ function attachShell (stream, state, sessionId, options) {
       username: options.loginUsername || TEST_USERNAME
     },
     shellIntegrationNonce: '',
-    shellIntegrationActive: false
+    shellIntegrationActive: false,
+    promptCommandProcessLocal: false,
+    pendingSuPassword: false,
+    privilegedFileFrameState: null
   }
   state.effectiveIdentity = { ...shellState.identity }
 
@@ -1054,6 +1417,8 @@ function attachShell (stream, state, sessionId, options) {
       if (code === 3) {
         flushEcho()
         state.ctrlCCount += 1
+        shellState.pendingSuPassword = false
+        shellState.privilegedFileFrameState = null
         line = ''
         stream.write('^C')
         const cancellationStarted = shellState.activePrivilegedRequest?.cancel?.()
@@ -1074,27 +1439,37 @@ function attachShell (stream, state, sessionId, options) {
         }
         flushEcho()
         lastWasCarriageReturn = code === 13
-        stream.write('\r\n')
-        runCommand(
-          stream,
-          line.trim(),
-          state,
-          sessionId,
-          shellState,
-          options
-        )
+        const submittedLine = line
         line = ''
+        if (shellState.pendingSuPassword) {
+          shellState.pendingSuPassword = false
+          stream.write('\r\n')
+          if (submittedLine === TEST_PASSWORD) {
+            activateRootShell(stream, state, shellState, options)
+          } else {
+            stream.write('su: Authentication failure\r\n')
+            if (shellState.shellIntegrationActive) {
+              stream.write(osc633(shellState.shellIntegrationNonce, 'D', '1'))
+              writeTrackedPrompt(stream, shellState.shellIntegrationNonce)
+            } else {
+              writePrompt(stream)
+            }
+          }
+          continue
+        }
+        stream.write('\r\n')
+        runCommand(stream, submittedLine.trim(), state, sessionId, shellState, options)
         continue
       }
       lastWasCarriageReturn = false
       if (code === 8 || code === 127) {
         flushEcho()
         line = line.slice(0, -1)
-        stream.write('\b \b')
+        if (!shellState.pendingSuPassword) stream.write('\b \b')
         continue
       }
       line += char
-      echoed += char
+      if (!shellState.pendingSuPassword) echoed += char
     }
     flushEcho()
   })
@@ -1441,6 +1816,7 @@ async function startLocalSshServer (options = {}) {
     rootOnlySftpDenials: [],
     shellIntegrationNonce: '',
     shellIntegrationRearms: 0,
+    promptCommandProcessLocal: false,
     effectiveIdentity: null,
     managedPtyScripts: [],
     execCommands: [],

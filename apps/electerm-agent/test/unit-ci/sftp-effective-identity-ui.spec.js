@@ -573,6 +573,8 @@ test('committed mutation release failure keeps the active lease and warns agains
   installClassField(entry, 'handleReloadRemoteSftp', {
     activateRemoteFileGeneration: lifecycle.activateRemoteFileGeneration,
     drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
+    invalidateSftpEntryRemoteSnapshot:
+      lifecycle.invalidateSftpEntryRemoteSnapshot,
     isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration
   })
 
@@ -629,6 +631,8 @@ test('reload keeps a same-session active lease busy until release really succeed
   installClassField(entry, 'handleReloadRemoteSftp', {
     activateRemoteFileGeneration: lifecycle.activateRemoteFileGeneration,
     drainRemoteFileGeneration: lifecycle.drainRemoteFileGeneration,
+    invalidateSftpEntryRemoteSnapshot:
+      lifecycle.invalidateSftpEntryRemoteSnapshot,
     isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration
   })
 

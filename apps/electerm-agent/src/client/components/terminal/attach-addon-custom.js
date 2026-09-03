@@ -6,6 +6,7 @@ const terminalControlFlag = '__aigshellTerminalControl'
 const managedPtySessionNoncePattern = /^[a-f0-9]{32}$/
 const managedPtyFrameByteLimit = 3840
 const managedPtyLifecycleByteLimit = 8192
+const utf8Encoder = new TextEncoder()
 
 function serializeShellIntegrationValue (value) {
   return String(value || '')
@@ -24,6 +25,7 @@ export default class AttachAddonCustom {
     this.managedPtySessionNonce = ''
     this.managedPtyExpectedCommand = ''
     this.managedPtyHoldSuppression = false
+    this.managedPtyHidePromptText = false
     this.consumeManagedPtyCommandRecord = false
     this.managedPtyOutputStreamingActive = false
     this.suppressedData = []
@@ -31,9 +33,9 @@ export default class AttachAddonCustom {
     this.onSuppressionEndCallback = null
     this.publishSuppressionRemainder = false
     this.suppressionReleaseMarker = ''
-    this.suppressionScanText = ''
+    this.suppressionReleaseMarkerBytes = new Uint8Array()
     this.suppressionScanBytes = new Uint8Array()
-    this.suppressionDecoder = new TextDecoder('utf-8')
+    this.suppressionStringCarry = ''
     this.managedPtyLifecycleBytes = new Uint8Array()
     this.managedPtyListenerBytes = new Uint8Array()
     this.managedPtyPromptReleaseBytes = new Uint8Array()
@@ -58,6 +60,7 @@ export default class AttachAddonCustom {
     this._passwordPromptDetected = false
     this._pendingEchoCheck = null
     this._echoCheckTimer = null
+    this._passwordPromptNotificationTimer = null
     this._pendingTerminalEnter = null
     this._terminalPastePending = false
     this._remoteOutputListeners = new Set()
@@ -115,10 +118,7 @@ export default class AttachAddonCustom {
     this.onSuppressionEndCallback = onEnd
     this.publishSuppressionRemainder = publishRemainder === true
     this.managedPtyOutputStreamingActive = false
-    this.suppressionReleaseMarker = String(releaseMarker || '')
-    this.suppressionScanText = ''
-    this.suppressionScanBytes = new Uint8Array()
-    this.suppressionDecoder = new TextDecoder('utf-8')
+    this._setSuppressionReleaseMarker(releaseMarker)
     this.managedPtyLifecycleBytes = new Uint8Array()
     this.managedPtyListenerBytes = new Uint8Array()
     this.managedPtyPromptReleaseBytes = new Uint8Array()
@@ -148,13 +148,11 @@ export default class AttachAddonCustom {
     this.managedPtySessionNonce = ''
     this.managedPtyExpectedCommand = ''
     this.managedPtyHoldSuppression = false
+    this.managedPtyHidePromptText = false
     this.consumeManagedPtyCommandRecord = false
     this.managedPtyOutputStreamingActive = false
     this.publishSuppressionRemainder = false
-    this.suppressionReleaseMarker = ''
-    this.suppressionScanText = ''
-    this.suppressionScanBytes = new Uint8Array()
-    this.suppressionDecoder = new TextDecoder('utf-8')
+    this._setSuppressionReleaseMarker('')
     this.managedPtyLifecycleBytes = new Uint8Array()
     this.managedPtyListenerBytes = new Uint8Array()
     this.managedPtyPromptReleaseBytes = new Uint8Array()
@@ -177,17 +175,33 @@ export default class AttachAddonCustom {
     return this.flushPendingInput()
   }
 
+  startCurrentShellIntegrationSuppression = (nonce, timeout, onEnd) => {
+    const sessionNonce = String(nonce || '')
+    if (!managedPtySessionNoncePattern.test(sessionNonce)) {
+      throw new Error('Shell Integration session nonce is invalid')
+    }
+    const promptFrame =
+      `${String.fromCharCode(27)}]633;A;${sessionNonce}` +
+      String.fromCharCode(7)
+    this.startOutputSuppression(timeout, onEnd, true, false, promptFrame)
+    this.managedPtyEchoSuppressionActive = true
+    this.managedPtySessionNonce = sessionNonce
+    this.managedPtyExpectedCommand = ''
+    this.managedPtyHoldSuppression = false
+    this.managedPtyHidePromptText = true
+    this.consumeManagedPtyCommandRecord = false
+    return true
+  }
+
   prepareManagedPtyEchoRecovery = () => {
     const nonce = this.managedPtySessionNonce
     if (!this.managedPtyEchoSuppressionActive ||
       !managedPtySessionNoncePattern.test(nonce)) return false
-    this.suppressionReleaseMarker =
+    this._setSuppressionReleaseMarker(
       `${String.fromCharCode(27)}]633;A;${nonce}${String.fromCharCode(7)}`
+    )
     this.managedPtyHoldSuppression = false
     this.consumeManagedPtyCommandRecord = false
-    this.suppressionScanText = ''
-    this.suppressionScanBytes = new Uint8Array()
-    this.suppressionDecoder = new TextDecoder('utf-8')
     this.managedPtyLifecycleBytes = new Uint8Array()
     this.managedPtyListenerBytes = new Uint8Array()
     this.managedPtyPromptReleaseBytes = new Uint8Array()
@@ -270,6 +284,8 @@ export default class AttachAddonCustom {
     this.writeToTerminal(ev.data)
   }
 
+  static passwordPromptContextLimit = 512
+
   static passwordPromptPatterns = [
     /password\s*[:\]>]\s*$/i,
     /\[sudo\]\s*password\s+for\s+\S+\s*:\s*$/i,
@@ -283,17 +299,20 @@ export default class AttachAddonCustom {
   ]
 
   _checkPasswordPrompt = (str) => {
-    // Extract last non-empty line from the output
-    const lines = str.split(/\r?\n|\r/)
+    const contextLimit = AttachAddonCustom.passwordPromptContextLimit
+    const lines = String(str || '').split(/\r?\n|\r/)
+    lines[0] = (this._lastOutputLine + lines[0]).slice(-contextLimit)
+    this._lastOutputLine = lines[lines.length - 1].slice(-contextLimit)
+
+    let candidate = ''
     for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i].trim()
-      if (line) {
-        this._lastOutputLine = line
-        break
-      }
+      const line = lines[i].slice(-contextLimit).trim()
+      if (!line) continue
+      candidate = line
+      break
     }
     return AttachAddonCustom.passwordPromptPatterns.some(
-      p => p.test(this._lastOutputLine)
+      pattern => pattern.test(candidate)
     )
   }
 
@@ -301,9 +320,26 @@ export default class AttachAddonCustom {
     return this._passwordPromptDetected === true
   }
 
+  _clearPasswordPromptNotification = () => {
+    clearTimeout(this._passwordPromptNotificationTimer)
+    this._passwordPromptNotificationTimer = null
+  }
+
+  _schedulePasswordPromptNotification = () => {
+    this._clearPasswordPromptNotification()
+    const timer = setTimeout(() => {
+      if (this._passwordPromptNotificationTimer !== timer) return
+      this._passwordPromptNotificationTimer = null
+      if (!this._passwordPromptDetected) return
+      this.term?.parent?.onPasswordPromptDetected?.()
+    }, 100)
+    this._passwordPromptNotificationTimer = timer
+  }
+
   _onEchoCheckTimeout = () => {
     // No echo received within timeout → confirms password mode
     this._pendingEchoCheck = null
+    this._echoCheckTimer = null
   }
 
   _handleEchoDetection = (str) => {
@@ -311,9 +347,11 @@ export default class AttachAddonCustom {
       // Server sent data back while we were waiting → echo is ON → not password
       if (str.includes(this._pendingEchoCheck.char)) {
         this._passwordPromptDetected = false
+        this._clearPasswordPromptNotification()
         clearTimeout(this._echoCheckTimer)
         this._pendingEchoCheck = null
         this._echoCheckTimer = null
+        this._lastOutputLine = ''
         // Cancel the password dropdown if it was shown
         this.term?.parent?.onPasswordPromptCancelled?.()
       }
@@ -325,37 +363,60 @@ export default class AttachAddonCustom {
     return str.includes(ESC + ']633;')
   }
 
-  _decodeSuppressionData = (data) => {
-    if (typeof data === 'string') return data
-    const bytes = data instanceof ArrayBuffer
-      ? new Uint8Array(data)
-      : data instanceof Uint8Array
-        ? data
-        : new Uint8Array(data)
-    return this.suppressionDecoder.decode(bytes, { stream: true })
+  _resetSuppressionScan = () => {
+    this.suppressionScanBytes = new Uint8Array()
+    this.suppressionStringCarry = ''
+  }
+
+  _setSuppressionReleaseMarker = (value) => {
+    this.suppressionReleaseMarker = String(value || '')
+    this.suppressionReleaseMarkerBytes = this.suppressionReleaseMarker
+      ? utf8Encoder.encode(this.suppressionReleaseMarker)
+      : new Uint8Array()
+    this._resetSuppressionScan()
   }
 
   _findSuppressionReleaseData = (str) => {
-    const marker = this.suppressionReleaseMarker
-    if (!marker) return null
-    this.suppressionScanText += str
-    const markerIndex = this.suppressionScanText.indexOf(marker)
-    if (markerIndex !== -1) {
-      return this.suppressionScanText.slice(markerIndex)
+    if (!this.suppressionReleaseMarkerBytes.length) return null
+    const combined = this.suppressionStringCarry + str
+    this.suppressionStringCarry = ''
+    const lastCodeUnit = combined.charCodeAt(combined.length - 1)
+    const hasTrailingHighSurrogate = lastCodeUnit >= 0xD800 &&
+      lastCodeUnit <= 0xDBFF
+    const encodable = hasTrailingHighSurrogate
+      ? combined.slice(0, -1)
+      : combined
+    if (hasTrailingHighSurrogate) {
+      this.suppressionStringCarry = combined.slice(-1)
     }
-    this.suppressionScanText = this.suppressionScanText.slice(
-      -(marker.length - 1)
+    const releaseBytes = this._findSuppressionReleaseBytes(
+      utf8Encoder.encode(encodable),
+      true
     )
-    return null
+    if (releaseBytes === null) return null
+    const releaseData = new TextDecoder('utf-8').decode(releaseBytes)
+    if (!this.suppressionStringCarry) return releaseData
+    const trailingCarry = this.suppressionStringCarry
+    this.suppressionStringCarry = ''
+    return releaseData + trailingCarry
   }
 
-  _findSuppressionReleaseBytes = (data) => {
-    const bytes = data instanceof ArrayBuffer
+  _findSuppressionReleaseBytes = (data, preserveStringCarry = false) => {
+    let bytes = data instanceof ArrayBuffer
       ? new Uint8Array(data)
       : data instanceof Uint8Array
         ? data
         : new Uint8Array(data)
-    const markerBytes = new TextEncoder().encode(this.suppressionReleaseMarker)
+    if (!preserveStringCarry && this.suppressionStringCarry) {
+      const carryBytes = utf8Encoder.encode(this.suppressionStringCarry)
+      this.suppressionStringCarry = ''
+      const combined = new Uint8Array(carryBytes.length + bytes.length)
+      combined.set(carryBytes)
+      combined.set(bytes, carryBytes.length)
+      bytes = combined
+    }
+    const markerBytes = this.suppressionReleaseMarkerBytes
+    if (!markerBytes.length) return null
     const scanBytes = new Uint8Array(this.suppressionScanBytes.length + bytes.length)
     scanBytes.set(this.suppressionScanBytes)
     scanBytes.set(bytes, this.suppressionScanBytes.length)
@@ -386,7 +447,7 @@ export default class AttachAddonCustom {
 
   _extractManagedPtyListenerData = data => {
     const incoming = typeof data === 'string'
-      ? new TextEncoder().encode(data)
+      ? utf8Encoder.encode(data)
       : data instanceof ArrayBuffer
         ? new Uint8Array(data)
         : data instanceof Uint8Array
@@ -398,7 +459,7 @@ export default class AttachAddonCustom {
     scan.set(this.managedPtyListenerBytes)
     scan.set(incoming, this.managedPtyListenerBytes.length)
     this.managedPtyListenerBytes = new Uint8Array()
-    const prefix = new TextEncoder().encode(
+    const prefix = utf8Encoder.encode(
       `${String.fromCharCode(27)}]633;`
     )
     const publishChunks = []
@@ -485,7 +546,7 @@ export default class AttachAddonCustom {
     this.managedPtyLifecycleOverflowed = false
     this.managedPtyLifecyclePending = false
     const incoming = typeof data === 'string'
-      ? new TextEncoder().encode(data)
+      ? utf8Encoder.encode(data)
       : data instanceof ArrayBuffer
         ? new Uint8Array(data)
         : data instanceof Uint8Array
@@ -496,7 +557,7 @@ export default class AttachAddonCustom {
     )
     scan.set(this.managedPtyLifecycleBytes)
     scan.set(incoming, this.managedPtyLifecycleBytes.length)
-    const prefix = new TextEncoder().encode(
+    const prefix = utf8Encoder.encode(
       `${String.fromCharCode(27)}]633;`
     )
     const frames = []
@@ -587,7 +648,7 @@ export default class AttachAddonCustom {
     }
     if (promptReleaseWasPending) {
       const incomingBytes = typeof data === 'string'
-        ? new TextEncoder().encode(data)
+        ? utf8Encoder.encode(data)
         : data instanceof ArrayBuffer
           ? new Uint8Array(data)
           : data instanceof Uint8Array
@@ -622,17 +683,8 @@ export default class AttachAddonCustom {
         forwardedPrePromptLifecycleFrames.add(frame)
       }
     }
-    if (this.managedPtyLifecyclePending) {
-      writePrePromptLifecycleFrames()
-      if (!promptReleaseWasPending && this.publishSuppressionRemainder &&
-        this.managedPtyOutputStreamingActive &&
-        listenerData.publishData.length > 0) {
-        this._publishRemoteOutput(listenerData.publishData)
-      }
-      return
-    }
     const toBytes = value => {
-      if (typeof value === 'string') return new TextEncoder().encode(value)
+      if (typeof value === 'string') return utf8Encoder.encode(value)
       if (value instanceof ArrayBuffer) return new Uint8Array(value)
       if (value instanceof Uint8Array) return value
       return new Uint8Array(value)
@@ -647,7 +699,7 @@ export default class AttachAddonCustom {
       this.suppressionReleaseMarker === promptFrame &&
       promptFrameIndex !== -1) {
       const releaseBytes = toBytes(releaseData)
-      const promptFrameLength = new TextEncoder().encode(promptFrame).length
+      const promptFrameLength = utf8Encoder.encode(promptFrame).length
       const promptReleaseBytes = releaseBytes.slice(promptFrameLength)
       if (promptReleaseBytes.byteLength > managedPtyLifecycleByteLimit) {
         this.managedPtyPromptReleaseBytes = new Uint8Array()
@@ -657,7 +709,7 @@ export default class AttachAddonCustom {
         this.prepareManagedPtyEchoRecovery()
         return
       }
-      const promptBytes = new TextEncoder().encode(promptFrame)
+      const promptBytes = utf8Encoder.encode(promptFrame)
       let promptIndex = -1
       for (let index = 0;
         index <= listenerData.publishData.length - promptBytes.length;
@@ -688,10 +740,7 @@ export default class AttachAddonCustom {
       writePrePromptLifecycleFrames()
       this.writeToTerminalDirect(promptFrame)
       if (inputFrameAfterPromptIndex === -1) {
-        this.suppressionReleaseMarker = inputFrame
-        this.suppressionScanText = ''
-        this.suppressionScanBytes = new Uint8Array()
-        this.suppressionDecoder = new TextDecoder('utf-8')
+        this._setSuppressionReleaseMarker(inputFrame)
         return
       }
       releaseData = this.managedPtyPromptReleaseBytes
@@ -701,6 +750,15 @@ export default class AttachAddonCustom {
       releaseData = this.managedPtyPromptReleaseBytes
       promptReleaseReady = true
     } else if (promptReleaseWasPending) {
+      return
+    }
+    if (this.managedPtyLifecyclePending && !promptReleaseReady) {
+      writePrePromptLifecycleFrames()
+      if (!promptReleaseWasPending && this.publishSuppressionRemainder &&
+        this.managedPtyOutputStreamingActive &&
+        listenerData.publishData.length > 0) {
+        this._publishRemoteOutput(listenerData.publishData)
+      }
       return
     }
     if (promptReleaseReady) {
@@ -713,7 +771,7 @@ export default class AttachAddonCustom {
         ? toBytes(releaseData)
         : listenerData.publishData
       if (promptReleaseReady) {
-        const promptBytes = new TextEncoder().encode(promptFrame)
+        const promptBytes = utf8Encoder.encode(promptFrame)
         const prefixBytes = this.managedPtyPromptListenerPrefixBytes
         const releaseBytes = toBytes(releaseData)
         publishData = new Uint8Array(
@@ -746,7 +804,7 @@ export default class AttachAddonCustom {
         ? toBytes(releaseData)
         : listenerData.publishData
       if (promptReleaseReady) {
-        const promptBytes = new TextEncoder().encode(promptFrame)
+        const promptBytes = utf8Encoder.encode(promptFrame)
         const prefixBytes = this.managedPtyPromptListenerPrefixBytes
         const releaseBytes = toBytes(releaseData)
         publishData = new Uint8Array(
@@ -761,10 +819,32 @@ export default class AttachAddonCustom {
     if (promptReleaseReady) {
       this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
     }
+    let terminalReleaseData = releaseData
+    if (promptReleaseReady && this.managedPtyHidePromptText) {
+      const releaseBytes = toBytes(releaseData)
+      const inputFrameBytes = utf8Encoder.encode(inputFrame)
+      let inputFrameIndex = -1
+      for (let index = 0;
+        index <= releaseBytes.length - inputFrameBytes.length;
+        index++) {
+        let matches = true
+        for (let offset = 0; offset < inputFrameBytes.length; offset++) {
+          if (releaseBytes[index + offset] !== inputFrameBytes[offset]) {
+            matches = false
+            break
+          }
+        }
+        if (matches) {
+          inputFrameIndex = index
+          break
+        }
+      }
+      terminalReleaseData = inputFrameIndex === -1
+        ? inputFrameBytes
+        : releaseBytes.slice(inputFrameIndex)
+    }
     if (this.managedPtyHoldSuppression) {
-      this.suppressionScanText = ''
-      this.suppressionScanBytes = new Uint8Array()
-      this.suppressionDecoder = new TextDecoder('utf-8')
+      this._resetSuppressionScan()
       this.managedPtyLifecycleBytes = new Uint8Array()
       this.managedPtyListenerBytes = new Uint8Array()
       this.managedPtyPromptReleaseBytes = new Uint8Array()
@@ -778,11 +858,11 @@ export default class AttachAddonCustom {
       return
     }
     this.onShellIntegrationDetected()
-    if (releaseData.length > 0) {
-      if (releaseData instanceof Uint8Array) {
-        this._writeBinaryOutput(releaseData, false)
+    if (terminalReleaseData.length > 0) {
+      if (terminalReleaseData instanceof Uint8Array) {
+        this._writeBinaryOutput(terminalReleaseData, false)
       } else {
-        this.writeToTerminalDirect(releaseData)
+        this.writeToTerminalDirect(terminalReleaseData)
       }
     }
   }
@@ -848,17 +928,15 @@ export default class AttachAddonCustom {
               sessionNonce
             )
             const markerLength = integrationData instanceof Uint8Array
-              ? new TextEncoder().encode(releaseMarker).length
+              ? utf8Encoder.encode(releaseMarker).length
               : releaseMarker.length
             releasedData = integrationData.slice(markerLength)
             this.consumeManagedPtyCommandRecord = false
             this.managedPtyOutputStreamingActive = true
-            this.suppressionReleaseMarker =
+            this._setSuppressionReleaseMarker(
               `${String.fromCharCode(27)}]633;A;${sessionNonce}` +
               String.fromCharCode(7)
-            this.suppressionScanText = ''
-            this.suppressionScanBytes = new Uint8Array()
-            this.suppressionDecoder = new TextDecoder('utf-8')
+            )
             this.managedPtyLifecycleBytes = new Uint8Array()
             this.managedPtyListenerBytes = new Uint8Array()
             this.managedPtyPromptReleaseBytes = new Uint8Array()
@@ -921,12 +999,11 @@ export default class AttachAddonCustom {
       }
     }
     this._handleEchoDetection(str)
-    if (this._checkPasswordPrompt(str) && !this._passwordPromptDetected) {
+    if (this._checkPasswordPrompt(str) &&
+      !this._passwordPromptDetected) {
       this._passwordPromptDetected = true
       // Show password dropdown immediately after terminal renders the prompt
-      setTimeout(() => {
-        this.term?.parent?.onPasswordPromptDetected?.()
-      }, 100)
+      this._schedulePasswordPromptNotification()
     }
 
     if (typeof data === 'string') {
@@ -959,14 +1036,23 @@ export default class AttachAddonCustom {
   }
 
   _sendToServerDirect = (data) => {
-    // Start echo detection when password prompt is suspected
-    if (this._passwordPromptDetected && !this._pendingEchoCheck && data !== '\r' && data !== '\n' && data !== '\x03') {
+    const isStringInput = typeof data === 'string'
+    const passwordInputTerminated = this._passwordPromptDetected &&
+      isStringInput &&
+      ['\r', '\n', '\x03'].some(terminator => data.includes(terminator))
+    const singleKeyPasswordInput = this._passwordPromptDetected &&
+      isStringInput && data.length === 1 && !passwordInputTerminated
+
+    // Multi-character password chunks are never retained as echo diagnostics.
+    if (singleKeyPasswordInput && !this._pendingEchoCheck) {
       this._pendingEchoCheck = { char: data, time: Date.now() }
       clearTimeout(this._echoCheckTimer)
       this._echoCheckTimer = setTimeout(this._onEchoCheckTimeout, 200)
     }
-    // Reset password state on Enter or Ctrl+C
-    if (data === '\r' || data === '\n' || data === '\x03') {
+    // Treat the whole event as password input, then clear on its first terminator.
+    if (passwordInputTerminated ||
+      data === '\r' || data === '\n' || data === '\x03') {
+      this._clearPasswordPromptNotification()
       if (this._passwordPromptDetected) {
         this.term?.parent?.onPasswordPromptCancelled?.()
       }
@@ -1001,7 +1087,8 @@ export default class AttachAddonCustom {
 
   submitManagedPtyCommand = (command, sessionNonce, options = {}) => {
     const nonce = String(sessionNonce || '')
-    if (new TextEncoder().encode(String(command || '')).byteLength >
+    const hidePromptText = options.hidePromptText === true
+    if (utf8Encoder.encode(String(command || '')).byteLength >
       managedPtyFrameByteLimit) {
       const error = new Error('受控 PTY 命令帧超过安全上限')
       error.code = 'MANAGED_PTY_FRAME_LIMIT'
@@ -1009,6 +1096,7 @@ export default class AttachAddonCustom {
     }
     const continuingPlan = this.managedPtyEchoSuppressionActive &&
       this.managedPtySessionNonce === nonce &&
+      this.managedPtyHidePromptText === hidePromptText &&
       (this.managedPtyHoldSuppression || options.cleanup === true)
     if (!String(command || '').trim() ||
       !managedPtySessionNoncePattern.test(nonce) ||
@@ -1016,10 +1104,7 @@ export default class AttachAddonCustom {
     const commandMarker = `${String.fromCharCode(27)}]633;E;${nonce};` +
       serializeShellIntegrationValue(command) + String.fromCharCode(7)
     if (continuingPlan) {
-      this.suppressionReleaseMarker = commandMarker
-      this.suppressionScanText = ''
-      this.suppressionScanBytes = new Uint8Array()
-      this.suppressionDecoder = new TextDecoder('utf-8')
+      this._setSuppressionReleaseMarker(commandMarker)
       this.managedPtyLifecycleBytes = new Uint8Array()
       this.managedPtyListenerBytes = new Uint8Array()
       this.managedPtyPromptReleaseBytes = new Uint8Array()
@@ -1033,6 +1118,7 @@ export default class AttachAddonCustom {
     this.managedPtySessionNonce = nonce
     this.managedPtyExpectedCommand = command
     this.managedPtyHoldSuppression = options.holdSuppression === true
+    this.managedPtyHidePromptText = hidePromptText
     this.consumeManagedPtyCommandRecord = true
     try {
       if (!this.managedPtyTransport) {
@@ -1209,16 +1295,17 @@ export default class AttachAddonCustom {
     this.suppressedData = []
     this.publishSuppressionRemainder = false
     this.onSuppressionEndCallback = null
-    this.suppressionReleaseMarker = ''
-    this.suppressionScanText = ''
-    this.suppressionScanBytes = new Uint8Array()
-    this.suppressionDecoder = new TextDecoder('utf-8')
+    this._setSuppressionReleaseMarker('')
     this.managedPtyLifecycleBytes = new Uint8Array()
     this.managedPtyListenerBytes = new Uint8Array()
     this.managedPtyPromptReleaseBytes = new Uint8Array()
     this.managedPtyPromptListenerPrefixBytes = new Uint8Array()
     this.managedPtyPromptReleasePending = false
     this.pendingInput = []
+    this._clearPasswordPromptNotification()
+    this._passwordPromptDetected = false
+    this._lastOutputLine = ''
+    this._pendingEchoCheck = null
     clearTimeout(this._echoCheckTimer)
     this._echoCheckTimer = null
     this._pendingTerminalEnter = null

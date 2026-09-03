@@ -41,6 +41,13 @@ async function importShellIntegration () {
   )))
 }
 
+async function importTerminalInputMode () {
+  return import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/terminal/terminal-input-mode.js'
+  )))
+}
+
 function deferred () {
   let resolveDeferred
   let rejectDeferred
@@ -124,6 +131,20 @@ function createDirectAttachHarness () {
     }
     return { addon, safetyCalls, sent, parent, term }
   })
+}
+
+function writeCrossTypeSplit (
+  addon,
+  value,
+  splitAt,
+  binaryFirst,
+  suffix = ''
+) {
+  const encode = text => new TextEncoder().encode(text)
+  const first = value.slice(0, splitAt)
+  const second = value.slice(splitAt) + suffix
+  addon.writeToTerminal(binaryFirst ? encode(first) : first)
+  addon.writeToTerminal(binaryFirst ? second : encode(second))
 }
 
 test('AttachAddon publishes remote output and blocks managed terminal input', async () => {
@@ -238,6 +259,472 @@ test('managed PTY hides command output while streaming it to the task parser', a
     `\u001b]633;C;${testTrackerNonce}\u0007` + prompt
   )
   assert.deepEqual(output, [remainder, prompt])
+})
+
+test('managed PTY hides natural prompt text for root-file presentation', async () => {
+  const promptFrame = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const inputFrame = `\u001b]633;B;${testTrackerNonce}\u0007`
+  const fileMarker =
+    '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+  const postPromptOutput = 'post-prompt-output\r\n'
+
+  for (const binary of [false, true]) {
+    const { addon, term } = await createDirectAttachHarness()
+    const writes = []
+    const output = []
+    term.write = value => writes.push(value)
+    addon.onRemoteOutput(chunk => output.push(chunk))
+    const command = `root-file-presentation-${binary}`
+    const hiddenOutput =
+      `\u001b]633;E;${testTrackerNonce};${command}\u0007` +
+      `\u001b]633;C;${testTrackerNonce}\u0007` + fileMarker
+    const prompt = promptFrame + 'hik@fixture:$ ' + inputFrame +
+      postPromptOutput
+    const send = value => addon.writeToTerminal(
+      binary ? new TextEncoder().encode(value) : value
+    )
+
+    assert.equal(addon.submitManagedPtyCommand(
+      command,
+      testTrackerNonce,
+      { hidePromptText: true }
+    ), true)
+    send(hiddenOutput)
+    send(prompt)
+
+    const writtenText = writes.map(value => typeof value === 'string'
+      ? value
+      : new TextDecoder().decode(value)).join('')
+    assert.equal(addon.outputSuppressed, false)
+    assert.equal(writtenText.includes(promptFrame), true)
+    assert.equal(writtenText.includes(inputFrame), true)
+    assert.equal(writtenText.includes('hik@fixture:$ '), false)
+    assert.equal(writtenText.includes(postPromptOutput), true)
+    assert.equal(output.join('').includes(fileMarker), true)
+  }
+})
+
+test('managed PTY final hidden prompt handles split authenticated B', async (t) => {
+  const promptFrame = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const inputFrame = `\u001b]633;B;${testTrackerNonce}\u0007`
+  const inputPrefix = '\u001b]633;'
+  const inputRemainder = `B;${testTrackerNonce}\u0007`
+  const promptText = 'split-final@fixture:$ '
+  const tail = 'post-prompt-output\r\n'
+
+  for (const binary of [false, true]) {
+    await t.test(binary ? 'Uint8Array' : 'string', async () => {
+      const { addon, term } = await createDirectAttachHarness()
+      const writes = []
+      const output = []
+      term.write = value => writes.push(value)
+      addon.onRemoteOutput(chunk => output.push(chunk))
+      const command = `split-final-${binary}`
+      const send = value => addon.writeToTerminal(
+        binary ? new TextEncoder().encode(value) : value
+      )
+
+      assert.equal(addon.submitManagedPtyCommand(
+        command,
+        testTrackerNonce,
+        { hidePromptText: true }
+      ), true)
+      send(
+        `\u001b]633;E;${testTrackerNonce};${command}\u0007` +
+        `\u001b]633;C;${testTrackerNonce}\u0007` +
+        '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+      )
+      send(promptFrame + promptText + inputPrefix)
+      assert.equal(addon.outputSuppressed, true)
+      send(inputRemainder + tail)
+
+      const writtenText = writes.map(value => typeof value === 'string'
+        ? value
+        : new TextDecoder().decode(value)).join('')
+      assert.equal(addon.outputSuppressed, false)
+      assert.equal(writtenText.split(promptFrame).length - 1, 1)
+      assert.equal(writtenText.split(inputFrame).length - 1, 1)
+      assert.equal(writtenText.indexOf(promptFrame) <
+        writtenText.indexOf(inputFrame), true)
+      assert.equal(writtenText.includes(promptText), false)
+      assert.equal(writtenText.includes(tail), true)
+      assert.equal(output.join('').includes(tail), true)
+    })
+  }
+})
+
+test('managed PTY held hidden prompt handles split authenticated B', async (t) => {
+  const promptFrame = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const inputFrame = `\u001b]633;B;${testTrackerNonce}\u0007`
+  const inputPrefix = '\u001b]633;'
+  const inputRemainder = `B;${testTrackerNonce}\u0007`
+  const promptText = 'split-held@fixture:$ '
+  const tail = 'post-prompt-output\r\n'
+
+  for (const binary of [false, true]) {
+    await t.test(binary ? 'Uint8Array' : 'string', async () => {
+      const { addon, sent, term } = await createDirectAttachHarness()
+      const writes = []
+      const output = []
+      term.write = value => writes.push(value)
+      addon.onRemoteOutput(chunk => output.push(chunk))
+      const first = `split-held-first-${binary}`
+      const final = `split-held-final-${binary}`
+      const send = value => addon.writeToTerminal(
+        binary ? new TextEncoder().encode(value) : value
+      )
+
+      assert.equal(addon.submitManagedPtyCommand(
+        first,
+        testTrackerNonce,
+        { holdSuppression: true, hidePromptText: true }
+      ), true)
+      send(
+        `\u001b]633;E;${testTrackerNonce};${first}\u0007` +
+        `\u001b]633;C;${testTrackerNonce}\u0007` +
+        '\u001b]698;SHELLPILOT_FILE_FRAME;token;0;2;' +
+        `${'a'.repeat(64)};ok\u0007`
+      )
+      send(promptFrame + promptText + inputPrefix)
+      send(inputRemainder + tail)
+
+      const heldText = writes.map(value => typeof value === 'string'
+        ? value
+        : new TextDecoder().decode(value)).join('')
+      assert.equal(addon.outputSuppressed, true)
+      assert.equal(heldText.split(promptFrame).length - 1, 1)
+      assert.equal(heldText.split(inputFrame).length - 1, 1)
+      assert.equal(heldText.indexOf(promptFrame) <
+        heldText.indexOf(inputFrame), true)
+      assert.equal(heldText.includes(promptText), false)
+      assert.equal(output.join('').includes(tail), true)
+
+      assert.equal(addon.submitManagedPtyCommand(
+        final,
+        testTrackerNonce,
+        { holdSuppression: false, hidePromptText: true }
+      ), true)
+      send(
+        `\u001b]633;E;${testTrackerNonce};${final}\u0007` +
+        `\u001b]633;C;${testTrackerNonce}\u0007` +
+        '\u001b]698;SHELLPILOT_FILE_FRAME;token;1;2;' +
+        `${'a'.repeat(64)};ok\u0007`
+      )
+      send(promptFrame + 'final-hidden@fixture:$ ' + inputFrame)
+
+      assert.equal(addon.outputSuppressed, false)
+      assert.equal(sent.length, 2)
+      assert.equal(writes.join('').includes('final-hidden@fixture:$ '), false)
+    })
+  }
+})
+
+test('managed PTY authenticates command E across string and binary splits', async (t) => {
+  const wrongNonce = 'fedcba0987654321fedcba0987654321'
+  const fileMarker =
+    '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+  const commandStarted = `\u001b]633;C;${testTrackerNonce}\u0007`
+
+  for (const holdSuppression of [false, true]) {
+    for (const binaryFirst of [false, true]) {
+      const direction = binaryFirst
+        ? 'Uint8Array to string'
+        : 'string to Uint8Array'
+      const mode = holdSuppression ? 'held' : 'final'
+      await t.test(`${mode}: ${direction}`, async () => {
+        const { addon, term } = await createDirectAttachHarness()
+        const writes = []
+        const output = []
+        term.write = value => writes.push(value)
+        addon.onRemoteOutput(chunk => output.push(chunk))
+        const command = `cross-type-e-${mode}-${binaryFirst}`
+        const commandRecord =
+          `\u001b]633;E;${testTrackerNonce};${command}\u0007`
+
+        assert.equal(addon.submitManagedPtyCommand(
+          command,
+          testTrackerNonce,
+          { holdSuppression, hidePromptText: true }
+        ), true)
+        addon.writeToTerminal(
+          `\u001b]633;E;${wrongNonce};forged\u0007`
+        )
+        assert.equal(addon.managedPtyOutputStreamingActive, false)
+        assert.deepEqual(writes, [])
+        writeCrossTypeSplit(
+          addon,
+          commandRecord,
+          Math.floor(commandRecord.length / 2),
+          binaryFirst,
+          commandStarted + fileMarker
+        )
+
+        assert.equal(addon.managedPtyOutputStreamingActive, true)
+        assert.equal(output.join(''), commandStarted + fileMarker)
+        assert.equal(writes.join(''), commandStarted)
+        assert.equal(writes.join('').includes('forged'), false)
+        addon.cancelManagedPtyEchoSuppression()
+      })
+    }
+  }
+})
+
+test('managed PTY final prompt supports cross-type A and B splits', async (t) => {
+  const promptFrame = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const inputFrame = `\u001b]633;B;${testTrackerNonce}\u0007`
+  const wrongNonce = 'fedcba0987654321fedcba0987654321'
+  const promptText = 'cross-type-final@fixture:$ '
+  const tail = 'post-prompt-output\r\n'
+
+  for (const binaryFirst of [false, true]) {
+    const direction = binaryFirst
+      ? 'Uint8Array to string'
+      : 'string to Uint8Array'
+    await t.test(direction, async () => {
+      const { addon, term } = await createDirectAttachHarness()
+      const writes = []
+      const output = []
+      term.write = value => writes.push(value)
+      addon.onRemoteOutput(chunk => output.push(chunk))
+      const command = `cross-type-final-${binaryFirst}`
+
+      assert.equal(addon.submitManagedPtyCommand(
+        command,
+        testTrackerNonce,
+        { hidePromptText: true }
+      ), true)
+      addon.writeToTerminal(
+        `\u001b]633;E;${testTrackerNonce};${command}\u0007` +
+        `\u001b]633;C;${testTrackerNonce}\u0007`
+      )
+      writes.length = 0
+      output.length = 0
+      addon.writeToTerminal(
+        `\u001b]633;A;${wrongNonce}\u0007forged:# ` +
+        `\u001b]633;B;${wrongNonce}\u0007`
+      )
+      assert.equal(addon.outputSuppressed, true)
+      assert.deepEqual(writes, [])
+      output.length = 0
+
+      writeCrossTypeSplit(
+        addon,
+        promptFrame,
+        Math.floor(promptFrame.length / 2),
+        binaryFirst,
+        promptText
+      )
+      writeCrossTypeSplit(
+        addon,
+        inputFrame,
+        Math.floor(inputFrame.length / 2),
+        binaryFirst,
+        tail
+      )
+
+      assert.equal(addon.outputSuppressed, false)
+      assert.equal(writes.join(''), promptFrame + inputFrame + tail)
+      assert.equal(
+        output.join(''),
+        promptFrame + promptText + inputFrame + tail
+      )
+      assert.equal(writes.join('').includes('forged'), false)
+      assert.equal(writes.join('').includes(promptText), false)
+    })
+  }
+})
+
+test('managed PTY held prompt supports cross-type A and B splits', async (t) => {
+  const promptFrame = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const inputFrame = `\u001b]633;B;${testTrackerNonce}\u0007`
+  const promptText = 'cross-type-held@fixture:$ '
+  const tail = 'held-post-prompt-output\r\n'
+  const finalTail = 'final-post-prompt-output\r\n'
+
+  for (const binaryFirst of [false, true]) {
+    const direction = binaryFirst
+      ? 'Uint8Array to string'
+      : 'string to Uint8Array'
+    await t.test(direction, async () => {
+      const { addon, sent, term } = await createDirectAttachHarness()
+      const writes = []
+      const output = []
+      term.write = value => writes.push(value)
+      addon.onRemoteOutput(chunk => output.push(chunk))
+      const first = `cross-type-held-first-${binaryFirst}`
+      const final = `cross-type-held-final-${binaryFirst}`
+
+      assert.equal(addon.submitManagedPtyCommand(
+        first,
+        testTrackerNonce,
+        { holdSuppression: true, hidePromptText: true }
+      ), true)
+      addon.writeToTerminal(
+        `\u001b]633;E;${testTrackerNonce};${first}\u0007` +
+        `\u001b]633;C;${testTrackerNonce}\u0007`
+      )
+      writes.length = 0
+      output.length = 0
+      writeCrossTypeSplit(
+        addon,
+        promptFrame,
+        Math.floor(promptFrame.length / 2),
+        binaryFirst,
+        promptText
+      )
+      writeCrossTypeSplit(
+        addon,
+        inputFrame,
+        Math.floor(inputFrame.length / 2),
+        binaryFirst,
+        tail
+      )
+
+      assert.equal(addon.outputSuppressed, true)
+      assert.equal(writes.join(''), promptFrame + inputFrame)
+      assert.equal(
+        output.join(''),
+        promptFrame + promptText + inputFrame + tail
+      )
+      assert.equal(addon.submitManagedPtyCommand(
+        final,
+        testTrackerNonce,
+        { holdSuppression: false, hidePromptText: true }
+      ), true)
+      addon.writeToTerminal(
+        `\u001b]633;E;${testTrackerNonce};${final}\u0007` +
+        `\u001b]633;C;${testTrackerNonce}\u0007`
+      )
+      writes.length = 0
+      output.length = 0
+      writeCrossTypeSplit(
+        addon,
+        promptFrame,
+        Math.floor(promptFrame.length / 2),
+        binaryFirst,
+        'final-cross-type@fixture:$ '
+      )
+      writeCrossTypeSplit(
+        addon,
+        inputFrame,
+        Math.floor(inputFrame.length / 2),
+        binaryFirst,
+        finalTail
+      )
+
+      assert.equal(addon.outputSuppressed, false)
+      assert.equal(sent.length, 2)
+      assert.equal(writes.join(''), promptFrame + inputFrame + finalTail)
+      assert.equal(writes.join('').includes('fixture:$ '), false)
+    })
+  }
+})
+
+test('managed PTY preserves a Unicode E record split between surrogate halves', async () => {
+  const { addon, term } = await createDirectAttachHarness()
+  const writes = []
+  const output = []
+  let suppressionEnds = 0
+  term.write = value => writes.push(value)
+  addon.onRemoteOutput(chunk => output.push(chunk))
+  const command = 'printf 中文😀'
+  const commandRecord =
+    `\u001b]633;E;${testTrackerNonce};${command}\u0007`
+  const commandStarted = `\u001b]633;C;${testTrackerNonce}\u0007`
+  const fileMarker =
+    '\u001b]698;SHELLPILOT_FILE;token;start;MA==;cm9vdA==\u0007'
+  const promptFrame = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const inputFrame = `\u001b]633;B;${testTrackerNonce}\u0007`
+  const promptText = 'root@fixture:# '
+  const postPromptOutput = '中文-post-prompt-output\r\n'
+  const surrogateIndex = commandRecord.indexOf('😀')
+
+  assert.notEqual(surrogateIndex, -1)
+  assert.equal(commandRecord.charCodeAt(surrogateIndex), 0xD83D)
+  assert.equal(commandRecord.charCodeAt(surrogateIndex + 1), 0xDE00)
+  assert.equal(addon.submitManagedPtyCommand(
+    command,
+    testTrackerNonce,
+    { hidePromptText: true }
+  ), true)
+  addon.onSuppressionEndCallback = () => { suppressionEnds++ }
+
+  addon.writeToTerminal(commandRecord.slice(0, surrogateIndex + 1))
+  assert.equal(addon.managedPtyOutputStreamingActive, false)
+  assert.deepEqual(writes, [])
+  addon.writeToTerminal(
+    commandRecord.slice(surrogateIndex + 1) + commandStarted + fileMarker
+  )
+
+  assert.equal(addon.managedPtyOutputStreamingActive, true)
+  assert.equal(writes.join(''), commandStarted)
+  assert.equal(output.join(''), commandStarted + fileMarker)
+  addon.writeToTerminal(
+    promptFrame + promptText + inputFrame + postPromptOutput
+  )
+
+  assert.equal(addon.outputSuppressed, false)
+  assert.equal(suppressionEnds, 1)
+  assert.equal(
+    writes.join(''),
+    commandStarted + promptFrame + inputFrame + postPromptOutput
+  )
+  assert.equal(writes.join('').includes(promptText), false)
+  assert.equal(
+    output.join(''),
+    commandStarted + fileMarker + promptFrame + promptText +
+      inputFrame + postPromptOutput
+  )
+})
+
+test('suppression release scan preserves caller type and Unicode tail', async () => {
+  const { addon } = await createDirectAttachHarness()
+  const marker = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const tail = '中文-post-tail\r\n'
+  const encoder = new TextEncoder()
+
+  addon.startOutputSuppression(0, null, true, false, marker)
+  const stringRelease = addon._findSuppressionReleaseData(
+    'hidden-prefix' + marker + tail
+  )
+  assert.equal(typeof stringRelease, 'string')
+  assert.equal(stringRelease, marker + tail)
+
+  addon.startOutputSuppression(0, null, true, false, marker)
+  assert.equal(addon._findSuppressionReleaseData('hidden-prefix\uD83D'), null)
+  const byteRelease = addon._findSuppressionReleaseBytes(
+    encoder.encode(marker + tail)
+  )
+  assert.equal(byteRelease instanceof Uint8Array, true)
+  assert.equal(new TextDecoder().decode(byteRelease), marker + tail)
+  await addon.stopOutputSuppression(true)
+})
+
+test('current-child-shell reinjection hides injection echo and natural prompt', async () => {
+  const { addon, term } = await createDirectAttachHarness()
+  const writes = []
+  let suppressionEnded = false
+  term.write = value => writes.push(value)
+  const promptFrame = `\u001b]633;A;${testTrackerNonce}\u0007`
+  const inputFrame = `\u001b]633;B;${testTrackerNonce}\u0007`
+
+  assert.equal(addon.startCurrentShellIntegrationSuppression(
+    testTrackerNonce,
+    1000,
+    () => { suppressionEnded = true }
+  ), true)
+  addon.writeToTerminal('printf hidden-integration-echo\r\n')
+  addon.writeToTerminal(
+    promptFrame + 'root@fixture:# ' + inputFrame
+  )
+
+  const writtenText = writes.join('')
+  assert.equal(suppressionEnded, true)
+  assert.equal(addon.outputSuppressed, false)
+  assert.equal(writtenText.includes(promptFrame), true)
+  assert.equal(writtenText.includes(inputFrame), true)
+  assert.equal(writtenText.includes('root@fixture:# '), false)
+  assert.equal(writtenText.includes('hidden-integration-echo'), false)
 })
 
 test('managed PTY holds suppression across command-plan prompts', async () => {
@@ -1377,10 +1864,11 @@ test('managed PTY suppression dispose clears hidden output and pending input', a
   assert.equal(addon.prepareManagedPtyEchoRecovery(), false)
   assert.deepEqual(addon.suppressedData, [])
   assert.equal(addon.suppressionReleaseMarker, '')
-  assert.equal(addon.suppressionScanText, '')
+  assert.equal(addon.suppressionScanBytes.byteLength, 0)
   assert.deepEqual(addon.pendingInput, [])
   assert.equal(addon.term, null)
-  assert.equal(addon.suppressionDecoder instanceof TextDecoder, true)
+  assert.equal(addon.suppressionReleaseMarkerBytes.byteLength, 0)
+  assert.equal(addon.suppressionStringCarry, '')
   assert.deepEqual(writes, [])
 })
 
@@ -1439,6 +1927,23 @@ test('shell transition detection is conservative about interactive child shells'
   for (const command of rejected) {
     assert.equal(isInteractiveShellTransitionCommand(command), false, command)
   }
+})
+
+test('transport password state blocks ordinary command input tracking', async () => {
+  const { isTerminalPasswordInputMode } = await importTerminalInputMode()
+
+  assert.equal(isTerminalPasswordInputMode({
+    transportPasswordMode: true,
+    suggestionPasswordMode: false
+  }), true)
+  assert.equal(isTerminalPasswordInputMode({
+    transportPasswordMode: false,
+    suggestionPasswordMode: true
+  }), true)
+  assert.equal(isTerminalPasswordInputMode({
+    transportPasswordMode: false,
+    suggestionPasswordMode: false
+  }), false)
 })
 
 test('shell integration detection forwards authenticated OSC data after hidden injection echo', async () => {
@@ -1796,6 +2301,16 @@ test('bash shell integration isolates an existing PROMPT_COMMAND from command tr
   assert.match(integration, /builtin eval "\$__e_old_prompt_command"/)
   assert.match(integration, /PROMPT_COMMAND="__e_cmd"/)
   assert.doesNotMatch(integration, /PROMPT_COMMAND="__e_cmd\$\{PROMPT_COMMAND:/)
+})
+
+test('bash shell integration keeps the ShellPilot prompt hook process-local', async () => {
+  const { getInlineShellIntegration } = await importShellIntegration()
+  const integration = getInlineShellIntegration('bash', testTrackerNonce)
+  const assignment = integration.indexOf('PROMPT_COMMAND="__e_cmd"')
+  const processLocal = integration.indexOf('export -n PROMPT_COMMAND')
+
+  assert.notEqual(assignment, -1)
+  assert.ok(processLocal > assignment)
 })
 
 test('terminal safety alone never makes forced-command or TUI output injectable', async () => {
@@ -2255,6 +2770,332 @@ test('AttachAddon password Enter remains synchronous and resets password state',
   ])
 })
 
+test('AttachAddon clears password state for pasted terminators without retaining or exposing the payload', async () => {
+  const passwordEvents = [
+    'secret\r',
+    'secret\n',
+    'secret\x03',
+    'secret\r\n',
+    'secret\nignored-second-line'
+  ]
+
+  for (const data of passwordEvents) {
+    const { addon, calls, sent, term } = await createAttachHarness(() => {
+      throw new Error('Password paste must not enter command safety tracking')
+    })
+    const writes = []
+    term.write = value => writes.push(value)
+    addon._passwordPromptDetected = true
+
+    const result = addon.sendToServer(data)
+
+    assert.equal(result, undefined, JSON.stringify(data))
+    assert.deepEqual(sent, [data], JSON.stringify(data))
+    assert.equal(addon._passwordPromptDetected, false, JSON.stringify(data))
+    assert.equal(addon._pendingEchoCheck, null, JSON.stringify(data))
+    assert.equal(addon._echoCheckTimer, null, JSON.stringify(data))
+    assert.deepEqual(writes, [], JSON.stringify(data))
+    assert.deepEqual(calls, [{ passwordCancelled: true }], JSON.stringify(data))
+  }
+})
+
+test('AttachAddon keeps non-terminated password chunks private and in password mode', async () => {
+  const { addon, calls, sent, term } = await createAttachHarness(() => {
+    throw new Error('Password input must not enter command safety tracking')
+  })
+  const writes = []
+  term.write = value => writes.push(value)
+  addon._passwordPromptDetected = true
+
+  addon.sendToServer('secret')
+
+  assert.deepEqual(sent, ['secret'])
+  assert.equal(addon._passwordPromptDetected, true)
+  assert.equal(addon._pendingEchoCheck, null)
+  assert.equal(addon._echoCheckTimer, null)
+  assert.deepEqual(writes, [])
+  assert.deepEqual(calls, [])
+})
+
+test('AttachAddon preserves single-key password echo detection and cancellation', async () => {
+  const { addon, calls, sent } = await createAttachHarness(() => {
+    throw new Error('Password input must not enter command safety tracking')
+  })
+  addon._passwordPromptDetected = true
+
+  addon.sendToServer('s')
+
+  assert.equal(addon._passwordPromptDetected, true)
+  assert.equal(addon._pendingEchoCheck?.char, 's')
+  assert.notEqual(addon._echoCheckTimer, null)
+
+  addon.sendToServer('\x03')
+
+  assert.deepEqual(sent, ['s', '\x03'])
+  assert.equal(addon._passwordPromptDetected, false)
+  assert.equal(addon._pendingEchoCheck, null)
+  assert.equal(addon._echoCheckTimer, null)
+  assert.deepEqual(calls, [{ passwordCancelled: true }])
+})
+
+test('AttachAddon cancels delayed password UI after a terminating paste', async () => {
+  const tracked = []
+  const { addon, sent, parent, term } = await createAttachHarness(
+    (command, context) => {
+      tracked.push({ command, context })
+      return { sendNow: true }
+    }
+  )
+  const promptEvents = []
+  let uiPasswordMode = false
+  parent.notifyOnData = () => {}
+  parent.onPasswordPromptDetected = () => {
+    uiPasswordMode = true
+    promptEvents.push('detected')
+  }
+  parent.onPasswordPromptCancelled = () => {
+    uiPasswordMode = false
+    promptEvents.push('cancelled')
+  }
+  term.write = () => {}
+
+  addon.writeToTerminal('Password: ')
+  assert.equal(addon.isPasswordPromptDetected(), true)
+
+  addon.sendToServer('secret\r')
+  await new Promise(resolve => setTimeout(resolve, 150))
+
+  assert.deepEqual(promptEvents, ['cancelled'])
+  assert.equal(uiPasswordMode, false)
+  assert.equal(addon.isPasswordPromptDetected(), false)
+  assert.equal(addon._passwordPromptNotificationTimer, null)
+  assert.equal(addon._pendingEchoCheck, null)
+  assert.equal(addon._echoCheckTimer, null)
+
+  addon.sendToServer('\r')
+
+  assert.deepEqual(sent, ['secret\r', '\r'])
+  assert.equal(tracked.length, 1)
+  assert.equal(tracked[0].context.passwordMode, false)
+})
+
+test('AttachAddon does not re-detect a stale password prompt after whitespace echo', async () => {
+  const tracked = []
+  const { addon, parent, sent, term } = await createAttachHarness(
+    (command, context) => {
+      tracked.push({ command, context })
+      return { sendNow: true }
+    }
+  )
+  const promptEvents = []
+  let uiPasswordMode = false
+  parent.notifyOnData = () => {}
+  parent.onPasswordPromptDetected = () => {
+    uiPasswordMode = true
+    promptEvents.push('detected')
+  }
+  parent.onPasswordPromptCancelled = () => {
+    uiPasswordMode = false
+    promptEvents.push('cancelled')
+  }
+  term.write = () => {}
+
+  addon.writeToTerminal('Password: ')
+  addon.sendToServer(' ')
+  assert.equal(addon._pendingEchoCheck?.char, ' ')
+
+  addon.writeToTerminal(' ')
+  await new Promise(resolve => setTimeout(resolve, 150))
+
+  assert.deepEqual(promptEvents, ['cancelled'])
+  assert.equal(uiPasswordMode, false)
+  assert.equal(addon.isPasswordPromptDetected(), false)
+  assert.equal(addon._passwordPromptNotificationTimer, null)
+  assert.equal(addon._pendingEchoCheck, null)
+  assert.equal(addon._echoCheckTimer, null)
+
+  addon.sendToServer('\r')
+
+  assert.deepEqual(sent, [' ', '\r'])
+  assert.equal(tracked.length, 1)
+  assert.equal(tracked[0].context.passwordMode, false)
+})
+
+test('AttachAddon detects a fresh prompt coalesced with echo disproof', async () => {
+  const { addon, parent, sent, term } = await createAttachHarness(() => {
+    throw new Error('Fresh password prompts must remain in password mode')
+  })
+  const promptEvents = []
+  let uiPasswordMode = false
+  parent.notifyOnData = () => {}
+  parent.onPasswordPromptDetected = () => {
+    uiPasswordMode = true
+    promptEvents.push('detected')
+  }
+  parent.onPasswordPromptCancelled = () => {
+    uiPasswordMode = false
+    promptEvents.push('cancelled')
+  }
+  term.write = () => {}
+
+  addon.writeToTerminal('Password: ')
+  addon.sendToServer('x')
+  addon.writeToTerminal('x\r\nPassword: ')
+
+  assert.equal(addon.isPasswordPromptDetected(), true)
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.deepEqual(promptEvents, ['cancelled', 'detected'])
+  assert.equal(uiPasswordMode, true)
+  assert.deepEqual(sent, ['x'])
+  assert.equal(addon._passwordPromptNotificationTimer, null)
+  assert.equal(addon._pendingEchoCheck, null)
+  assert.equal(addon._echoCheckTimer, null)
+  addon.dispose()
+})
+
+test('AttachAddon still rejects password mode for ordinary single-character echo', async () => {
+  for (const echoedCharacter of ['x', '中']) {
+    const { addon, parent, term } = await createAttachHarness(() => {
+      throw new Error('Echoed password probes must not enter command tracking')
+    })
+    const promptEvents = []
+    parent.notifyOnData = () => {}
+    parent.onPasswordPromptDetected = () => {
+      promptEvents.push('detected')
+    }
+    parent.onPasswordPromptCancelled = () => {
+      promptEvents.push('cancelled')
+    }
+    term.write = () => {}
+
+    addon.writeToTerminal('Password: ')
+    addon.sendToServer(echoedCharacter)
+    addon.writeToTerminal(echoedCharacter)
+    await new Promise(resolve => setTimeout(resolve, 130))
+
+    assert.deepEqual(promptEvents, ['cancelled'], echoedCharacter)
+    assert.equal(
+      addon.isPasswordPromptDetected(),
+      false,
+      echoedCharacter
+    )
+    assert.equal(addon._passwordPromptNotificationTimer, null, echoedCharacter)
+    assert.equal(addon._pendingEchoCheck, null, echoedCharacter)
+    assert.equal(addon._echoCheckTimer, null, echoedCharacter)
+  }
+})
+
+test('AttachAddon preserves prompt detection across output chunks and whitespace', async () => {
+  const { addon, parent, term } = await createAttachHarness(() => {
+    throw new Error('Prompt output must not enter command tracking')
+  })
+  const promptEvents = []
+  parent.notifyOnData = () => {}
+  parent.onPasswordPromptDetected = () => {
+    promptEvents.push('detected')
+  }
+  parent.onPasswordPromptCancelled = () => {
+    promptEvents.push('cancelled')
+  }
+  term.write = () => {}
+
+  addon.writeToTerminal('Login banner\r\n')
+  addon.writeToTerminal('Pass')
+  assert.equal(addon.isPasswordPromptDetected(), false)
+  assert.equal(addon._passwordPromptNotificationTimer, null)
+
+  addon.writeToTerminal('word: ')
+  const notificationTimer = addon._passwordPromptNotificationTimer
+  addon.writeToTerminal('   ')
+
+  assert.equal(addon.isPasswordPromptDetected(), true)
+  assert.notEqual(notificationTimer, null)
+  assert.equal(addon._passwordPromptNotificationTimer, notificationTimer)
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.deepEqual(promptEvents, ['detected'])
+  addon.dispose()
+})
+
+test('AttachAddon bounds rolling password prompt context', async () => {
+  const { addon, parent, term } = await createAttachHarness(() => {
+    throw new Error('Ordinary output must not enter command tracking')
+  })
+  const contextLimit = 512
+  parent.notifyOnData = () => {}
+  term.write = () => {}
+
+  addon.writeToTerminal('x'.repeat(contextLimit * 4))
+
+  assert.equal(addon._lastOutputLine, 'x'.repeat(contextLimit))
+  assert.equal(addon.isPasswordPromptDetected(), false)
+  assert.equal(addon._passwordPromptNotificationTimer, null)
+  addon.dispose()
+})
+
+test('AttachAddon clears an expired echo-check timer handle', async () => {
+  const { addon } = await createAttachHarness(() => {
+    throw new Error('Password input must not enter command safety tracking')
+  })
+  addon._passwordPromptDetected = true
+
+  addon.sendToServer('s')
+  assert.notEqual(addon._echoCheckTimer, null)
+
+  await new Promise(resolve => setTimeout(resolve, 240))
+
+  assert.equal(addon._pendingEchoCheck, null)
+  assert.equal(addon._echoCheckTimer, null)
+  addon.sendToServer('\x03')
+})
+
+test('AttachAddon dispose cancels a delayed password notification', async () => {
+  const { addon, parent, term } = await createDirectAttachHarness()
+  const promptEvents = []
+  parent.onPasswordPromptDetected = () => promptEvents.push('detected')
+  parent.onPasswordPromptCancelled = () => promptEvents.push('cancelled')
+  term.write = () => {}
+
+  addon.writeToTerminal('Password: ')
+  assert.equal(addon.isPasswordPromptDetected(), true)
+  assert.notEqual(addon._passwordPromptNotificationTimer, null)
+
+  addon.dispose()
+
+  assert.equal(addon.isPasswordPromptDetected(), false)
+  assert.equal(addon._passwordPromptNotificationTimer, null)
+  await new Promise(resolve => setTimeout(resolve, 150))
+  assert.deepEqual(promptEvents, [])
+})
+
+test('xterm listener order keeps a terminating password event private', async () => {
+  const { addon, sent } = await createAttachHarness(() => {
+    throw new Error('Embedded password terminators must stay transparent')
+  })
+  const listeners = []
+  const tracked = []
+  const xterm = {
+    onData: listener => listeners.push(listener),
+    emit: data => listeners.forEach(listener => listener(data))
+  }
+
+  // terminal.jsx registers its tracker before remoteInit registers AttachAddon.
+  xterm.onData(data => {
+    if (!addon.isPasswordPromptDetected()) tracked.push(data)
+  })
+  xterm.onData(addon.sendToServer)
+  addon._passwordPromptDetected = true
+
+  xterm.emit('secret\r')
+
+  assert.deepEqual(tracked, [])
+  assert.equal(addon.isPasswordPromptDetected(), false)
+
+  xterm.emit('uptime')
+
+  assert.deepEqual(tracked, ['uptime'])
+  assert.deepEqual(sent, ['secret\r', 'uptime'])
+})
+
 test('CommandTrackerAddon completes a released expected simple command once', async () => {
   const { CommandTrackerAddon } = await importCommandTracker()
   const harness = createTrackerTerminal({ cols: 80, cursorX: 2 })
@@ -2637,6 +3478,46 @@ test('terminal invalidates managed PTY leases and can rearm the current child sh
   assert.match(source, /outputObservedSequence/)
   assert.match(source, /operationsPtyTaskController\.invalidate\(/)
   assert.match(source, /attachAddon\?\.isPasswordPromptDetected\?\.\(\)/)
+})
+
+test('terminal current child shell uses scoped suppression wiring', () => {
+  const source = readClientFile('components/terminal/terminal.jsx')
+
+  assert.match(source, /currentShellNonce/)
+  assert.match(
+    source,
+    /startCurrentShellIntegrationSuppression\(\s*currentShellNonce,\s*suppressionTimeout,/
+  )
+})
+
+test('terminal snapshots real password mode before tracking the input event', () => {
+  const source = readClientFile('components/terminal/terminal.jsx')
+  const onDataStart = source.indexOf('  onData = (d) => {')
+  const onDataEnd = source.indexOf('\n  runSafetyCommand =', onDataStart)
+  const onData = source.slice(onDataStart, onDataEnd).replaceAll('\r\n', '\n')
+  const transportCheck = onData.indexOf('isPasswordPromptDetected')
+  const passwordModeCheck = onData.indexOf('isTerminalPasswordInputMode')
+  const guardedTracking = onData.indexOf(
+    'if (!passwordMode) {\n      this.handleInputEvent(d)\n    }'
+  )
+  const passwordEventReturn = onData.indexOf(
+    'if (passwordMode) {\n      if (d === \'\\r\' || d === \'\\n\') this.closeSuggestions()\n      return\n    }'
+  )
+  const trackingRegistration = source.indexOf('term.onData(this.onData)')
+  const attachRegistration = source.indexOf('await this.initAttachAddon()')
+
+  assert.notEqual(onDataStart, -1)
+  assert.notEqual(onDataEnd, -1)
+  assert.notEqual(transportCheck, -1)
+  assert.notEqual(passwordModeCheck, -1)
+  assert.notEqual(guardedTracking, -1)
+  assert.notEqual(passwordEventReturn, -1)
+  assert.notEqual(trackingRegistration, -1)
+  assert.notEqual(attachRegistration, -1)
+  assert.equal(trackingRegistration < attachRegistration, true)
+  assert.equal(passwordModeCheck < transportCheck, true)
+  assert.equal(transportCheck < guardedTracking, true)
+  assert.equal(guardedTracking < passwordEventReturn, true)
 })
 
 test('terminal command tracking no longer routes through the manual safety controller', () => {

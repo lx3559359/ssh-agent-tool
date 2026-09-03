@@ -511,11 +511,11 @@ function normalizeCapabilities (value) {
   return Object.freeze(Object.fromEntries(entries))
 }
 
-export function createNativeSftpFileBackend (sftp) {
+export function createNativeSftpFileBackend (sftp, runtimeIdentity = null) {
   if (!sftp) throw new Error('原生文件后端缺少 SFTP')
   return Object.freeze({
     channel: 'sftp',
-    runtimeIdentity: null,
+    runtimeIdentity,
     sftp,
     backend: sftp,
     release: async () => true

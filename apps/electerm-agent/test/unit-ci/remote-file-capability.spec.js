@@ -590,7 +590,11 @@ test('verified native root SFTP bypasses the managed PTY lease', async () => {
 
   assert.equal(statusReads, 1)
   assert.equal(capability.channel, 'sftp')
-  assert.equal(capability.runtimeIdentity, null)
+  assert.deepEqual(capability.runtimeIdentity, {
+    channel: 'sftp',
+    effectiveUid: '0',
+    effectiveUsername: 'root'
+  })
   assert.equal(terminal.acquireCount, 0)
   assert.equal(terminal.releaseCount, 0)
   assert.deepEqual(identities, [{
@@ -671,6 +675,11 @@ test('capability resolver releases PTY and uses native SFTP after exit root', as
   assert.equal(capability.channel, 'sftp')
   assert.equal(capability.backend, capability.sftp)
   assert.notEqual(capability.sftp, sftp)
+  assert.deepEqual(capability.runtimeIdentity, {
+    channel: 'sftp',
+    effectiveUid: 'unknown',
+    effectiveUsername: 'hik'
+  })
   assert.equal(terminal.owner(), '')
   assert.equal(terminal.releaseCount, 1)
   assert.deepEqual(identities, [{
@@ -694,7 +703,11 @@ test('native SFTP display identity comes from login binding, not the non-root sh
   })
 
   assert.equal(capability.channel, 'sftp')
-  assert.equal(capability.runtimeIdentity, null)
+  assert.deepEqual(capability.runtimeIdentity, {
+    channel: 'sftp',
+    effectiveUid: 'unknown',
+    effectiveUsername: 'root'
+  })
   assert.deepEqual(identities, [{
     loginUsername: 'root',
     effectiveUid: 'unknown',

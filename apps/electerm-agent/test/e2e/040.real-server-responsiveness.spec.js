@@ -1,4 +1,5 @@
 const path = require('node:path')
+const { pathToFileURL } = require('node:url')
 const { _electron: electron, expect, test } = require('@playwright/test')
 const {
   cleanupQualityApp,
@@ -22,6 +23,12 @@ const performanceBudgets = Object.freeze({
 })
 
 const internalTerminalPattern = /__sp_|SHELLPILOT_(?:FILE|OPS|TOKEN)/
+const remoteDirectoryCacheModuleUrl = pathToFileURL(path.resolve(
+  __dirname,
+  '../../src/client/components/sftp/remote-directory-cache.js'
+)).href
+
+let remoteDirectoryCacheModulePromise
 
 test.setTimeout(180000)
 test.describe.configure({ mode: 'serial' })
@@ -230,6 +237,126 @@ function latestMetric (summary, name) {
   return Number(summary?.metrics?.[name]?.latest)
 }
 
+async function buildProductionRemoteDirectoryCacheKey (identity) {
+  remoteDirectoryCacheModulePromise ||= import(
+    remoteDirectoryCacheModuleUrl
+  )
+  const { buildRemoteDirectoryCacheKey } =
+    await remoteDirectoryCacheModulePromise
+  return buildRemoteDirectoryCacheKey(identity)
+}
+
+async function remoteDirectoryCacheSnapshot (page, previousKey = '') {
+  const identity = await page.evaluate(() => {
+    const terminal = window.refs.get('term-' + window.store.activeTabId)
+    const entry = window.refs.get('sftp-' + window.store.activeTabId)
+    const endpoint = terminal?.getTerminalSafetyEndpoint?.() || {}
+    const remoteFileIdentity = entry?.state.remoteFileIdentity || {}
+    const sshSessionGeneration = String(entry?.sshSessionGeneration || '')
+    const sshTerminalPid = String(entry?.sshTerminalPid || '')
+    return {
+      cacheIdentity: {
+        sshSessionGeneration,
+        sshTerminalPid,
+        host: entry?.props.tab.host,
+        port: Number(entry?.props.tab.port || entry?.port || 22),
+        username: entry?.props.tab.username,
+        channel: remoteFileIdentity.channel || '',
+        effectiveUid: remoteFileIdentity.effectiveUid || '',
+        effectiveUsername: remoteFileIdentity.effectiveUsername || '',
+        path: entry?.state.remotePath || ''
+      },
+      sessionAligned: Boolean(
+        sshSessionGeneration &&
+        sshTerminalPid &&
+        sshSessionGeneration === String(endpoint.sshSessionGeneration || '') &&
+        sshTerminalPid === String(endpoint.sshTerminalPid || '')
+      ),
+      identityReady: Boolean(
+        remoteFileIdentity.channel &&
+        remoteFileIdentity.channel !== 'unknown' &&
+        String(remoteFileIdentity.effectiveUid || '').trim() &&
+        String(remoteFileIdentity.effectiveUsername || '').trim()
+      )
+    }
+  })
+  const key = await buildProductionRemoteDirectoryCacheKey(
+    identity.cacheIdentity
+  )
+  const cache = await page.evaluate(({ key, previousKey }) => {
+    const entry = window.refs.get('sftp-' + window.store.activeTabId)
+    if (typeof entry?.remoteDirectoryCache?.get !== 'function') {
+      throw new Error('Remote directory cache is unavailable')
+    }
+    return {
+      currentPresent: entry.remoteDirectoryCache.get(key) !== null,
+      previousPresent: previousKey
+        ? entry.remoteDirectoryCache.get(previousKey) !== null
+        : false
+    }
+  }, { key, previousKey })
+  return {
+    ...identity,
+    key,
+    ...cache
+  }
+}
+
+async function instrumentRemoteDirectoryOperations (page) {
+  await page.evaluate(() => {
+    const entry = window.refs.get('sftp-' + window.store.activeTabId)
+    if (!entry) throw new Error('SFTP entry is unavailable')
+    const counters = {
+      acquireCount: 0,
+      listCount: 0,
+      releaseCount: 0,
+      activeCapabilityCount: 0,
+      maxActiveCapabilityCount: 0
+    }
+    const acquireRemoteFileOperation = entry.acquireRemoteFileOperation
+    const sftpList = entry.sftpList
+    entry.acquireRemoteFileOperation = async (...args) => {
+      const capability = await acquireRemoteFileOperation(...args)
+      counters.acquireCount += 1
+      counters.activeCapabilityCount += 1
+      counters.maxActiveCapabilityCount = Math.max(
+        counters.maxActiveCapabilityCount,
+        counters.activeCapabilityCount
+      )
+      let releasePromise
+      return Object.freeze({
+        backend: capability.backend,
+        runtimeIdentity: capability.runtimeIdentity,
+        release: () => {
+          if (!releasePromise) {
+            releasePromise = Promise.resolve()
+              .then(() => capability.release())
+              .then(result => {
+                counters.releaseCount += 1
+                return result
+              })
+              .finally(() => {
+                counters.activeCapabilityCount -= 1
+              })
+          }
+          return releasePromise
+        }
+      })
+    }
+    entry.sftpList = async (...args) => {
+      counters.listCount += 1
+      return sftpList(...args)
+    }
+    window.__shellpilotResponsivenessRemoteListCounters = counters
+  })
+}
+
+async function remoteDirectoryOperationCounters (page) {
+  return page.evaluate(() => ({
+    ...window.__shellpilotResponsivenessRemoteListCounters
+  }))
+}
+
 async function openSftp (page) {
   const startedAt = Date.now()
   await page.locator(
@@ -279,18 +406,24 @@ async function refreshRemoteDirectory (page) {
     'sftp_refresh_ms'
   ), { timeout: 10000 }).toBeGreaterThan(beforeRefresh)
   const summary = await performanceSummary(page)
-  return page.evaluate(({ cachedPaintMs, refreshMs }) => {
+  const refresh = await page.evaluate(({ cachedPaintMs, refreshMs }) => {
     const entry = window.refs.get('sftp-' + window.store.activeTabId)
     return {
       cachedPaintMs,
       refreshMs,
-      itemCount: entry?.state.remote?.length || 0,
-      coalesced: entry?.remoteDirectoryCache?.stats?.().coalesced || 0
+      itemCount: entry?.state.remote?.length || 0
     }
   }, {
     cachedPaintMs: latestMetric(summary, 'sftp_cached_paint_ms'),
     refreshMs: latestMetric(summary, 'sftp_refresh_ms')
   })
+  const cache = await remoteDirectoryCacheSnapshot(page)
+  return {
+    ...refresh,
+    cachePresent: cache.currentPresent,
+    identityReady: cache.identityReady,
+    sessionAligned: cache.sessionAligned
+  }
 }
 
 function assertTerminalRecovered (state) {
@@ -420,6 +553,7 @@ test('round 2 - SFTP cache paints immediately and refreshes authoritatively', as
       performanceBudgets.firstSftpReadyMs
     )
 
+    await instrumentRemoteDirectoryOperations(page)
     const refreshes = []
     for (let round = 0; round < 3; round += 1) {
       const refresh = await refreshRemoteDirectory(page)
@@ -429,8 +563,19 @@ test('round 2 - SFTP cache paints immediately and refreshes authoritatively', as
       expect(refresh.refreshMs).toBeLessThanOrEqual(
         performanceBudgets.sftpRefreshMs
       )
+      expect(refresh.cachePresent).toBe(true)
+      expect(refresh.identityReady).toBe(true)
+      expect(refresh.sessionAligned).toBe(true)
       refreshes.push(refresh)
     }
+    const operationCounters = await remoteDirectoryOperationCounters(page)
+    expect(operationCounters).toEqual({
+      acquireCount: 3,
+      listCount: 3,
+      releaseCount: 3,
+      activeCapabilityCount: 0,
+      maxActiveCapabilityCount: 1
+    })
     assertTerminalRecovered(await terminalState(page))
     return {
       firstReadyMs,
@@ -438,7 +583,8 @@ test('round 2 - SFTP cache paints immediately and refreshes authoritatively', as
       cachedPaintMs: refreshes.map(item => item.cachedPaintMs),
       refreshMs: refreshes.map(item => item.refreshMs),
       itemCounts: refreshes.map(item => item.itemCount),
-      coalesced: refreshes.at(-1).coalesced
+      cachePresent: refreshes.map(item => item.cachePresent),
+      operationCounters
     }
   })
 
@@ -458,33 +604,12 @@ test('round 3 - cancellation reconnect and cache isolation stay usable', async (
   await withRealServer(config, async page => {
     await openSftp(page)
     await gotoRemotePath(page, config.remoteRoot)
-    const beforeReconnect = await page.evaluate(() => {
-      const terminal = window.refs.get('term-' + window.store.activeTabId)
-      const entry = window.refs.get('sftp-' + window.store.activeTabId)
-      const generation = terminal
-        .getTerminalSafetyEndpoint().sshSessionGeneration
-      const buildCacheKey = value => [
-        value,
-        entry.props.tab.host,
-        Number(entry.props.tab.port || entry.port || 22),
-        entry.props.tab.username,
-        entry.state.remoteFileIdentity?.channel || 'unknown',
-        entry.state.remoteFileIdentity?.effectiveUsername || '',
-        entry.state.remotePath
-      ].map(part => String(part || '')).join('\u0000')
-      const oldCacheKey = buildCacheKey(generation)
-      window.__shellpilotResponsivenessOldCacheKey = oldCacheKey
-      return {
-        generation,
-        generationAligned: generation === entry.sshSessionGeneration,
-        cacheEntries: entry.remoteDirectoryCache.stats().entries,
-        oldCachePresent: entry.remoteDirectoryCache.get(oldCacheKey) !== null
-      }
-    })
-    expect(beforeReconnect.generation).not.toBe('')
-    expect(beforeReconnect.generationAligned).toBe(true)
-    expect(beforeReconnect.cacheEntries).toBeGreaterThan(0)
-    expect(beforeReconnect.oldCachePresent).toBe(true)
+    const beforeReconnect = await remoteDirectoryCacheSnapshot(page)
+    expect(beforeReconnect.cacheIdentity.sshSessionGeneration).not.toBe('')
+    expect(beforeReconnect.cacheIdentity.sshTerminalPid).not.toBe('')
+    expect(beforeReconnect.sessionAligned).toBe(true)
+    expect(beforeReconnect.identityReady).toBe(true)
+    expect(beforeReconnect.currentPresent).toBe(true)
 
     await page.locator(
       '.session-current .term-sftp-tabs .type-tab:visible'
@@ -631,39 +756,21 @@ test('round 3 - cancellation reconnect and cache isolation stay usable', async (
       const state = await terminalState(page)
       return state.ready &&
         state.sshSessionGeneration &&
-        state.sshSessionGeneration !== beforeReconnect.generation
+        state.sshSessionGeneration !==
+          beforeReconnect.cacheIdentity.sshSessionGeneration
     }, { timeout: 30000 }).toBe(true)
 
     await openSftp(page)
     await gotoRemotePath(page, config.remoteRoot)
-    const cacheIsolation = await page.evaluate(() => {
-      const terminal = window.refs.get('term-' + window.store.activeTabId)
-      const entry = window.refs.get('sftp-' + window.store.activeTabId)
-      const generation = terminal
-        .getTerminalSafetyEndpoint().sshSessionGeneration
-      const newCacheKey = [
-        generation,
-        entry.props.tab.host,
-        Number(entry.props.tab.port || entry.port || 22),
-        entry.props.tab.username,
-        entry.state.remoteFileIdentity?.channel || 'unknown',
-        entry.state.remoteFileIdentity?.effectiveUsername || '',
-        entry.state.remotePath
-      ].map(part => String(part || '')).join('\u0000')
-      const oldCacheKey = window.__shellpilotResponsivenessOldCacheKey
-      return {
-        generationAligned: generation === entry.sshSessionGeneration,
-        keysDiffer: oldCacheKey !== newCacheKey,
-        oldCachePresent: entry.remoteDirectoryCache.get(oldCacheKey) !== null,
-        newCachePresent: entry.remoteDirectoryCache.get(newCacheKey) !== null
-      }
-    })
-    expect(cacheIsolation).toEqual({
-      generationAligned: true,
-      keysDiffer: true,
-      oldCachePresent: false,
-      newCachePresent: true
-    })
+    const cacheIsolation = await remoteDirectoryCacheSnapshot(
+      page,
+      beforeReconnect.key
+    )
+    expect(cacheIsolation.sessionAligned).toBe(true)
+    expect(cacheIsolation.identityReady).toBe(true)
+    expect(cacheIsolation.key).not.toBe(beforeReconnect.key)
+    expect(cacheIsolation.previousPresent).toBe(false)
+    expect(cacheIsolation.currentPresent).toBe(true)
     await page.locator(
       '.session-current .term-sftp-tabs .type-tab:visible'
     ).first().click()

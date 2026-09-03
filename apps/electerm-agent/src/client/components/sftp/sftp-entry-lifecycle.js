@@ -1,5 +1,9 @@
 import resolve from '../../common/resolve.js'
 import normalizeRemotePath from '../../common/normalize-remote-path.js'
+import {
+  appendRemoteFileCleanupErrors,
+  containsUncertainRemoteFileTeardownError
+} from './remote-file-errors.js'
 
 const TIMER_KEYS = ['timer', 'timer4', 'timer5', 'retryHandler']
 const DEBOUNCE_KEYS = ['remoteListDebounce', 'localListDebounce']
@@ -45,6 +49,28 @@ export function initializeSftpEntryReadiness (entry) {
   }
   SFTP_ENTRY_READINESS.set(entry, readiness)
   return readiness
+}
+
+export function invalidateSftpEntryRemoteSnapshot (entry, options = {}) {
+  if (options.clearCache !== false) entry.remoteDirectoryCache?.clear?.()
+  entry.remoteDirectoryCachePaintEpoch =
+    (entry.remoteDirectoryCachePaintEpoch || 0) + 1
+  entry.visibleRemoteDirectoryCacheKey = ''
+  if (options.clearVisible === false || typeof entry.setState !== 'function') {
+    return false
+  }
+  const remoteLoading = options.remoteLoading === true
+  entry.setState({
+    remote: [],
+    remoteFileTree: new Map(),
+    selectedFiles: new Set(),
+    lastClickedFile: null,
+    onEditFile: false,
+    remoteLoading,
+    remoteRefreshState: remoteLoading ? 'refreshing' : 'idle',
+    remoteRefreshError: ''
+  })
+  return true
 }
 
 function trackSftpEntryPromise (entry, key, operation) {
@@ -145,20 +171,9 @@ function invalidateSftpEntryCommittedReadiness (entry) {
   readiness.firstReadyCommitted = false
 }
 
-function safeDirectoryRequestCount (entry) {
-  try {
-    return Math.max(0, Number(
-      entry.remoteDirectoryCache?.stats?.()?.inflight || 0
-    ))
-  } catch {
-    return 0
-  }
-}
-
 export function getSftpEntryReadinessSnapshot (entry) {
   const readiness = initializeSftpEntryReadiness(entry)
   const refreshState = String(entry.state?.remoteRefreshState || '')
-  const directoryRequestCount = safeDirectoryRequestCount(entry)
   const remoteFileSettlementCount = Math.max(0, Number(
     entry.remoteFileGeneration?.settlements?.size ||
     entry.remoteFileOperationSettlements?.size || 0
@@ -175,7 +190,6 @@ export function getSftpEntryReadinessSnapshot (entry) {
     backgroundTaskCount: readiness.backgroundTasks.size,
     renderCommitCount: readiness.renderCommits.size,
     metricTaskCount: readiness.metricTasks.size,
-    directoryRequestCount,
     requestEpoch: Number(entry.sftpRemoteRequestEpoch || 0),
     visibleRemoteCommitted: readiness.visibleRemoteCommitted,
     firstReadyCommitted: readiness.firstReadyCommitted
@@ -195,8 +209,7 @@ export function getSftpEntryReadinessSnapshot (entry) {
       snapshot.metricTaskCount === 0 &&
       remoteFileSettlementCount === 0 &&
       activeRemoteFileLeaseCount === 0 &&
-      uncertainRemoteFileLeaseCount === 0 &&
-      snapshot.directoryRequestCount === 0
+      uncertainRemoteFileLeaseCount === 0
   })
 }
 
@@ -321,22 +334,8 @@ export function destroySftpEntryClientOnce (entry, client) {
   return disposal
 }
 
-function containsUncertainTeardownError (error, visited = new Set()) {
-  if (!error || visited.has(error)) return false
-  if (error?.code === 'TEARDOWN_TIMEOUT' || error?.uncertain === true) {
-    return true
-  }
-  if (typeof error !== 'object' && typeof error !== 'function') return false
-  visited.add(error)
-  const nestedErrors = [
-    ...(Array.isArray(error.errors) ? error.errors : []),
-    ...(Array.isArray(error.cleanupErrors) ? error.cleanupErrors : []),
-    error.releaseError,
-    error.cause
-  ]
-  return nestedErrors.some(nestedError => (
-    containsUncertainTeardownError(nestedError, visited)
-  ))
+function containsUncertainTeardownError (error) {
+  return containsUncertainRemoteFileTeardownError(error)
 }
 
 function nextEpoch (value) {
@@ -400,14 +399,17 @@ export function activateRemoteFileGeneration (entry, generation) {
 
 function preserveSettlementErrors (errors) {
   const primaryError = errors[0]
-  if (primaryError && errors.length > 1 && Object.isExtensible(primaryError)) {
-    const existing = Array.isArray(primaryError.cleanupErrors)
-      ? primaryError.cleanupErrors
-      : []
-    primaryError.cleanupErrors = Object.freeze([
-      ...existing,
-      ...errors.slice(1)
-    ])
+  if (primaryError && errors.length > 1) {
+    const secondaryErrors = []
+    for (let index = 1;
+      index < errors.length && secondaryErrors.length < 8;
+      index += 1) {
+      secondaryErrors.push(errors[index])
+    }
+    return appendRemoteFileCleanupErrors(
+      primaryError,
+      secondaryErrors
+    ).error
   }
   return primaryError
 }
@@ -617,7 +619,7 @@ export function disposeSftpEntryClient (entry) {
 }
 
 export async function reconnectSftpEntryRemote (entry) {
-  entry.remoteDirectoryCache?.clear?.()
+  invalidateSftpEntryRemoteSnapshot(entry, { remoteLoading: true })
   const drain = drainRemoteFileGeneration(entry)
   await drain.promise
   if (!activateRemoteFileGeneration(entry, drain.generation)) return undefined
@@ -636,7 +638,7 @@ async function prepareSftpEntryRemoteSessionBinding (entry, binding = {}) {
     String(entry.sshSessionGeneration || '').trim() !== nextGeneration ||
     String(entry.sshTerminalPid || '').trim() !== nextTerminalPid
   if (terminalSessionChanged) {
-    entry.remoteDirectoryCache?.clear?.()
+    invalidateSftpEntryRemoteSnapshot(entry, { remoteLoading: false })
   }
   const drain = drainRemoteFileGeneration(entry)
   await drain.promise

@@ -402,10 +402,27 @@ async function sftpCleanupSnapshot (page) {
       entry?.state.remoteLoading === false &&
       !['refreshing', 'cached-refreshing'].includes(refreshState)
     )
-    const generationLeaseCount = Number(
+    const generationCapabilityCount = Number(
       entry?.remoteFileGeneration?.capabilities?.size || 0
     )
-    const legacyLeaseCount = Number(entry?.remoteFileOperations?.size || 0)
+    const legacyCapabilityCount = Number(
+      entry?.remoteFileOperations?.size || 0
+    )
+    const generationSettlementCount = Number(
+      entry?.remoteFileGeneration?.settlements?.size || 0
+    )
+    const legacySettlementCount = Number(
+      entry?.remoteFileOperationSettlements?.size || 0
+    )
+    const capabilityCount = Math.max(
+      generationCapabilityCount,
+      legacyCapabilityCount
+    )
+    const settlementCount = Math.max(
+      generationSettlementCount,
+      legacySettlementCount
+    )
+    const remoteFileIdentity = entry?.state.remoteFileIdentity || {}
     const suppressionBufferCount = Number(addon?.suppressedData?.length || 0) +
       Number(String(addon?.suppressionReleaseMarker || '').length) +
       Number(String(addon?.suppressionScanText || '').length) +
@@ -425,9 +442,17 @@ async function sftpCleanupSnapshot (page) {
       backgroundTaskCount: Number(readiness.backgroundTaskCount || 0),
       renderCommitCount: Number(readiness.renderCommitCount || 0),
       metricTaskCount: Number(readiness.metricTaskCount || 0),
-      directoryRequestCount: Number(readiness.directoryRequestCount || 0),
       requestEpoch: Number(readiness.requestEpoch || 0),
-      activeLeaseCount: Math.max(generationLeaseCount, legacyLeaseCount),
+      identityReady: Boolean(
+        remoteFileIdentity.channel &&
+        remoteFileIdentity.channel !== 'unknown' &&
+        String(remoteFileIdentity.effectiveUid || '').trim() &&
+        String(remoteFileIdentity.effectiveUsername || '').trim()
+      ),
+      remoteFileStatus: String(entry?.state.remoteFileStatus || ''),
+      capabilityCount,
+      settlementCount,
+      managedOperationCount: capabilityCount + settlementCount,
       authoritativeActiveLeaseCount: Number(
         entry?.activeRemoteFileLeases?.size || 0
       ),
@@ -438,7 +463,10 @@ async function sftpCleanupSnapshot (page) {
         addon?.managedPtyOutputStreamingActive
       ),
       suppressionBufferCount,
-      pendingInputCount: Number(addon?.pendingInput?.length || 0)
+      pendingInputCount: Number(addon?.pendingInput?.length || 0),
+      expectedSubmissionCount: Number(
+        terminal?.cmdAddon?._expectedSubmissions?.length || 0
+      )
     }
   })
 }
@@ -452,16 +480,22 @@ function isSftpCleanupSnapshot (snapshot) {
     snapshot.visibleRemoteCommitted === true &&
     snapshot.firstReadyCommitted === true &&
     snapshot.explicitOpenPending === false &&
+    snapshot.sessionBindingPending === false &&
     snapshot.backgroundTaskCount === 0 &&
     snapshot.renderCommitCount === 0 &&
     snapshot.metricTaskCount === 0 &&
-    snapshot.directoryRequestCount === 0 &&
-    snapshot.activeLeaseCount === 0 &&
+    snapshot.requestEpoch > 0 &&
+    snapshot.identityReady === true &&
+    snapshot.remoteFileStatus === 'idle' &&
+    snapshot.managedOperationCount === 0 &&
+    snapshot.capabilityCount === 0 &&
+    snapshot.settlementCount === 0 &&
     snapshot.authoritativeActiveLeaseCount === 0 &&
     snapshot.uncertainLeaseCount === 0 &&
     snapshot.outputSuppressed === false &&
     snapshot.suppressionBufferCount === 0 &&
-    snapshot.pendingInputCount === 0
+    snapshot.pendingInputCount === 0 &&
+    snapshot.expectedSubmissionCount === 0
   )
 }
 
@@ -489,13 +523,18 @@ function expectSftpCleanupSnapshot (snapshot) {
   expect(snapshot.backgroundTaskCount).toBe(0)
   expect(snapshot.renderCommitCount).toBe(0)
   expect(snapshot.metricTaskCount).toBe(0)
-  expect(snapshot.directoryRequestCount).toBe(0)
-  expect(snapshot.activeLeaseCount).toBe(0)
+  expect(snapshot.requestEpoch).toBeGreaterThan(0)
+  expect(snapshot.identityReady).toBe(true)
+  expect(snapshot.remoteFileStatus).toBe('idle')
+  expect(snapshot.managedOperationCount).toBe(0)
+  expect(snapshot.capabilityCount).toBe(0)
+  expect(snapshot.settlementCount).toBe(0)
   expect(snapshot.authoritativeActiveLeaseCount).toBe(0)
   expect(snapshot.uncertainLeaseCount).toBe(0)
   expect(snapshot.outputSuppressed).toBe(false)
   expect(snapshot.suppressionBufferCount).toBe(0)
   expect(snapshot.pendingInputCount).toBe(0)
+  expect(snapshot.expectedSubmissionCount).toBe(0)
 }
 
 test.describe('secondary VPS cleanup contracts', () => {

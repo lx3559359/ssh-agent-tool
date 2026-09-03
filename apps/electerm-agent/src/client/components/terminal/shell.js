@@ -86,6 +86,7 @@ function getBashInlineIntegration (sessionNonce) {
     '__e_cmd() { local c="$?"; [[ "${__e_in:-0}" == "1" ]] && { printf \'\\e]633;D;%s;%s\\a\' "$__e_nonce" "$c"; __e_in=0; }; __e_prompting=1; [[ -n "$__e_old_prompt_command" ]] && builtin eval "$__e_old_prompt_command"; __e_prompting=0; printf \'\\e]633;P;%s;Cwd=%s\\a\\e]633;A;%s\\a\' "$__e_nonce" "$(__e_esc "$PWD")" "$__e_nonce"; return "$c"; }',
     'trap \'__e_pre\' DEBUG',
     'PROMPT_COMMAND="__e_cmd"',
+    'export -n PROMPT_COMMAND',
     'PS1="${PS1}\\[\\e]633;B;${__e_nonce}\\a\\]"',
     'fi',
     'fi'
