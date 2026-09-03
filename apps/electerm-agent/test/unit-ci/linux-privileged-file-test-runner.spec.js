@@ -59,7 +59,6 @@ test('runs only the privileged protocol spec with the current Node executable', 
     cwd: appRoot,
     platform: 'linux',
     getuid: () => 0,
-    nodePath: process.execPath,
     spawn: (...args) => {
       calls.push(args)
       return { status: 0 }
