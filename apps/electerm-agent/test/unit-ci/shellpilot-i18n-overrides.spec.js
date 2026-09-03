@@ -425,6 +425,10 @@ test('provides exact bilingual core runtime feedback copy', async () => {
     shellpilotUpdateCheckFailed: [
       '检查更新失败，请稍后重试。',
       'Unable to check for updates. Try again later.'
+    ],
+    shellpilotUpdateChecking: [
+      '正在检查更新',
+      'Checking for updates'
     ]
   }
 

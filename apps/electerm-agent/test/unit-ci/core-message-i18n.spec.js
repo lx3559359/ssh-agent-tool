@@ -10,24 +10,19 @@ const sources = {
   upgrade: fs.readFileSync(path.join(componentRoot, 'main/upgrade.jsx'), 'utf8')
 }
 
-function countMatches (source, pattern) {
-  return [...source.matchAll(pattern)].length
-}
-
 test('core runtime feedback uses the required translation keys', () => {
   assert.match(sources.sftp, /message\.warning\(e\('shellpilotSftpSelectRemoteTargets'\)\)/)
-  assert.match(sources.sftp, /\? e\('shellpilotSftpBackupUncertain'\)\s*: e\('shellpilotSftpBackupFailedUnchanged'\)/)
+  assert.match(sources.sftp, /message\.error\(\s*err\?\.code === 'REMOTE_FILE_RECOVERY_UNCERTAIN'\s*\? e\('shellpilotSftpBackupUncertain'\)\s*: e\('shellpilotSftpBackupFailedUnchanged'\)\s*\)/)
   assert.match(sources.sftp, /message\.warning\(formatShellPilotTranslation\(e, 'shellpilotSftpReconnectBeforeRestore', \{\s*host: record\.host\s*\}\)\)/)
-  assert.match(sources.sftp, /\? e\('shellpilotSftpRestoreUncertain'\)\s*: e\('shellpilotSftpRestoreFailedVerify'\)/)
+  assert.match(sources.sftp, /message\.error\(\s*err\?\.code === 'REMOTE_FILE_RECOVERY_UNCERTAIN'\s*\? e\('shellpilotSftpRestoreUncertain'\)\s*: e\('shellpilotSftpRestoreFailedVerify'\)\s*\)/)
   assert.match(sources.sftp, /message\.success\(e\('shellpilotSftpRestoreCompletedPreserved'\)\)/)
   assert.match(sources.sftp, /message\.info\(e\('shellpilotSftpNoRecoveryRecord'\)\)/)
 
   assert.match(sources.terminal, /cd = \(p\) => \{\s*if \(isUnsafeFilename\(p\)\) \{\s*return message\.error\(e\('shellpilotTerminalUnsafeFilename'\)\)/)
   assert.match(sources.terminal, /const notSafeMsg = e\('shellpilotTerminalUnsafeFilename'\)/)
-  assert.equal(
-    countMatches(sources.terminal, /message\.warning\(e\('shellpilotTerminalTransferInProgress'\)\)/g),
-    3
-  )
+  assert.match(sources.terminal, /case 'trz':\s*\{\s*if \(this\.trzszClient && this\.trzszClient\.isActive\) \{\s*message\.warning\(e\('shellpilotTerminalTransferInProgress'\)\)/)
+  assert.match(sources.terminal, /case 'rz':\s*\{\s*if \(this\.zmodemClient && this\.zmodemClient\.isActive\) \{\s*message\.warning\(e\('shellpilotTerminalTransferInProgress'\)\)/)
+  assert.match(sources.terminal, /case 'xmodem':\s*\{\s*if \(this\.xmodemClient && this\.xmodemClient\.isActive\) \{\s*message\.warning\(e\('shellpilotTerminalTransferInProgress'\)\)/)
 
   assert.match(sources.upgrade, /checked\.message \|\| e\('shellpilotUpdateUnavailableOnline'\)/)
   assert.match(sources.upgrade, /downloadState\.message \|\| e\('shellpilotUpdateDownloadUnavailable'\)/)
