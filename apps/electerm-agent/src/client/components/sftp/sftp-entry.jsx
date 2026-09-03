@@ -1971,7 +1971,7 @@ export default class Sftp extends Component {
   quickBackupRemoteFiles = async (files = this.getSelectedFiles(), options = {}) => {
     const targets = this.getRemoteSafetyTargets(files)
     if (!targets.length) {
-      if (!options.silent) message.warning('请先在远程 SFTP 面板选择文件或文件夹。')
+      if (!options.silent) message.warning(e('shellpilotSftpSelectRemoteTargets'))
       return false
     }
     try {
@@ -2054,8 +2054,8 @@ export default class Sftp extends Component {
       window.store.onError(err)
       if (!options.silent) {
         message.error(err?.code === 'REMOTE_FILE_RECOVERY_UNCERTAIN'
-          ? '远端备份可能已完成，但恢复记录未能持久化；请先核对再继续。'
-          : 'SFTP 备份失败，原文件未改动。')
+          ? e('shellpilotSftpBackupUncertain')
+          : e('shellpilotSftpBackupFailedUnchanged'))
       }
       return false
     }
@@ -2074,7 +2074,9 @@ export default class Sftp extends Component {
     const { requiresRoot } = assertSftpRecoveryIdentityProvenance(record)
     if (!requiresRoot &&
       !matchesSafetyOperationEndpoint(record, this.props.tab || {}, true)) {
-      message.warning(`请先连接服务器 ${record.host} 后再恢复。`)
+      message.warning(formatShellPilotTranslation(e, 'shellpilotSftpReconnectBeforeRestore', {
+        host: record.host
+      }))
       return false
     }
     let restored
@@ -2269,8 +2271,8 @@ export default class Sftp extends Component {
       }
       window.store.onError(err)
       message.error(err?.code === 'REMOTE_FILE_RECOVERY_UNCERTAIN'
-        ? '恢复结果不确定；恢复前内容可能位于记录的 displaced 路径，请在安全中心核对。'
-        : '恢复失败；远端内容未宣告安全，请在重试前核对恢复记录。')
+        ? e('shellpilotSftpRestoreUncertain')
+        : e('shellpilotSftpRestoreFailedVerify'))
       return false
     }
     try {
@@ -2280,7 +2282,7 @@ export default class Sftp extends Component {
         window.store.onError(error)
       }
     }
-    message.success('恢复完成；恢复前的当前内容也已另行保留。')
+    message.success(e('shellpilotSftpRestoreCompletedPreserved'))
     return Boolean(restored)
   }
 
@@ -2291,7 +2293,7 @@ export default class Sftp extends Component {
       this.props.tab?.id
     )
     if (!record) {
-      message.info('当前文件没有可用的备份或安全删除记录。')
+      message.info(e('shellpilotSftpNoRecoveryRecord'))
       return false
     }
     return this.restoreSftpRecord(record)

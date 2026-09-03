@@ -358,3 +358,78 @@ test('provides bilingual SFTP terminal outcome copy', async () => {
     assert.equal(getShellPilotTranslation(key, 'en_us'), english)
   }
 })
+
+test('provides exact bilingual core runtime feedback copy', async () => {
+  const { getShellPilotTranslation } = await import(moduleUrl)
+  const expected = {
+    shellpilotSftpSelectRemoteTargets: [
+      '请先在远程 SFTP 面板选择文件或文件夹。',
+      'Select files or folders in the remote SFTP panel first.'
+    ],
+    shellpilotSftpBackupUncertain: [
+      '远端备份可能已完成，但恢复记录未能持久化；请先核对再继续。',
+      'The remote backup may have completed, but its recovery record could not be saved. Verify it before continuing.'
+    ],
+    shellpilotSftpBackupFailedUnchanged: [
+      'SFTP 备份失败，原文件未改动。',
+      'SFTP backup failed. The original files were not changed.'
+    ],
+    shellpilotSftpReconnectBeforeRestore: [
+      '请先连接服务器 {host} 后再恢复。',
+      'Connect to {host} before restoring.'
+    ],
+    shellpilotSftpRestoreUncertain: [
+      '恢复结果不确定；恢复前内容可能位于记录的 displaced 路径，请在安全中心核对。',
+      'The restore result is uncertain. The pre-restore content may be at the displaced path in the record; review it in the Safety Center.'
+    ],
+    shellpilotSftpRestoreFailedVerify: [
+      '恢复失败；远端内容未宣告安全，请在重试前核对恢复记录。',
+      'Restore failed. The remote content is not declared safe; review the recovery record before retrying.'
+    ],
+    shellpilotSftpRestoreCompletedPreserved: [
+      '恢复完成；恢复前的当前内容也已另行保留。',
+      'Restore completed. The content that existed before the restore was also preserved.'
+    ],
+    shellpilotSftpNoRecoveryRecord: [
+      '当前文件没有可用的备份或安全删除记录。',
+      'No backup or safe-delete record is available for this file.'
+    ],
+    shellpilotTerminalUnsafeFilename: [
+      '文件名包含不安全字符',
+      'The file name contains unsafe characters'
+    ],
+    shellpilotTerminalTransferInProgress: [
+      '已有传输任务正在进行',
+      'A transfer is already in progress'
+    ],
+    shellpilotUpdateUnavailableOnline: [
+      '当前版本暂时不能在线更新。',
+      'This version cannot be updated online right now.'
+    ],
+    shellpilotUpdateDownloadUnavailable: [
+      '该版本暂时不能在线更新。',
+      'This update cannot be downloaded online right now.'
+    ],
+    shellpilotUpdateDownloadIncomplete: [
+      '更新文件尚未下载完成，请稍后重试。',
+      'The update has not finished downloading. Try again later.'
+    ],
+    shellpilotUpdateDownloadedRestart: [
+      '更新已下载完成，重启客户端即可完成更新。',
+      'The update has downloaded. Restart the client to finish installing it.'
+    ],
+    shellpilotUpdateOnlineFailed: [
+      '在线更新失败，请稍后重试。',
+      'Online update failed. Try again later.'
+    ],
+    shellpilotUpdateCheckFailed: [
+      '检查更新失败，请稍后重试。',
+      'Unable to check for updates. Try again later.'
+    ]
+  }
+
+  for (const [key, [chinese, english]] of Object.entries(expected)) {
+    assert.equal(getShellPilotTranslation(key, 'zh_cn'), chinese)
+    assert.equal(getShellPilotTranslation(key, 'en_us'), english)
+  }
+})

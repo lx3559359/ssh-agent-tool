@@ -617,16 +617,16 @@ class Term extends Component {
 
   cd = (p) => {
     if (isUnsafeFilename(p)) {
-      return message.error('File name contains unsafe characters')
+      return message.error(e('shellpilotTerminalUnsafeFilename'))
     }
     const isWinPath = /^[a-zA-Z]:\\/.test(p)
     this.runQuickCommand(isWinPath ? `cd /d "${p}"` : `cd "${p}"`)
   }
 
-  onDrop = e => {
-    const dt = e.dataTransfer
+  onDrop = event => {
+    const dt = event.dataTransfer
     const fromFile = dt.getData('fromFile')
-    const notSafeMsg = 'File name contains unsafe characters'
+    const notSafeMsg = e('shellpilotTerminalUnsafeFilename')
     const isSshTerminal = this.props.tab.type === connectionMap.ssh
     const isSerialTerminal = this.props.tab.type === connectionMap.serial
 
@@ -732,7 +732,7 @@ class Term extends Component {
     switch (action) {
       case 'trz': {
         if (this.trzszClient && this.trzszClient.isActive) {
-          message.warning('A transfer is already in progress')
+          message.warning(e('shellpilotTerminalTransferInProgress'))
           this.handleDropFileModalCancel()
           return
         }
@@ -742,7 +742,7 @@ class Term extends Component {
       }
       case 'rz':{
         if (this.zmodemClient && this.zmodemClient.isActive) {
-          message.warning('A transfer is already in progress')
+          message.warning(e('shellpilotTerminalTransferInProgress'))
           this.handleDropFileModalCancel()
           return
         }
@@ -752,7 +752,7 @@ class Term extends Component {
       }
       case 'xmodem': {
         if (this.xmodemClient && this.xmodemClient.isActive) {
-          message.warning('A transfer is already in progress')
+          message.warning(e('shellpilotTerminalTransferInProgress'))
           this.handleDropFileModalCancel()
           return
         }

@@ -141,7 +141,7 @@ export default class Upgrade extends PureComponent {
           upgrading: false,
           upgradePercent: 0
         })
-        this.showNoUpdateInfo(checked.message || '当前版本暂时不能在线更新。', 'warning')
+        this.showNoUpdateInfo(checked.message || e('shellpilotUpdateUnavailableOnline'), 'warning')
         return
       }
       this.trackNativeUpdateProgress()
@@ -156,27 +156,27 @@ export default class Upgrade extends PureComponent {
           upgrading: false,
           upgradePercent: 0,
           upgradeReady: false,
-          error: downloadState.message || '该版本暂时不能在线更新。'
+          error: downloadState.message || e('shellpilotUpdateDownloadUnavailable')
         })
         return
       }
       const finalState = await window.pre.runGlobalAsync('nativeUpdateState')
       this.clearNativeUpdatePoll()
       if (!finalState?.downloaded) {
-        throw new Error(finalState?.error || '更新文件尚未下载完成，请稍后重试。')
+        throw new Error(finalState?.error || e('shellpilotUpdateDownloadIncomplete'))
       }
       this.changeProps({
         upgrading: false,
         upgradePercent: finalState?.percent || 100,
         upgradeReady: Boolean(finalState?.downloaded)
       })
-      message.success('更新已下载完成，重启客户端即可完成更新。')
+      message.success(e('shellpilotUpdateDownloadedRestart'))
     } catch (err) {
       this.clearNativeUpdatePoll()
       this.changeProps({
         upgrading: false,
         upgradePercent: 0,
-        error: err?.message || '在线更新失败，请稍后重试。'
+        error: err?.message || e('shellpilotUpdateOnlineFailed')
       })
     }
   }, 100)
@@ -246,7 +246,7 @@ export default class Upgrade extends PureComponent {
       })
       return
     }
-    const checkingMessage = isManual ? message.info('正在检查更新...', 0) : null
+    const checkingMessage = isManual ? message.info(e('shellpilotUpdateChecking'), 0) : null
     this.changeProps({
       checkingRemoteVersion: true,
       error: ''
@@ -255,7 +255,7 @@ export default class Upgrade extends PureComponent {
     try {
       releaseStatus = await getLatestReleaseStatus()
     } catch (err) {
-      const errorMessage = err?.message || '检查更新失败，请稍后重试。'
+      const errorMessage = err?.message || e('shellpilotUpdateCheckFailed')
       checkingMessage?.destroy()
       this.changeProps({
         checkingRemoteVersion: false,

@@ -19,7 +19,7 @@ test('manual update checks show visible toast feedback from the top bar', () => 
     'utf8'
   )
 
-  assert.match(upgradeSource, /message\.info\('正在检查更新/)
+  assert.match(upgradeSource, /message\.info\(e\('shellpilotUpdateChecking'\), 0\)/)
   assert.match(upgradeSource, /message\.success\(text/)
   assert.match(upgradeSource, /message\.warning\(text/)
   assert.match(upgradeSource, /message\.error\(text/)
