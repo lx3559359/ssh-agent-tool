@@ -636,6 +636,113 @@ describe('session-sftp transport flows', () => {
     assert.equal(chownCalls, 1)
   })
 
+  test('digestFile hashes a bounded remote file in one streamed pass', async t => {
+    const sftp = Object.create(Sftp.prototype)
+    const content = createPatternBuffer(180000)
+    const localRoot = makeTmpDir()
+    const localFile = path.join(localRoot, 'source.bin')
+    fs.writeFileSync(localFile, content)
+    t.after(() => fs.rmSync(localRoot, { recursive: true, force: true }))
+    const { describeTransferEntry } = require(
+      '../../src/app/lib/local-transfer-source-plan'
+    )
+    const expected = await describeTransferEntry(localFile)
+    let streamCount = 0
+    sftp.lstat = async remotePath => {
+      assert.equal(remotePath, '/source.bin')
+      return {
+        mode: 0o100640,
+        size: content.length,
+        uid: 1000,
+        gid: 1000,
+        isDirectory: () => false,
+        isFile: () => true
+      }
+    }
+    sftp.sftp = {
+      createReadStream (remotePath) {
+        assert.equal(remotePath, '/source.bin')
+        streamCount += 1
+        return Readable.from([
+          content.subarray(0, 7),
+          content.subarray(7)
+        ])
+      }
+    }
+
+    const result = await sftp.digestFile('/source.bin', {
+      expectedSize: content.length
+    })
+
+    assert.deepEqual(result, {
+      size: content.length,
+      digest: expected.digest,
+      digestAlgorithm: expected.digestAlgorithm
+    })
+    assert.equal(streamCount, 1)
+  })
+
+  test('digestFile aborts an in-flight remote stream', async () => {
+    const sftp = Object.create(Sftp.prototype)
+    const controller = new AbortController()
+    let reportReadStarted
+    const readStarted = new Promise(resolve => { reportReadStarted = resolve })
+    const stream = new Readable({
+      read () {
+        reportReadStarted()
+      }
+    })
+    sftp.lstat = async () => ({
+      mode: 0o100640,
+      size: 1,
+      uid: 1000,
+      gid: 1000,
+      isDirectory: () => false,
+      isFile: () => true
+    })
+    sftp.sftp = { createReadStream: () => stream }
+
+    const digesting = sftp.digestFile('/source.bin', {
+      expectedSize: 1,
+      signal: controller.signal
+    })
+    await readStarted
+    controller.abort()
+
+    await assert.rejects(digesting, error => error?.name === 'AbortError')
+    assert.equal(stream.destroyed, true)
+  })
+
+  test('digestFile rejects invalid bounds and changed stream sizes', async () => {
+    const sftp = Object.create(Sftp.prototype)
+    let streamCount = 0
+    sftp.lstat = async () => ({
+      mode: 0o100640,
+      size: 3,
+      uid: 1000,
+      gid: 1000,
+      isDirectory: () => false,
+      isFile: () => true
+    })
+    sftp.sftp = {
+      createReadStream () {
+        streamCount += 1
+        return Readable.from([Buffer.from('ab')])
+      }
+    }
+
+    await assert.rejects(
+      sftp.digestFile('/source.bin', { expectedSize: '3' }),
+      /大小无效/
+    )
+    assert.equal(streamCount, 0)
+    await assert.rejects(
+      sftp.digestFile('/source.bin', { expectedSize: 3 }),
+      /摘要期间大小发生变化/
+    )
+    assert.equal(streamCount, 1)
+  })
+
   test('copy cleanup trusts only authoritative missing status codes', async () => {
     const sftp = Object.create(Sftp.prototype)
     sftp.copySftpEntryWithinBudget = async (from, to, options) => {

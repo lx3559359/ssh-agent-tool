@@ -3,7 +3,6 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
-const { createHash } = require('node:crypto')
 const { pathToFileURL } = require('node:url')
 const parser = require('@babel/parser')
 const traverse = require('@babel/traverse').default
@@ -1513,7 +1512,13 @@ test('SFTP bounded digest prefers one authoritative remote proof', async () => {
     '../../src/client/components/sftp/sftp-transaction-adapter.js'
   )).href)
   const content = Buffer.alloc(32 * 1024 * 1024, 7)
-  const expectedDigest = createHash('sha256').update(content).digest('hex')
+  const expected = await digestRemoteFile(
+    createFakeSftp({
+      '/srv/app/big.bin': { type: 'file', content }
+    }),
+    '/srv/app/big.bin',
+    content.length
+  )
   const calls = []
   const progress = []
   const sftp = {
@@ -1521,8 +1526,8 @@ test('SFTP bounded digest prefers one authoritative remote proof', async () => {
       calls.push([remotePath, options])
       return {
         size: content.length,
-        digest: expectedDigest,
-        digestAlgorithm: 'SHA-256'
+        digest: expected.digest,
+        digestAlgorithm: expected.digestAlgorithm
       }
     },
     async readFileChunk () {
@@ -1539,8 +1544,8 @@ test('SFTP bounded digest prefers one authoritative remote proof', async () => {
   )
   assert.deepEqual(result, {
     size: content.length,
-    digest: expectedDigest,
-    digestAlgorithm: 'SHA-256'
+    digest: expected.digest,
+    digestAlgorithm: expected.digestAlgorithm
   })
   assert.equal(calls.length, 1)
   assert.equal(calls[0][0], '/srv/app/big.bin')
@@ -1636,6 +1641,65 @@ test('SFTP delete reuses only an execution proof bound to the same recovery', as
   assert.equal(sftp.calls.filter(call => (
     call[0] === 'readFileChunk' && call[1] === resource.snapshotPath
   )).length, snapshotReadsBeforeVerify)
+  assert.equal(sftp.exists(resource.path), false)
+})
+
+test('SFTP delete revalidates source and snapshot concurrently before mutation', async () => {
+  const { createSftpTransactionAdapter } = await import(pathToFileURL(path.resolve(
+    __dirname,
+    '../../src/client/components/sftp/sftp-transaction-adapter.js'
+  )).href)
+  const sftp = createFakeSftp({
+    '/srv/app/big.bin': { type: 'file', content: Buffer.alloc(180000, 9) }
+  })
+  const operation = await buildSftpOperation({
+    id: 'adapter-delete-concurrent-revalidation',
+    action: 'delete',
+    paths: { source: '/srv/app/big.bin' },
+    type: 'file',
+    expected: { absent: true }
+  })
+  const adapter = createSftpTransactionAdapter({ getSftp: () => sftp })
+  Object.assign(operation, await adapter.prepare(operation), {
+    recoveryBinding: {
+      schemaVersion: 2,
+      algorithm: 'SHA-256',
+      fingerprint: 'a'.repeat(64)
+    }
+  })
+  adapter.bindPreparedProof(operation)
+
+  const resource = operation.plan.resources[0]
+  const watchedPaths = new Set([resource.path, resource.snapshotPath])
+  const startedPaths = new Set()
+  const originalReadFileChunk = sftp.readFileChunk.bind(sftp)
+  let releaseReads
+  let reportBothStarted
+  const readsReleased = new Promise(resolve => { releaseReads = resolve })
+  const bothStarted = new Promise(resolve => { reportBothStarted = resolve })
+  sftp.readFileChunk = async (...args) => {
+    const remotePath = args[0]
+    if (watchedPaths.has(remotePath) && !startedPaths.has(remotePath)) {
+      startedPaths.add(remotePath)
+      if (startedPaths.size === watchedPaths.size) reportBothStarted(true)
+      await readsReleased
+    }
+    return originalReadFileChunk(...args)
+  }
+
+  const execution = adapter.beforeExecute(operation)
+  const concurrent = await Promise.race([
+    bothStarted,
+    new Promise(resolve => setTimeout(() => resolve(false), 500))
+  ])
+  assert.equal(sftp.calls.some(call => (
+    call[0] === 'rename' && call[1] === resource.path
+  )), false)
+  releaseReads()
+  await execution
+
+  assert.equal(concurrent, true)
+  assert.deepEqual(startedPaths, watchedPaths)
   assert.equal(sftp.exists(resource.path), false)
 })
 
@@ -2371,6 +2435,21 @@ test('SFTP transport replaces transaction AbortSignal with a bounded server canc
   assert.equal(prepared.args[2].cancelToken, 'cancel_token-1')
   assert.equal(prepared.args[2].maxTotalBytes, 1024)
   assert.equal(input[2].cancelToken, undefined)
+
+  const digestInput = ['/source', {
+    signal: controller.signal,
+    expectedSize: 1024
+  }]
+  const digestPrepared = prepareSftpCancelableCall(
+    'digestFile',
+    digestInput,
+    'cancel_token-digest'
+  )
+  assert.equal(digestPrepared.signal, controller.signal)
+  assert.equal(digestPrepared.cancelToken, 'cancel_token-digest')
+  assert.equal(digestPrepared.args[1].signal, undefined)
+  assert.equal(digestPrepared.args[1].cancelToken, 'cancel_token-digest')
+  assert.equal(digestPrepared.args[1].expectedSize, 1024)
 
   const ordinary = prepareSftpCancelableCall('cp', input, 'cancel_token-2')
   assert.equal(ordinary.signal, undefined)

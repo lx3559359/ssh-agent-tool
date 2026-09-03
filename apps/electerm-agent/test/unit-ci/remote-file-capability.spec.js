@@ -13,6 +13,7 @@ const productionRemoteFileMethods = Object.freeze([
   'realpath',
   'readFile',
   'readFileChunk',
+  'digestFile',
   'writeFile',
   'mkdir',
   'touch',
@@ -1433,7 +1434,9 @@ test('Task7 terminal control claims before native acknowledgement and suppresses
 
 test('root capability hides staging and exposes only the current backend contract', async () => {
   const harness = await acquireWithHarness()
-  const rootMethods = [...productionRemoteFileMethods]
+  const rootMethods = productionRemoteFileMethods.filter(
+    name => name !== 'digestFile'
+  )
 
   assert.equal(Object.getPrototypeOf(harness.capability), null)
   assert.equal(harness.capability.staging, undefined)
@@ -1445,6 +1448,7 @@ test('root capability hides staging and exposes only the current backend contrac
     Object.keys(harness.capability.backend).sort(),
     rootMethods.sort()
   )
+  assert.equal(harness.capability.backend.digestFile, undefined)
   assert.deepEqual(Object.keys(harness.capability).sort(), [
     'backend',
     'capabilities',

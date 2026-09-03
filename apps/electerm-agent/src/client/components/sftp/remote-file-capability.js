@@ -14,6 +14,7 @@ const remoteFileMethodNames = Object.freeze([
   'realpath',
   'readFile',
   'readFileChunk',
+  'digestFile',
   'writeFile',
   'mkdir',
   'touch',
@@ -240,6 +241,9 @@ function createGuardedRemoteFileCapability (capability, assertCurrent) {
   const activeTransfers = new Set()
   const proxies = new WeakMap()
   let transferCapability
+  const guardedRemoteFileMethodNames = capability.channel === 'sftp'
+    ? remoteFileMethodNames
+    : remoteFileMethodNames.filter(name => name !== 'digestFile')
 
   function settleActive (operation, collection) {
     if (operation.finished) return
@@ -328,7 +332,7 @@ function createGuardedRemoteFileCapability (capability, assertCurrent) {
     if (proxies.has(backend)) return proxies.get(backend)
     const guarded = Object.create(null)
     proxies.set(backend, guarded)
-    for (const name of remoteFileMethodNames) {
+    for (const name of guardedRemoteFileMethodNames) {
       const operation = Object.getOwnPropertyDescriptor(backend, name)?.value
       if (typeof operation !== 'function') continue
       Object.defineProperty(guarded, name, {

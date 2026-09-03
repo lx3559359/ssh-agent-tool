@@ -14,7 +14,7 @@ const {
 } = require('./sftp-file')
 const { commonExtends } = require('./session-common.js')
 const { TerminalBase } = require('./session-base.js')
-const { Transform } = require('stream')
+const { Transform, Writable } = require('stream')
 const { pipeline } = require('stream/promises')
 const { posix: pathPosix } = require('path')
 const crypto = require('crypto')
@@ -34,6 +34,61 @@ const {
   consumeSftpCopyBudget,
   createSftpCopyBudget
 } = require('./sftp-copy-budget')
+
+const sftpDigestBlockBytes = 64 * 1024
+const sftpDigestMaxBytes = 1024 * 1024 * 1024 * 1024
+const sftpDigestAlgorithm = 'SHELLPILOT-SHA-256-CHAIN-V1'
+
+function sftpDigestLengthBytes (value) {
+  const result = Buffer.alloc(8)
+  result.writeBigUInt64BE(BigInt(value))
+  return result
+}
+
+class SftpBoundedDigest {
+  constructor () {
+    this.state = Buffer.alloc(32)
+    this.block = Buffer.alloc(sftpDigestBlockBytes)
+    this.used = 0
+    this.size = 0
+  }
+
+  update (value) {
+    const bytes = Buffer.from(value)
+    let offset = 0
+    while (offset < bytes.length) {
+      const length = Math.min(
+        this.block.length - this.used,
+        bytes.length - offset
+      )
+      bytes.copy(this.block, this.used, offset, offset + length)
+      this.used += length
+      this.size += length
+      offset += length
+      if (this.used === this.block.length) {
+        this.state = crypto.createHash('sha256')
+          .update(this.state)
+          .update(Buffer.from([0]))
+          .update(this.block)
+          .digest()
+        this.used = 0
+      }
+    }
+  }
+
+  finish () {
+    return {
+      size: this.size,
+      digest: crypto.createHash('sha256')
+        .update(this.state)
+        .update(Buffer.from([1]))
+        .update(this.block.subarray(0, this.used))
+        .update(sftpDigestLengthBytes(this.size))
+        .digest('hex'),
+      digestAlgorithm: sftpDigestAlgorithm
+    }
+  }
+}
 
 function sftpStatType (stat) {
   const isDirectory = typeof stat?.isDirectory === 'function'
@@ -1076,6 +1131,50 @@ class Sftp extends TerminalBase {
 
   readFileChunk (remotePath, options) {
     return readRemoteFileChunk(this.sftp, remotePath, options)
+  }
+
+  async digestFile (remotePath, options = {}) {
+    return this.withSftpOperationCancellation(options, async signal => {
+      const expectedSize = options.expectedSize
+      if (!Number.isSafeInteger(expectedSize) || expectedSize < 0 ||
+        expectedSize > sftpDigestMaxBytes) {
+        throw new Error('SFTP 摘要的预期文件大小无效。')
+      }
+      throwIfSftpOperationAborted(signal)
+      const stat = await this.lstat(remotePath)
+      throwIfSftpOperationAborted(signal)
+      if (sftpStatType(stat) !== 'file') {
+        throw new Error('SFTP 摘要源必须为普通文件。')
+      }
+      if (Number(stat.size) !== expectedSize) {
+        throw new Error('SFTP 文件在摘要前大小发生变化。')
+      }
+
+      const digest = new SftpBoundedDigest()
+      const sink = new Writable({
+        write (chunk, encoding, callback) {
+          try {
+            digest.update(chunk)
+            if (digest.size > expectedSize) {
+              throw new Error('SFTP 文件在摘要期间大小发生变化。')
+            }
+            callback()
+          } catch (error) {
+            callback(error)
+          }
+        }
+      })
+      await pipeline(
+        this.sftp.createReadStream(remotePath),
+        sink,
+        ...(signal ? [{ signal }] : [])
+      )
+      throwIfSftpOperationAborted(signal)
+      if (digest.size !== expectedSize) {
+        throw new Error('SFTP 文件在摘要期间大小发生变化。')
+      }
+      return digest.finish()
+    })
   }
 
   async describeResumeEntry (remotePath, boundarySize = 64 * 1024) {

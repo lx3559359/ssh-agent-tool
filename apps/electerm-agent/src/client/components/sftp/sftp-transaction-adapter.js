@@ -195,7 +195,7 @@ async function digestRemoteFile (
     if (!remote || typeof remote !== 'object' || Array.isArray(remote) ||
       !Number.isSafeInteger(remote.size) || remote.size < 0 ||
       (expectedSize !== undefined && remote.size !== expectedSize) ||
-      remote.digestAlgorithm !== 'SHA-256' ||
+      ![digestAlgorithm, 'SHA-256'].includes(remote.digestAlgorithm) ||
       typeof remote.digest !== 'string' ||
       !/^[a-f0-9]{64}$/.test(remote.digest)) {
       throw new Error('SFTP 权威摘要结果无效，已停止操作。')
@@ -1482,22 +1482,27 @@ export function createSftpTransactionAdapter ({
           knownDeleteBytes
         )
         for (const resource of operation.plan.resources) {
-          verifiedSnapshots.push({
-            resource,
-            descriptor: await verifySnapshot(
+          const [snapshotCheck, sourceCheck] = await Promise.allSettled([
+            verifySnapshot(
               sftp,
               resource,
               signal,
               deleteProgress
+            ),
+            assertOriginalState(
+              sftp,
+              resource,
+              action,
+              signal,
+              deleteProgress
             )
-          })
-          await assertOriginalState(
-            sftp,
+          ])
+          if (snapshotCheck.status === 'rejected') throw snapshotCheck.reason
+          if (sourceCheck.status === 'rejected') throw sourceCheck.reason
+          verifiedSnapshots.push({
             resource,
-            action,
-            signal,
-            deleteProgress
-          )
+            descriptor: snapshotCheck.value
+          })
         }
         deleteProgress.finish()
       } else {

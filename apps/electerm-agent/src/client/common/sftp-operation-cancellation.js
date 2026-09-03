@@ -1,4 +1,8 @@
-const cancellableSftpFunctions = new Set(['copyEntry', 'removeEntry'])
+const cancellableSftpFunctions = new Set([
+  'copyEntry',
+  'digestFile',
+  'removeEntry'
+])
 const cancelTokenPattern = /^[A-Za-z0-9_-]{1,128}$/
 
 export function prepareSftpCancelableCall (func, args, token) {
