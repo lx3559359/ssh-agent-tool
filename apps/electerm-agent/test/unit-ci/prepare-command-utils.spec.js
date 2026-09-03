@@ -45,6 +45,34 @@ test('required shell command reports a nonzero ShellJS exit code', () => {
   )
 })
 
+test('required shell command fails closed on malformed ShellJS results', async t => {
+  const { runRequiredShellCommand } = loadUtils()
+  const command = 'yarn autoclean --force'
+  const cases = [
+    { name: 'undefined result', result: undefined, exitCode: null },
+    { name: 'null result', result: null, exitCode: null },
+    { name: 'missing code', result: {}, exitCode: null },
+    { name: 'undefined code', result: { code: undefined }, exitCode: null },
+    { name: 'null code', result: { code: null }, exitCode: null },
+    { name: 'string zero code', result: { code: '0' }, exitCode: '0' }
+  ]
+
+  for (const entry of cases) {
+    await t.test(entry.name, () => {
+      assert.throws(
+        () => runRequiredShellCommand(command, () => entry.result),
+        error => {
+          assert.equal(error.message, failureMessage)
+          assert.equal(error.code, 'PACKAGE_PREPARE_COMMAND_FAILED')
+          assert.equal(error.command, command)
+          assert.equal(error.exitCode, entry.exitCode)
+          return true
+        }
+      )
+    })
+  }
+})
+
 test('required shell command preserves a thrown execution error as its cause', () => {
   const { runRequiredShellCommand } = loadUtils()
   const command = 'yarn autoclean --force'
