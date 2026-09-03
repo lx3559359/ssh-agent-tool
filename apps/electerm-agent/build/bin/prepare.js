@@ -10,6 +10,7 @@ const { version } = pack
 const { mkdir, rm, exec, echo, cp } = require('shelljs')
 const { execFileSync } = require('child_process')
 const { removeOptionalNativeResidue } = require('./prepare-cleanup-utils')
+const { runRequiredShellCommand } = require('./prepare-command-utils')
 const dir = 'dist/v' + version
 const cwd = process.cwd()
 
@@ -131,7 +132,7 @@ rm('-rf', 'work/app/node_modules/node-pty/lib/testUtils.test.js.map')
 
 // yarn auto clean
 cp('-r', 'build/bin/.yarnclean', 'work/app/')
-exec(`cd work/app && yarn generate-lock-entry > yarn.lock && yarn autoclean --force && cd ${cwd}`)
+runRequiredShellCommand(`cd work/app && yarn generate-lock-entry > yarn.lock && yarn autoclean --force && cd ${cwd}`)
 if (isWin && fs.existsSync(resolve(cwd, 'node_modules/exceljs/lib/doc'))) {
   cp('-r', 'node_modules/exceljs/lib/doc', 'work/app/node_modules/exceljs/lib/')
 }
