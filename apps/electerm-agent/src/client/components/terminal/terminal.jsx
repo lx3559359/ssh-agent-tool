@@ -284,7 +284,8 @@ class Term extends Component {
       'width',
       'height',
       'left',
-      'top'
+      'top',
+      'sshSftpSplitViewActive'
     ]
     if (
       !isEqual(
@@ -1435,7 +1436,6 @@ class Term extends Component {
       await new Promise(resolve => setTimeout(resolve, 50))
     }
 
-    this.shellInjected = false
     throw new Error('Shell Integration 未就绪，无法可靠跟踪命令，命令尚未发送。')
   }
 
@@ -1503,7 +1503,6 @@ class Term extends Component {
       }
       await new Promise(resolve => setTimeout(resolve, 50))
     }
-    this.shellInjected = false
     throw new Error('当前 Shell 无法建立可靠命令跟踪，运维任务尚未开始。')
   }
 
@@ -2253,15 +2252,29 @@ class Term extends Component {
   onResize = throttle(() => {
     const cid = this.props.currentBatchTabId
     const tid = this.props.tab?.id
+    const terminalPaneVisible = this.props.pane === paneMap.terminal ||
+      this.props.sshSftpSplitViewActive === true
     if (
       this.props.tab.status === statusMap.success &&
       cid === tid &&
+      terminalPaneVisible &&
       this.term
     ) {
+      const passwordPromptBeforeResize =
+        this.attachAddon?.isPasswordPromptDetected?.() === true
+      const emptyInputResizeToken = passwordPromptBeforeResize
+        ? null
+        : this.cmdAddon?.captureEmptyInputResizeToken?.()
       try {
         this.fitAddon.fit()
       } catch (e) {
         console.info('resize failed')
+      } finally {
+        const passwordPromptAfterResize =
+          this.attachAddon?.isPasswordPromptDetected?.() === true
+        this.cmdAddon?.restoreEmptyInputAnchorAfterResize?.(
+          passwordPromptAfterResize ? null : emptyInputResizeToken
+        )
       }
     }
   }, 200)

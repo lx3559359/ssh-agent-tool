@@ -142,9 +142,93 @@ async function lockWindowsFile (targetPath) {
 }
 
 async function waitForTransferComplete (page, transferId) {
-  await expect.poll(() => page.evaluate(id => (
-    window.store.fileTransfers.some(item => item.id === id)
-  ), transferId), { timeout: 30000 }).toBe(false)
+  let terminalSnapshot
+  await expect.poll(async () => {
+    terminalSnapshot = await page.evaluate(id => {
+      const active = window.store.fileTransfers.some(item => item.id === id)
+      const history = window.store.transferHistory.find(item => item.id === id)
+      return {
+        active,
+        history: history
+          ? {
+              status: String(history.status || ''),
+              error: String(history.error || '')
+            }
+          : null
+      }
+    }, transferId)
+    if (terminalSnapshot.active) return 'active'
+    return terminalSnapshot.history ? 'recorded' : 'awaiting-history'
+  }, { timeout: 30000 }).toBe('recorded')
+  expect(terminalSnapshot.history.error).toBe('')
+  expect(['success', 'completed']).toContain(terminalSnapshot.history.status)
+}
+
+async function waitForSftpSettled (page) {
+  let snapshot
+  try {
+    await expect.poll(async () => {
+      snapshot = await page.evaluate(() => {
+        const entry = window.refs.get('sftp-' + window.store.activeTabId)
+        return entry?.getSftpReadinessSnapshot?.() || null
+      })
+      return snapshot?.fullySettled === true
+    }, { timeout: 30000 }).toBe(true)
+  } catch (error) {
+    error.message += `\nSFTP readiness snapshot: ${JSON.stringify(snapshot)}`
+    throw error
+  }
+}
+
+async function expectTerminalTrackerReadyAfterHiddenResize (page, expectedSize) {
+  await page.evaluate(() => {
+    const terminal = window.refs.get('term-' + window.store.activeTabId)
+    terminal?.onResize?.()
+    terminal?.onResize?.flush?.()
+  })
+  await page.waitForTimeout(300)
+  const snapshot = await page.evaluate(() => {
+    const terminal = window.refs.get('term-' + window.store.activeTabId)
+    terminal?.onResize?.flush?.()
+    return {
+      ready: terminal?.isCommandSafetyTrackerReady?.() === true,
+      cols: Number(terminal?.term?.cols),
+      rows: Number(terminal?.term?.rows),
+      shellPhase: String(terminal?.cmdAddon?.shellPhase || ''),
+      currentInput: terminal?.cmdAddon?.getCurrentCommandInput?.(),
+      passwordPrompt: terminal?.attachAddon?.isPasswordPromptDetected?.() === true
+    }
+  })
+  expect(snapshot).toMatchObject({
+    ready: true,
+    cols: expectedSize.cols,
+    rows: expectedSize.rows,
+    shellPhase: 'input',
+    currentInput: '',
+    passwordPrompt: false
+  })
+  return snapshot
+}
+
+async function terminalLayoutSnapshot (page) {
+  return page.evaluate(() => {
+    const tabId = window.store.activeTabId
+    const terminal = window.refs.get('term-' + tabId)
+    const pane = document.querySelector(`#session-pane-terminal-${tabId}`)
+    return {
+      pane: String(terminal?.props?.pane || ''),
+      splitPreference: terminal?.props?.tab?.sshSftpSplitView === true,
+      splitActive: terminal?.props?.sshSftpSplitViewActive === true,
+      hidden: pane?.classList?.contains('hide') === true,
+      width: Number(terminal?.props?.width),
+      height: Number(terminal?.props?.height)
+    }
+  })
+}
+
+async function waitForTerminalLayout (page, expected) {
+  await expect.poll(() => terminalLayoutSnapshot(page), { timeout: 10000 })
+    .toMatchObject(expected)
 }
 
 async function expectVisibleTransferProgress (
@@ -343,8 +427,13 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
     await expect.poll(() => sshServer.state.sftpSessions, { timeout: 20000 }).toBeGreaterThan(0)
     await expect.poll(() => page.evaluate(() => {
       const entry = window.refs.get('sftp-' + window.store.activeTabId)
-      return Boolean(entry?.sftp)
-    })).toBe(true)
+      const readiness = entry?.getSftpReadinessSnapshot?.()
+      return Boolean(
+        entry?.sftp &&
+        readiness?.fullySettled &&
+        readiness?.visibleRemoteCommitted
+      )
+    }), { timeout: 30000 }).toBe(true)
 
     await page.evaluate(async remotePath => {
       const entry = window.refs.get('sftp-' + window.store.activeTabId)
@@ -393,19 +482,131 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
     )
     await expectDockInsideViewport(uploadDock)
     await waitForTransferComplete(page, upload.transferId)
+    await waitForSftpSettled(page)
     expect(await fixture.hashFile('/quality-progress-upload.bin'))
       .toBe(crypto.createHash('sha256').update(largeUpload).digest('hex'))
 
     const originalBounds = await run.electronApp.evaluate(({ BrowserWindow }) => (
       BrowserWindow.getAllWindows()[0].getBounds()
     ))
+    const splitToggle = page.locator('.session-current .split-view-toggle')
+    await expect(splitToggle).toBeVisible()
+    await splitToggle.click()
+    await expect(splitToggle).toHaveAttribute('aria-pressed', 'true')
+    await waitForTerminalLayout(page, {
+      pane: 'fileManager',
+      splitPreference: true,
+      splitActive: true,
+      hidden: false
+    })
+    await page.evaluate(() => {
+      const terminal = window.refs.get('term-' + window.store.activeTabId)
+      terminal?.onResize?.()
+      terminal?.onResize?.flush?.()
+    })
+    await page.waitForTimeout(300)
+    const largeSplitLayout = await terminalLayoutSnapshot(page)
+    const terminalSizeBeforeHiddenResize = await page.evaluate(() => {
+      const terminal = window.refs.get('term-' + window.store.activeTabId)
+      return {
+        cols: Number(terminal?.term?.cols),
+        rows: Number(terminal?.term?.rows)
+      }
+    })
     let download
     try {
+      const rendererResize = page.evaluate(() => new Promise(resolve => {
+        window.addEventListener('resize', () => {
+          requestAnimationFrame(() => resolve(true))
+        }, { once: true })
+      }))
       await run.electronApp.evaluate(({ BrowserWindow }) => {
         const window = BrowserWindow.getAllWindows()[0]
         const bounds = window.getBounds()
-        window.setBounds({ ...bounds, height: 820 })
+        window.setBounds({
+          ...bounds,
+          width: Math.min(bounds.width, 620),
+          height: Math.min(bounds.height, 400)
+        })
       })
+      await rendererResize
+      await waitForTerminalLayout(page, {
+        pane: 'fileManager',
+        splitPreference: true,
+        splitActive: false,
+        hidden: true
+      })
+      const narrowLayout = await terminalLayoutSnapshot(page)
+      expect(
+        narrowLayout.width !== largeSplitLayout.width ||
+        narrowLayout.height !== largeSplitLayout.height
+      ).toBe(true)
+      await expectTerminalTrackerReadyAfterHiddenResize(
+        page,
+        terminalSizeBeforeHiddenResize
+      )
+
+      const rendererRestore = page.evaluate(() => new Promise(resolve => {
+        window.addEventListener('resize', () => {
+          requestAnimationFrame(() => resolve(true))
+        }, { once: true })
+      }))
+      await run.electronApp.evaluate(({ BrowserWindow }, bounds) => {
+        BrowserWindow.getAllWindows()[0].setBounds(bounds)
+      }, originalBounds)
+      await rendererRestore
+      await waitForTerminalLayout(page, {
+        pane: 'fileManager',
+        splitPreference: true,
+        splitActive: true,
+        hidden: false,
+        width: largeSplitLayout.width,
+        height: largeSplitLayout.height
+      })
+      const restoredSplitSize = await expectTerminalTrackerReadyAfterHiddenResize(
+        page,
+        terminalSizeBeforeHiddenResize
+      )
+      expect(restoredSplitSize.cols).toBeGreaterThan(2)
+      expect(restoredSplitSize.rows).toBeGreaterThan(1)
+
+      await splitToggle.click()
+      await expect(splitToggle).toHaveAttribute('aria-pressed', 'false')
+      await waitForTerminalLayout(page, {
+        pane: 'fileManager',
+        splitPreference: false,
+        splitActive: false,
+        hidden: true
+      })
+      await page.locator('.session-current .term-sftp-tabs .type-tab:visible').first().click()
+      await waitForTerminalLayout(page, {
+        pane: 'terminal',
+        splitPreference: false,
+        splitActive: false,
+        hidden: false
+      })
+      await expect.poll(async () => {
+        const snapshot = await page.evaluate(() => {
+          const terminal = window.refs.get('term-' + window.store.activeTabId)
+          return {
+            cols: Number(terminal?.term?.cols),
+            rows: Number(terminal?.term?.rows),
+            ready: terminal?.isCommandSafetyTrackerReady?.() === true
+          }
+        })
+        return snapshot.ready && (
+          snapshot.cols > restoredSplitSize.cols ||
+          snapshot.rows > restoredSplitSize.rows
+        )
+      }, { timeout: 10000 }).toBe(true)
+      await page.locator('.session-current .term-sftp-tabs .type-tab:visible').nth(1).click()
+      await waitForTerminalLayout(page, {
+        pane: 'fileManager',
+        splitPreference: false,
+        splitActive: false,
+        hidden: true
+      })
+
       download = await page.evaluate(({ remotePath, localPath }) => (
         window.store.mcpSftpDownload({
           tabId: window.store.activeTabId,
@@ -423,6 +624,7 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
       )
       await expectDockInsideViewport(downloadDock)
       await waitForTransferComplete(page, download.transferId)
+      await waitForSftpSettled(page)
     } finally {
       await run.electronApp.evaluate(({ BrowserWindow }, bounds) => {
         BrowserWindow.getAllWindows()[0].setBounds(bounds)
@@ -465,6 +667,7 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
       )).toBe(false)
       await expect(page.locator('.notification.error').filter({ hasText: /EBUSY/i }))
         .toHaveCount(0)
+      await waitForSftpSettled(page)
       await releaseLockedFile()
       releaseLockedFile = async () => {}
     }
@@ -476,7 +679,12 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
       fs.promises.writeFile(path.join(fastDeletePath, `item-${index}.txt`), `item ${index}\n`)
     )))
     await page.evaluate(async () => {
-      await window.refs.get('sftp-' + window.store.activeTabId).remoteList()
+      await window.refs.get('sftp-' + window.store.activeTabId).remoteList(
+        false,
+        undefined,
+        undefined,
+        { rethrow: true }
+      )
     })
     const fastDeleteRow = page.locator(
       `.session-current .file-list.remote .sftp-item[title="${fastDeleteName}"]`
@@ -496,6 +704,7 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
     await expect.poll(() => pathExists(fastDeletePath), { timeout: 30000 }).toBe(false)
     await expect(fastDeleteRow).toHaveCount(0, { timeout: 30000 })
     await expect(page.locator('.ant-dropdown:visible')).toHaveCount(0, { timeout: 5000 })
+    await waitForSftpSettled(page)
 
     let lastSafeDeleteName = ''
     for (let index = 0; index < 3; index += 1) {
@@ -504,7 +713,12 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
       const safeDeletePath = fixture.resolve(`/${safeDeleteName}`)
       await fs.promises.writeFile(safeDeletePath, safeDeleteBody)
       await page.evaluate(async () => {
-        await window.refs.get('sftp-' + window.store.activeTabId).remoteList()
+        await window.refs.get('sftp-' + window.store.activeTabId).remoteList(
+          false,
+          undefined,
+          undefined,
+          { rethrow: true }
+        )
       })
       const safeDeleteRow = page.locator(
         `.session-current .file-list.remote .sftp-item[title="${safeDeleteName}"]`
@@ -514,17 +728,56 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
       const safeDeleteMenu = page.locator('.ant-dropdown:visible').last()
       await expect(safeDeleteMenu).toBeVisible()
       const safeDeleteConfirm = page.locator('.custom-modal-wrap:visible').last()
-      let dialogVisibleAt = 0
-      const clickedAt = Date.now()
-      await Promise.all([
-        safeDeleteMenu
-          .getByText(/安全删除.*可恢复|Safe Delete.*Recoverable/i)
-          .click({ force: true }),
-        expect(safeDeleteConfirm).toBeVisible({ timeout: 1000 }).then(() => {
-          dialogVisibleAt = Date.now()
+      const safeDeleteAction = safeDeleteMenu
+        .getByText(/安全删除.*可恢复|Safe Delete.*Recoverable/i)
+      const paintProbeId = `__safeDeletePaintProbe${index}`
+      await safeDeleteAction.evaluate((element, probeId) => {
+        window[probeId] = new Promise((resolve, reject) => {
+          element.addEventListener('click', () => {
+            const clickedAt = Date.now()
+            const startedAt = performance.now()
+            const deadline = startedAt + 1000
+            const checkVisible = () => {
+              const progress = [...document.querySelectorAll(
+                '.sftp-safe-delete-progress'
+              )].find(node => {
+                const dialog = node.closest('.custom-modal-wrap')
+                if (!dialog) return false
+                const style = window.getComputedStyle(dialog)
+                const rect = dialog.getBoundingClientRect()
+                return style.display !== 'none' &&
+                  style.visibility !== 'hidden' &&
+                  rect.width > 0 && rect.height > 0
+              })
+              if (progress) {
+                resolve({
+                  clickedAt,
+                  dialogVisibleMs: performance.now() - startedAt
+                })
+                return
+              }
+              if (performance.now() >= deadline) {
+                reject(new Error('Safe delete dialog did not become visible'))
+                return
+              }
+              requestAnimationFrame(checkVisible)
+            }
+            requestAnimationFrame(checkVisible)
+          }, { once: true })
         })
-      ])
-      expect(dialogVisibleAt - clickedAt).toBeLessThan(150)
+      }, paintProbeId)
+      await safeDeleteAction.click()
+      const { clickedAt, dialogVisibleMs } = await page.evaluate(
+        async probeId => {
+          try {
+            return await window[probeId]
+          } finally {
+            delete window[probeId]
+          }
+        },
+        paintProbeId
+      )
+      expect(dialogVisibleMs).toBeLessThan(150)
       await expect(safeDeleteConfirm.locator('.custom-modal-ok-btn')).toBeDisabled()
       await expect(safeDeleteConfirm.locator('.sftp-safe-delete-progress')).toBeVisible()
       await expect(safeDeleteConfirm).toContainText(
@@ -546,6 +799,7 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
         prepareMs: readyAt - clickedAt,
         confirmToListMs: Date.now() - readyAt
       })
+      await waitForSftpSettled(page)
     }
     await test.info().attach('sftp-safe-delete-performance.json', {
       body: Buffer.from(JSON.stringify(safeDeleteSamples, null, 2)),

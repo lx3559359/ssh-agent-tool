@@ -359,8 +359,10 @@ export default class SessionWrapper extends Component {
       )
     }
 
+    const sshSftpSplitViewActive =
+      sshSftpSplitView && this.canSplitView()
     const cls = pane === paneMap.terminal ||
-      (sshSftpSplitView && this.canSplitView())
+      sshSftpSplitViewActive
       ? 'terms-box'
       : 'terms-box hide'
     const {
@@ -375,6 +377,7 @@ export default class SessionWrapper extends Component {
       themeConfig,
       broadcastInput,
       pane,
+      sshSftpSplitViewActive,
       ...pick(
         this,
         [

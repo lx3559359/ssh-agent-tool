@@ -696,6 +696,13 @@ export function beginRemoteFileCapabilityProbe ({
   let releasePromise
   let consumePromise
   let abortPromise
+  let consumedLeaseObserver
+  let latestLeaseEvent
+  const observePreparedLeaseState = event => {
+    latestLeaseEvent = event
+    publishRemoteFileLeaseState(onLeaseState, event)
+    publishRemoteFileLeaseState(consumedLeaseObserver, event)
+  }
   const abortFromCaller = () => {
     if (!controller.signal.aborted) {
       controller.abort(signal?.reason || preparedProbeAbortError())
@@ -731,7 +738,7 @@ export function beginRemoteFileCapabilityProbe ({
     }
     pty = observeRemoteFilePtyLease(pty, {
       operationId: context.ownerId,
-      onLeaseState
+      onLeaseState: observePreparedLeaseState
     })
     throwPreparedProbeAbort(controller.signal)
     await context.assertTerminalCurrent()
@@ -768,8 +775,12 @@ export function beginRemoteFileCapabilityProbe ({
     return abortPromise
   }
 
-  const consume = ({ sftp, onIdentity } = {}) => {
+  const consume = ({ sftp, onIdentity, onLeaseState: leaseObserver } = {}) => {
     if (consumePromise) return consumePromise
+    consumedLeaseObserver = leaseObserver
+    if (latestLeaseEvent) {
+      publishRemoteFileLeaseState(consumedLeaseObserver, latestLeaseEvent)
+    }
     consumePromise = (async () => {
       let capability
       try {

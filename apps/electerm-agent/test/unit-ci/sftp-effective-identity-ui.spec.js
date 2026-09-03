@@ -32,6 +32,8 @@ function topLevelFunction (name, dependencies = {}) {
   return vm.runInNewContext(`(${generate(declaration).code})`, dependencies)
 }
 
+const abortRemoteFileOperation = topLevelFunction('abortRemoteFileOperation')
+
 function installClassField (entry, name, dependencies = {}) {
   let initializer
   traverse(entryAst, {
@@ -212,6 +214,7 @@ test('entry becomes busy from the real async lease callback before identity reso
   installClassField(entry, 'publishRemoteFileIdentityUnavailable')
   installClassField(entry, 'acquireRemoteFileOperation', {
     acquireRemoteFileCapability,
+    abortRemoteFileOperation,
     refs: { get: () => ({}) },
     isCurrentSftpEntryRemoteTask: () => true,
     remoteFileOperationStale: () => Object.assign(
@@ -310,6 +313,7 @@ test('entry receives the production lease callback before a delayed native probe
   installClassField(entry, 'publishRemoteFileIdentityUnavailable')
   installClassField(entry, 'acquireRemoteFileOperation', {
     acquireRemoteFileCapability,
+    abortRemoteFileOperation,
     refs: { get: () => terminal },
     isCurrentSftpEntryRemoteTask: () => true,
     remoteFileOperationStale: () => new Error('stale')
@@ -390,6 +394,7 @@ test('stale acquisition release failure keeps stale primary and lease uncertaint
     name: 'AbortError',
     code: 'ABORT_ERR'
   })
+  let lifecycleChecks = 0
   const acquireRemoteFileCapability = async options => {
     options.onLeaseState({ state: 'acquired', operationId: options.operationId })
     options.onIdentity({
@@ -415,8 +420,9 @@ test('stale acquisition release failure keeps stale primary and lease uncertaint
   installClassField(entry, 'publishRemoteFileIdentityUnavailable')
   installClassField(entry, 'acquireRemoteFileOperation', {
     acquireRemoteFileCapability,
+    abortRemoteFileOperation,
     refs: { get: () => ({}) },
-    isCurrentSftpEntryRemoteTask: () => false,
+    isCurrentSftpEntryRemoteTask: () => ++lifecycleChecks === 1,
     remoteFileOperationStale: () => staleFailure
   })
 
@@ -472,6 +478,7 @@ test('generation drain invalidates identity and preserves unresolved lease outco
   installClassField(entry, 'publishRemoteFileIdentityUnavailable')
   installClassField(entry, 'acquireRemoteFileOperation', {
     acquireRemoteFileCapability,
+    abortRemoteFileOperation,
     refs: { get: () => ({}) },
     initializeRemoteFileGeneration: lifecycle.initializeRemoteFileGeneration,
     isCurrentRemoteFileGeneration: lifecycle.isCurrentRemoteFileGeneration,

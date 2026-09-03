@@ -41,6 +41,7 @@ export class CommandTrackerAddon {
     this.shellIntegrationActive = false
     this.shellPhase = 'inactive'
     this._inputAnchor = null
+    this._pendingEmptyInputResizeToken = null
 
     // Event callbacks for shell integration events
     this._onPromptStarted = null // Called when OSC 633;A is received
@@ -108,6 +109,7 @@ export class CommandTrackerAddon {
     this.terminal = null
     this.shellPhase = 'inactive'
     this._inputAnchor = null
+    this._pendingEmptyInputResizeToken = null
     this._expectedSubmissions = []
     this._sessionNonce = ''
     if (this._disposables) {
@@ -133,6 +135,7 @@ export class CommandTrackerAddon {
     if (!this._sessionNonce || nonce !== this._sessionNonce) return true
     const payload = separator === -1 ? '' : args.slice(separator + 1)
     this._oscSequence += 1
+    this._pendingEmptyInputResizeToken = null
 
     switch (command) {
       case 'A': // Prompt started
@@ -240,6 +243,7 @@ export class CommandTrackerAddon {
     this.shellIntegrationActive = false
     this.shellPhase = 'inactive'
     this._inputAnchor = null
+    this._pendingEmptyInputResizeToken = null
     this._expectedSubmissions = []
     this._inputGeneration = 0
     this._oscSequence = 0
@@ -260,6 +264,37 @@ export class CommandTrackerAddon {
       return
     }
     this._inputAnchor = { buffer, row, column }
+  }
+
+  captureEmptyInputResizeToken () {
+    this._pendingEmptyInputResizeToken = null
+    if (!this.shellIntegrationActive || this.shellPhase !== 'input' ||
+      this.getCurrentCommandInput() !== '') return null
+    const buffer = this.terminal?.buffer?.active
+    if (!buffer) return null
+    const token = Object.freeze({
+      buffer,
+      inputGeneration: this._inputGeneration,
+      oscSequence: this._oscSequence,
+      sessionNonce: this._sessionNonce
+    })
+    this._pendingEmptyInputResizeToken = token
+    return token
+  }
+
+  restoreEmptyInputAnchorAfterResize (token) {
+    const pending = this._pendingEmptyInputResizeToken
+    this._pendingEmptyInputResizeToken = null
+    if (!token || token !== pending ||
+      !this.shellIntegrationActive || this.shellPhase !== 'input' ||
+      token.buffer !== this.terminal?.buffer?.active ||
+      token.inputGeneration !== this._inputGeneration ||
+      token.oscSequence !== this._oscSequence ||
+      token.sessionNonce !== this._sessionNonce) return false
+    this._captureInputAnchor()
+    if (this.getCurrentCommandInput() === '') return true
+    this._inputAnchor = null
+    return false
   }
 
   _getLineEndColumn (line, cursorColumn) {

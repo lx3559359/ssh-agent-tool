@@ -290,6 +290,7 @@ export default class Sftp extends Component {
     this.remoteFileOperations = new Set()
     this.remoteFileOperationSettlements = new Set()
     this.remoteFileOperationTail = Promise.resolve()
+    this.remoteFileCapabilityAcquisitionTail = Promise.resolve()
     this.remoteFileUnmounted = false
     this.remoteFileIdentityEpoch = 0
     this.activeRemoteFileLeases = new Set()
@@ -2794,65 +2795,134 @@ export default class Sftp extends Component {
     const sshSessionGeneration = String(this.sshSessionGeneration || '')
     const sshTerminalPid = String(this.sshTerminalPid || '')
     const identityToken = this.captureRemoteFileIdentityToken()
-    let remoteFileIdentity
-    let capability
+    const waitForAcquisitionTurn = previous => {
+      if (!signal?.addEventListener) return Promise.resolve(previous)
+      try {
+        abortRemoteFileOperation(signal)
+      } catch (error) {
+        return Promise.reject(error)
+      }
+      return new Promise((resolve, reject) => {
+        let settled = false
+        const finish = callback => value => {
+          if (settled) return
+          settled = true
+          signal.removeEventListener('abort', onAbort)
+          callback(value)
+        }
+        const onAbort = () => {
+          if (settled) return
+          try {
+            abortRemoteFileOperation(signal)
+          } catch (error) {
+            finish(reject)(error)
+          }
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+        Promise.resolve(previous).then(finish(resolve), finish(reject))
+      })
+    }
+    const previousAcquisition = this.remoteFileCapabilityAcquisitionTail ||
+      Promise.resolve()
+    let settleAcquisition
+    const acquisition = new Promise(resolve => { settleAcquisition = resolve })
+    this.remoteFileCapabilityAcquisitionTail = acquisition
+    let acquisitionReleased = false
+    let holdsRemoteFilePtyLease = false
+    let returningCapability = false
+    const releaseAcquisition = () => {
+      if (acquisitionReleased) return
+      acquisitionReleased = true
+      settleAcquisition()
+      if (this.remoteFileCapabilityAcquisitionTail === acquisition) {
+        this.remoteFileCapabilityAcquisitionTail = Promise.resolve()
+      }
+    }
     try {
-      const acquisition = {
-        operationId,
-        tab: this.props.tab,
-        sftp,
-        getTerminal: tabId => refs.get('term-' + tabId),
-        signal,
-        onIdentity: identity => { remoteFileIdentity = identity },
-        onLeaseState: event => this.publishRemoteFileLeaseState?.(
-          event,
-          identityToken
-        )
-      }
-      capability = preparedProbe
-        ? await preparedProbe.consume(acquisition)
-        : await acquireRemoteFileCapability(acquisition)
-      identityToken.remoteFileGeneration?.capabilities?.delete(preparedProbe)
-      if (this.preparedRemoteFileCapabilityProbe?.handle === preparedProbe) {
-        this.preparedRemoteFileCapabilityProbe = null
-      }
+      await waitForAcquisitionTurn(previousAcquisition)
     } catch (error) {
-      identityToken.remoteFileGeneration?.capabilities?.delete(preparedProbe)
-      if (this.preparedRemoteFileCapabilityProbe?.handle === preparedProbe) {
-        this.preparedRemoteFileCapabilityProbe = null
-      }
-      if (error?.code === 'REMOTE_FILE_IDENTITY_UNAVAILABLE') {
-        this.publishRemoteFileIdentityUnavailable?.(identityToken)
-      }
+      Promise.resolve(previousAcquisition).then(
+        releaseAcquisition,
+        releaseAcquisition
+      )
       throw error
     }
-    const lifecycleCurrent =
-      !this.remoteFileUnmounted &&
-      this.sftp === sftp &&
-      (this.sftpLifecycleEpoch || 0) === lifecycleEpoch &&
-      String(this.sshSessionGeneration || '') === sshSessionGeneration &&
-      String(this.sshTerminalPid || '') === sshTerminalPid &&
-      this.isCurrentRemoteFileIdentityToken(identityToken) &&
-      (!lifecycleTask ||
-        isCurrentSftpEntryRemoteTask(this, lifecycleTask))
-    if (!lifecycleCurrent) {
-      const staleError = remoteFileOperationStale()
+    try {
+      abortRemoteFileOperation(signal)
+      const isLifecycleCurrent = () => (
+        !this.remoteFileUnmounted &&
+        this.sftp === sftp &&
+        (this.sftpLifecycleEpoch || 0) === lifecycleEpoch &&
+        String(this.sshSessionGeneration || '') === sshSessionGeneration &&
+        String(this.sshTerminalPid || '') === sshTerminalPid &&
+        this.isCurrentRemoteFileIdentityToken(identityToken) &&
+        (!lifecycleTask ||
+          isCurrentSftpEntryRemoteTask(this, lifecycleTask))
+      )
+      if (!isLifecycleCurrent()) throw remoteFileOperationStale()
+      let remoteFileIdentity
+      let capability
       try {
-        await capability.release()
-      } catch (releaseError) {
-        staleError.releaseError = releaseError
-        this.publishRemoteFileIdentityUnavailable?.(identityToken)
+        const capabilityRequest = {
+          operationId,
+          tab: this.props.tab,
+          sftp,
+          getTerminal: tabId => refs.get('term-' + tabId),
+          signal,
+          onIdentity: identity => { remoteFileIdentity = identity },
+          onLeaseState: event => {
+            if (event?.state === 'acquired') {
+              holdsRemoteFilePtyLease = true
+            } else if (holdsRemoteFilePtyLease && [
+              'released',
+              'release-failed'
+            ].includes(event?.state)) releaseAcquisition()
+            if (!preparedProbe) {
+              this.publishRemoteFileLeaseState?.(event, identityToken)
+            }
+          }
+        }
+        capability = preparedProbe
+          ? await preparedProbe.consume(capabilityRequest)
+          : await acquireRemoteFileCapability(capabilityRequest)
+        identityToken.remoteFileGeneration?.capabilities?.delete(preparedProbe)
+        if (this.preparedRemoteFileCapabilityProbe?.handle === preparedProbe) {
+          this.preparedRemoteFileCapabilityProbe = null
+        }
+      } catch (error) {
+        identityToken.remoteFileGeneration?.capabilities?.delete(preparedProbe)
+        if (this.preparedRemoteFileCapabilityProbe?.handle === preparedProbe) {
+          this.preparedRemoteFileCapabilityProbe = null
+        }
+        if (error?.code === 'REMOTE_FILE_IDENTITY_UNAVAILABLE') {
+          this.publishRemoteFileIdentityUnavailable?.(identityToken)
+        }
+        throw error
       }
-      throw staleError
-    }
-    if (remoteFileIdentity) {
-      if (typeof this.publishRemoteFileIdentity === 'function') {
-        this.publishRemoteFileIdentity(remoteFileIdentity, identityToken)
-      } else {
-        this.setState({ remoteFileIdentity })
+      if (!isLifecycleCurrent()) {
+        const staleError = remoteFileOperationStale()
+        try {
+          await capability.release()
+        } catch (releaseError) {
+          staleError.releaseError = releaseError
+          this.publishRemoteFileIdentityUnavailable?.(identityToken)
+        }
+        throw staleError
+      }
+      if (remoteFileIdentity) {
+        if (typeof this.publishRemoteFileIdentity === 'function') {
+          this.publishRemoteFileIdentity(remoteFileIdentity, identityToken)
+        } else {
+          this.setState({ remoteFileIdentity })
+        }
+      }
+      returningCapability = true
+      return capability
+    } finally {
+      if (!returningCapability || !holdsRemoteFilePtyLease) {
+        releaseAcquisition()
       }
     }
-    return capability
   }
 
   reserveTransferFileSession = async ({ transferId, signal } = {}) => {

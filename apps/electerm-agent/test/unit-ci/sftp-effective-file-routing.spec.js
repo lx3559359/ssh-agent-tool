@@ -321,8 +321,10 @@ function createEntryHarness ({
   const typeMap = { remote: 'remote', local: 'local' }
   installClassField(entry, 'acquireRemoteFileOperation', {
     acquireRemoteFileCapability: acquire,
+    abortRemoteFileOperation,
     refs: { get: () => ({}) },
-    isCurrentSftpEntryRemoteTask: (_entry, token) => Boolean(token)
+    isCurrentSftpEntryRemoteTask: (_entry, token) => Boolean(token),
+    remoteFileOperationStale
   })
   installClassField(entry, 'withRemoteFileOperation', {
     abortRemoteFileOperation,
@@ -3159,6 +3161,7 @@ test('identity is not published when capability final validation fails', async (
   }
   await installRemoteFileIdentityFields(entry)
   installClassField(entry, 'acquireRemoteFileOperation', {
+    abortRemoteFileOperation,
     refs: { get: () => ({}) },
     isCurrentSftpEntryRemoteTask: () => true,
     acquireRemoteFileCapability: async ({ onIdentity }) => {
@@ -3179,9 +3182,212 @@ test('identity is not published when capability final validation fails', async (
   assert.deepEqual(writes, [])
 })
 
+test('terminal identity probes are serialized across remote file acquisitions', async () => {
+  const firstProbe = deferred()
+  const releaseFirstProbe = deferred()
+  const events = []
+  let probe = 0
+  const { entry, lifecycle } = await createEntryHarness({
+    acquire: async ({ onIdentity }) => {
+      probe += 1
+      const current = probe
+      events.push(`start:${current}`)
+      if (current === 1) {
+        firstProbe.resolve()
+        await releaseFirstProbe.promise
+      }
+      await onIdentity({
+        loginUsername: 'hik',
+        effectiveUid: '1000',
+        effectiveUsername: 'hik',
+        channel: 'sftp'
+      })
+      events.push(`end:${current}`)
+      return {
+        backend: {},
+        release: async () => true
+      }
+    }
+  })
+  lifecycle.initializeRemoteFileGeneration(entry)
+
+  const first = entry.acquireRemoteFileOperation({ id: 'first' })
+  await firstProbe.promise
+  const second = entry.acquireRemoteFileOperation({ id: 'second' })
+  await Promise.resolve()
+  assert.deepEqual(events, ['start:1'])
+
+  releaseFirstProbe.resolve()
+  const capabilities = await Promise.all([first, second])
+  assert.deepEqual(events, ['start:1', 'end:1', 'start:2', 'end:2'])
+  await Promise.all(capabilities.map(capability => capability.release()))
+})
+
+test('root PTY FIFO survives UI observer failures until the lease releases', async () => {
+  const events = []
+  let activeLease = false
+  let probe = 0
+  const { entry, lifecycle } = await createEntryHarness({
+    acquire: async ({ onIdentity, onLeaseState }) => {
+      const observeLease = async event => {
+        try {
+          await onLeaseState?.(event)
+        } catch {
+          // Production lease observation deliberately isolates UI failures.
+        }
+      }
+      probe += 1
+      const current = probe
+      events.push(`start:${current}`)
+      if (activeLease) throw new Error('current terminal task is busy')
+      activeLease = true
+      await observeLease({ state: 'acquired', operationId: `root-${current}` })
+      await onIdentity({
+        loginUsername: 'hik',
+        effectiveUid: '0',
+        effectiveUsername: 'root',
+        channel: 'pty-root'
+      })
+      let releasePromise
+      return {
+        channel: 'pty-root',
+        backend: {},
+        release: () => {
+          if (releasePromise) return releasePromise
+          releasePromise = (async () => {
+            activeLease = false
+            events.push(`release:${current}`)
+            await observeLease({
+              state: 'released',
+              operationId: `root-${current}`
+            })
+            return true
+          })()
+          return releasePromise
+        }
+      }
+    }
+  })
+  entry.publishRemoteFileLeaseState = () => {
+    throw new Error('UI lease observer failed')
+  }
+  lifecycle.initializeRemoteFileGeneration(entry)
+
+  const first = await entry.acquireRemoteFileOperation({ id: 'first-root' })
+  const secondResult = entry.acquireRemoteFileOperation({ id: 'second-root' })
+    .then(value => ({ status: 'fulfilled', value }), reason => ({
+      status: 'rejected',
+      reason
+    }))
+  await Promise.resolve()
+  assert.deepEqual(events, ['start:1'])
+
+  await first.release()
+  const second = await secondResult
+  assert.equal(second.status, 'fulfilled')
+  assert.deepEqual(events, ['start:1', 'release:1', 'start:2'])
+  await second.value.release()
+})
+
+test('aborted acquisition reports promptly without allowing successors to overtake', async () => {
+  const firstProbe = deferred()
+  const releaseFirstProbe = deferred()
+  const controller = new AbortController()
+  let acquireCount = 0
+  const { entry, lifecycle } = await createEntryHarness({
+    acquire: async () => {
+      acquireCount += 1
+      if (acquireCount === 1) {
+        firstProbe.resolve()
+        await releaseFirstProbe.promise
+      }
+      return {
+        backend: {},
+        release: async () => true
+      }
+    }
+  })
+  lifecycle.initializeRemoteFileGeneration(entry)
+
+  const first = entry.acquireRemoteFileOperation({ id: 'first' })
+  await firstProbe.promise
+  const second = entry.acquireRemoteFileOperation({
+    id: 'second',
+    signal: controller.signal
+  }).then(() => 'fulfilled', error => error?.code || error?.name)
+  controller.abort(Object.assign(new Error('aborted'), {
+    name: 'AbortError',
+    code: 'ABORT_ERR'
+  }))
+  const promptOutcome = await Promise.race([
+    second,
+    new Promise(resolve => setTimeout(() => resolve('timeout'), 100))
+  ])
+  const third = entry.acquireRemoteFileOperation({ id: 'third' })
+  await Promise.resolve()
+  assert.equal(acquireCount, 1)
+
+  releaseFirstProbe.resolve()
+  const firstCapability = await first
+  await firstCapability.release()
+  await second
+  const thirdCapability = await third
+  assert.equal(promptOutcome, 'ABORT_ERR')
+  assert.equal(acquireCount, 2)
+  await thirdCapability.release()
+})
+
+test('failed terminal identity probe releases the next remote file acquisition', async () => {
+  const firstProbe = deferred()
+  const releaseFirstProbe = deferred()
+  const events = []
+  let probe = 0
+  const { entry, lifecycle } = await createEntryHarness({
+    acquire: async ({ onIdentity }) => {
+      probe += 1
+      const current = probe
+      events.push(`start:${current}`)
+      if (current === 1) {
+        firstProbe.resolve()
+        await releaseFirstProbe.promise
+        events.push('fail:1')
+        throw new Error('probe failed')
+      }
+      await onIdentity({
+        loginUsername: 'hik',
+        effectiveUid: '1000',
+        effectiveUsername: 'hik',
+        channel: 'sftp'
+      })
+      events.push('end:2')
+      return {
+        backend: {},
+        release: async () => true
+      }
+    }
+  })
+  lifecycle.initializeRemoteFileGeneration(entry)
+
+  const first = entry.acquireRemoteFileOperation({ id: 'first' })
+  await firstProbe.promise
+  const second = entry.acquireRemoteFileOperation({ id: 'second' })
+  const results = Promise.allSettled([first, second])
+  await Promise.resolve()
+  assert.deepEqual(events, ['start:1'])
+
+  releaseFirstProbe.resolve()
+  const [firstResult, secondResult] = await results
+  assert.equal(firstResult.status, 'rejected')
+  assert.match(firstResult.reason.message, /probe failed/)
+  assert.equal(secondResult.status, 'fulfilled')
+  assert.deepEqual(events, ['start:1', 'fail:1', 'start:2', 'end:2'])
+  await secondResult.value.release()
+})
+
 test('acquired capability is released when the remote request lifecycle is stale', async () => {
   const writes = []
   let releaseCount = 0
+  let lifecycleChecks = 0
   const sftp = {}
   const entry = {
     props: { tab: { id: 'tab-1', username: 'hik' } },
@@ -3195,9 +3401,10 @@ test('acquired capability is released when the remote request lifecycle is stale
   }
   await installRemoteFileIdentityFields(entry)
   installClassField(entry, 'acquireRemoteFileOperation', {
+    abortRemoteFileOperation,
     refs: { get: () => ({}) },
     remoteFileOperationStale,
-    isCurrentSftpEntryRemoteTask: () => false,
+    isCurrentSftpEntryRemoteTask: () => ++lifecycleChecks === 1,
     acquireRemoteFileCapability: async ({ onIdentity }) => {
       await onIdentity({
         loginUsername: 'hik',

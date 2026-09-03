@@ -315,6 +315,7 @@ test('prepared probe starts without SFTP and is consumed once after native conne
     onProbeStart: () => probeStarted.resolve()
   })
   const identities = []
+  const leaseEvents = []
   const prepared = beginRemoteFileCapabilityProbe({
     operationId: 'prepared-explicit-open',
     tab: tab(),
@@ -327,7 +328,8 @@ test('prepared probe starts without SFTP and is consumed once after native conne
 
   const capability = await prepared.consume({
     sftp: fake.sftp,
-    onIdentity: identity => identities.push(identity)
+    onIdentity: identity => identities.push(identity),
+    onLeaseState: event => leaseEvents.push(event)
   })
   assert.equal(capability.channel, 'pty-root')
   assert.equal(terminal.acquireCount, 1)
@@ -338,7 +340,12 @@ test('prepared probe starts without SFTP and is consumed once after native conne
     effectiveUsername: 'root',
     channel: 'pty-root'
   }])
+  assert.deepEqual(leaseEvents.map(event => event.state), ['acquired'])
   await capability.release()
+  assert.deepEqual(leaseEvents.map(event => event.state), [
+    'acquired',
+    'released'
+  ])
   assert.equal(terminal.releaseCount, 1)
 })
 

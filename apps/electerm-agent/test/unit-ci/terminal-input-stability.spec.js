@@ -2242,6 +2242,51 @@ test('CommandTrackerAddon exposes no command when its input anchor cannot be pro
   assert.equal(tracker.hasReliableCommandInput(), false)
 })
 
+test('CommandTrackerAddon reanchors only a proven empty input across synchronous resize', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 40, cursorX: 2 })
+  const tracker = new CommandTrackerAddon()
+  tracker.activate(harness.terminal)
+  beginTrackerSession(tracker)
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
+  assert.equal(tracker.getCurrentCommandInput(), '')
+
+  const token = tracker.captureEmptyInputResizeToken()
+  harness.setLines([
+    { text: '$ long prompt', isWrapped: false },
+    { text: '> ', isWrapped: true }
+  ])
+  harness.setCursor(1, 2)
+  assert.notEqual(tracker.getCurrentCommandInput(), '')
+
+  assert.equal(tracker.restoreEmptyInputAnchorAfterResize(token), true)
+  assert.equal(tracker.getCurrentCommandInput(), '')
+})
+
+test('CommandTrackerAddon never reanchors nonempty or phase-changed input after resize', async () => {
+  const { CommandTrackerAddon } = await importCommandTracker()
+  const harness = createTrackerTerminal({ cols: 40, cursorX: 2 })
+  const tracker = new CommandTrackerAddon()
+  tracker.activate(harness.terminal)
+  beginTrackerSession(tracker)
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
+
+  harness.setLines([{ text: '$ typed command', isWrapped: false }])
+  harness.setCursor(0, '$ typed command'.length)
+  assert.equal(tracker.captureEmptyInputResizeToken(), null)
+
+  harness.setLines([{ text: '$ ', isWrapped: false }])
+  harness.setCursor(0, 2)
+  harness.osc(lifecycleOsc('A'))
+  harness.osc(lifecycleOsc('B'))
+  const token = tracker.captureEmptyInputResizeToken()
+  harness.osc(lifecycleOsc('E', 'printf running'))
+  assert.equal(tracker.restoreEmptyInputAnchorAfterResize(token), false)
+  assert.equal(tracker.isCommandInputActive(), false)
+})
+
 test('OSC phases allow safety only while the shell accepts command input', async () => {
   const { CommandTrackerAddon } = await importCommandTracker()
   const harness = createTrackerTerminal({ cursorX: 2 })
@@ -3431,11 +3476,39 @@ test('terminal leaves manual Enter unwired while retaining programmatic safety t
 
 test('terminal exposes the unified command safety entrypoint without replacing manual input', () => {
   const source = readClientFile('components/terminal/terminal.jsx')
+  const sessionSource = readClientFile('components/session/session.jsx')
 
   assert.match(source, /createSafetyCommandEntrypoint/)
   assert.match(source, /ensureTrackerReady:\s*this\.ensureCommandSafetyTrackerReady/)
   assert.match(source, /ensureCommandSafetyTrackerReady\s*=/)
   assert.match(source, /injectShellIntegration\(\{\s*forceForSafety:\s*true\s*\}\)/)
+  assert.match(source, /captureEmptyInputResizeToken/)
+  assert.match(source, /restoreEmptyInputAnchorAfterResize/)
+  const resizeSource = source.slice(
+    source.indexOf('onResize = throttle'),
+    source.indexOf('onerrorSocket =')
+  )
+  assert.match(resizeSource, /this\.props\.pane === paneMap\.terminal/)
+  assert.match(resizeSource, /this\.props\.sshSftpSplitViewActive === true/)
+  assert.doesNotMatch(resizeSource, /this\.props\.tab\?\.sshSftpSplitView === true/)
+  assert.match(
+    sessionSource,
+    /const sshSftpSplitViewActive =\s*sshSftpSplitView && this\.canSplitView\(\)/
+  )
+  assert.match(sessionSource, /sshSftpSplitViewActive,/)
+  assert.match(resizeSource, /isPasswordPromptDetected/)
+  assert.match(resizeSource, /passwordPromptBeforeResize[^?]*\?\s*null\s*:/s)
+  assert.match(resizeSource, /passwordPromptAfterResize[^?]*\?\s*null\s*:/s)
+  const commandTrackerReadinessSource = source.slice(
+    source.indexOf('ensureCommandSafetyTrackerReady ='),
+    source.indexOf('canRearmCurrentShellIntegration =')
+  )
+  const operationsTrackerReadinessSource = source.slice(
+    source.indexOf('ensureOperationsPtyTrackerReady ='),
+    source.indexOf('getTerminalSafetyEndpoint =')
+  )
+  assert.doesNotMatch(commandTrackerReadinessSource, /shellInjected\s*=\s*false/)
+  assert.doesNotMatch(operationsTrackerReadinessSource, /shellInjected\s*=\s*false/)
   assert.match(source, /Shell Integration.*就绪|可靠.*跟踪/)
   assert.match(source, /runSafetyCommand = \(command, options = \{\}\)/)
   assert.match(source, /expectExternalSubmission/)
