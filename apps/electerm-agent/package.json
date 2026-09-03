@@ -24,6 +24,7 @@
     "fix": "standard --fix",
     "test": "npm run test1 && npm run test2",
     "test-unit-ci": "node --test test/unit-ci/*.spec.js",
+    "test-linux-privileged-file-ci": "node build/bin/run-linux-privileged-file-tests.js",
     "test-package-smoke": "node.exe build/bin/package-smoke-test.js",
     "smoke:ssh-sftp": "node build/bin/smoke-ssh-sftp.js",
     "smoke:safety": "node build/bin/smoke-safety-transactions.js",
