@@ -14,9 +14,9 @@ function makeControlledSnapshot () {
     offenderCount: 3,
     topbarOffenderCount: 3,
     offenders: [{
-      tag: 'div',
-      className: 'aigshell-topbar-action',
-      right: 427,
+      tag: 'SPAN',
+      className: 'aigshell-topbar-action-label',
+      right: 396,
       insideTopbarActionRail: true
     }],
     topbarActionRail: {
