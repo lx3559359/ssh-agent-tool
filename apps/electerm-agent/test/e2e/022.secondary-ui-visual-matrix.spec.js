@@ -990,18 +990,21 @@ async function makePrimaryActionsReachable (page, selector) {
 
 async function inspectDocumentBaseline (page) {
   return page.evaluate((tolerance) => {
+    const isVisible = (element, rect, style) => {
+      return rect.width > 0 && rect.height > 0 &&
+        rect.bottom > 0 && rect.top < window.innerHeight &&
+        style.display !== 'none' && style.visibility !== 'hidden' &&
+        element.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+    }
     const serializeElement = element => {
       if (!element) {
         return { found: false, visible: false, rect: null }
       }
       const rect = element.getBoundingClientRect()
       const style = window.getComputedStyle(element)
-      const visible = rect.width > 0 && rect.height > 0 &&
-        style.display !== 'none' && style.visibility !== 'hidden' &&
-        element.checkVisibility({ opacityProperty: true, visibilityProperty: true })
       return {
         found: true,
-        visible,
+        visible: isVisible(element, rect, style),
         rect: {
           left: Number(rect.left.toFixed(3)),
           top: Number(rect.top.toFixed(3)),
@@ -1013,6 +1016,25 @@ async function inspectDocumentBaseline (page) {
         scrollWidth: element.scrollWidth
       }
     }
+    const visibleTopbarActionRails = [...document.querySelectorAll('.aigshell-topbar-actions')]
+      .filter(element => {
+        const rect = element.getBoundingClientRect()
+        return isVisible(element, rect, window.getComputedStyle(element))
+      })
+    const topbarActionRail = visibleTopbarActionRails[0] || null
+    const serializeOffender = (element, rect) => ({
+      tag: element.tagName,
+      id: element.id,
+      className: String(element.className).slice(0, 160),
+      rect: {
+        left: Number(rect.left.toFixed(3)),
+        top: Number(rect.top.toFixed(3)),
+        right: Number(rect.right.toFixed(3)),
+        bottom: Number(rect.bottom.toFixed(3))
+      },
+      right: Number(rect.right.toFixed(3)),
+      insideTopbarActionRail: element.closest('.aigshell-topbar-actions') === topbarActionRail
+    })
     const nodes = [
       ['documentElement', document.documentElement],
       ['body', document.body],
@@ -1028,28 +1050,22 @@ async function inspectDocumentBaseline (page) {
         const rect = element.getBoundingClientRect()
         const style = window.getComputedStyle(element)
         if (
-          rect.width <= 0 || rect.height <= 0 ||
           rect.right <= window.innerWidth + tolerance ||
-          rect.bottom <= 0 || rect.top >= window.innerHeight ||
-          style.display === 'none' || style.visibility === 'hidden' ||
-          !element.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+          !isVisible(element, rect, style)
         ) {
           return []
         }
-        return [{
-          tag: element.tagName,
-          className: String(element.className).slice(0, 160),
-          right: Number(rect.right.toFixed(3)),
-          insideTopbarActionRail: Boolean(element.closest('.aigshell-topbar-actions'))
-        }]
+        return [serializeOffender(element, rect)]
       })
     return {
       viewport: { width: window.innerWidth, height: window.innerHeight },
       nodes,
       offenderCount: allOffenders.length,
       topbarOffenderCount: allOffenders.filter(offender => offender.insideTopbarActionRail).length,
+      visibleTopbarActionRailCount: visibleTopbarActionRails.length,
       offenders: allOffenders.slice(0, 10),
-      topbarActionRail: serializeElement(document.querySelector('.aigshell-topbar-actions')),
+      offRailOffenders: allOffenders.filter(offender => !offender.insideTopbarActionRail).slice(0, 10),
+      topbarActionRail: serializeElement(topbarActionRail),
       windowControls: serializeElement(document.querySelector('.window-controls'))
     }
   }, overflowTolerance)

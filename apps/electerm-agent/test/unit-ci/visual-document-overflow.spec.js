@@ -13,6 +13,7 @@ function makeControlledSnapshot () {
     ],
     offenderCount: 3,
     topbarOffenderCount: 3,
+    visibleTopbarActionRailCount: 1,
     offenders: [{
       tag: 'SPAN',
       className: 'aigshell-topbar-action-label',
@@ -65,6 +66,7 @@ test('controlled topbar overflow passes all safety checks', () => {
   assert.deepEqual(result.overflowingNodes.map(node => node.name), ['documentElement', 'body', 'root'])
   assert.deepEqual(result.checks, {
     offendersOnlyInRail: true,
+    singleVisibleRail: true,
     railReady: true,
     railWithinViewport: true,
     railActuallyScrolls: true,
@@ -77,6 +79,17 @@ test('rejects overflow with an off-rail offender', () => {
   snapshot.topbarOffenderCount = 2
   assert.equal(classifyDocumentBaseline(snapshot).reason, 'document-overflow')
   assert.equal(classifyDocumentBaseline(snapshot).ok, false)
+})
+
+test('rejects overflow when more than one topbar action rail is visible', () => {
+  const snapshot = makeControlledSnapshot()
+  snapshot.visibleTopbarActionRailCount = 2
+
+  const result = classifyDocumentBaseline(snapshot)
+
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'document-overflow')
+  assert.equal(result.checks.singleVisibleRail, false)
 })
 
 test('rejects a rail extending beyond the viewport', () => {

@@ -21,6 +21,7 @@ function classifyDocumentBaseline (snapshot, tolerance = 1) {
   const checks = {
     offendersOnlyInRail: snapshot.offenderCount > 0 &&
       snapshot.offenderCount === snapshot.topbarOffenderCount,
+    singleVisibleRail: snapshot.visibleTopbarActionRailCount === 1,
     railReady,
     railWithinViewport: railReady &&
       rail.rect.left >= -tolerance &&
