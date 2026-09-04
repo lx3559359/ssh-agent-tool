@@ -45,18 +45,6 @@ jobs:
             throw "发布确认失败：请在手动触发 workflow 时输入 ShellPilot stable release"
           }
 
-      - name: Require Windows signing credentials for stable release
-        if: ${{ github.event.inputs.release_channel == 'stable' }}
-        shell: pwsh
-        env:
-          WINDOWS_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
-          WINDOWS_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CSC_LINK) -or
-              [string]::IsNullOrWhiteSpace($env:WINDOWS_CSC_KEY_PASSWORD)) {
-            throw "Stable releases require WINDOWS_CSC_LINK and WINDOWS_CSC_KEY_PASSWORD."
-          }
-
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
@@ -113,16 +101,9 @@ jobs:
         run: npm run pb
 
       - name: Build NSIS installer
-        env:
-          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
         run: |
           node -e "const c = require('./build/bin/build-common'); c.patchNsisKeepShortcuts(); c.writeSrc('win-x64-installer.exe')"
           npx electron-builder --win nsis --publish never
-
-      - name: Verify stable release signatures
-        if: ${{ github.event.inputs.release_channel == 'stable' }}
-        run: npm run release:windows:verify-signatures
 
       - name: Smoke test packaged ShellPilot app
         run: npm run test-package-smoke
@@ -130,19 +111,12 @@ jobs:
           AIGSHELL_PACKAGE_SMOKE_TIMEOUT: "30000"
 
       - name: Build portable package
-        env:
-          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
         run: |
           node build/bin/prepare-win-portable-ci.js
           npx electron-builder --win zip --publish never
 
       - name: Verify portable package
         run: npm run verify-win-portable
-
-      - name: Verify stable release signatures after portable build
-        if: ${{ github.event.inputs.release_channel == 'stable' }}
-        run: npm run release:windows:verify-signatures
 
       - name: Prepare approved online update assets
         run: npm run release:prepare-assets

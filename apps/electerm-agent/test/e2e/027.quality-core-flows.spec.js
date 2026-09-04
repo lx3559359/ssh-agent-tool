@@ -180,6 +180,36 @@ async function waitForSftpSettled (page) {
   }
 }
 
+async function refreshRemoteUntilVisible (page, row) {
+  let lastSnapshot
+  try {
+    await expect.poll(async () => {
+      let refreshError = ''
+      try {
+        await page.evaluate(async () => {
+          await window.refs.get('sftp-' + window.store.activeTabId).remoteList(
+            false,
+            undefined,
+            undefined,
+            { rethrow: true }
+          )
+        })
+      } catch (error) {
+        refreshError = error?.message || String(error)
+        if (!/AbortError: 远程文件会话已变化/.test(refreshError)) throw error
+      }
+      lastSnapshot = {
+        refreshError,
+        visible: await row.isVisible()
+      }
+      return lastSnapshot.visible
+    }, { timeout: 30000 }).toBe(true)
+  } catch (error) {
+    error.message += `\nRemote refresh snapshot: ${JSON.stringify(lastSnapshot)}`
+    throw error
+  }
+}
+
 async function expectTerminalTrackerReadyAfterHiddenResize (page, expectedSize) {
   await page.evaluate(() => {
     const terminal = window.refs.get('term-' + window.store.activeTabId)
@@ -712,18 +742,10 @@ test('isolated client completes SSH, SFTP, AI, update and rollback quality flows
       lastSafeDeleteName = safeDeleteName
       const safeDeletePath = fixture.resolve(`/${safeDeleteName}`)
       await fs.promises.writeFile(safeDeletePath, safeDeleteBody)
-      await page.evaluate(async () => {
-        await window.refs.get('sftp-' + window.store.activeTabId).remoteList(
-          false,
-          undefined,
-          undefined,
-          { rethrow: true }
-        )
-      })
       const safeDeleteRow = page.locator(
         `.session-current .file-list.remote .sftp-item[title="${safeDeleteName}"]`
       )
-      await expect(safeDeleteRow).toBeVisible({ timeout: 20000 })
+      await refreshRemoteUntilVisible(page, safeDeleteRow)
       await safeDeleteRow.click({ button: 'right' })
       const safeDeleteMenu = page.locator('.ant-dropdown:visible').last()
       await expect(safeDeleteMenu).toBeVisible()
