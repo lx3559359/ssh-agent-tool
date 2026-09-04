@@ -3741,7 +3741,12 @@ test('tool center and batch editor stay reachable in compact real app windows', 
               await pin.click()
               await expect.poll(() => page.evaluate(() => window.store.rightPanelPinned)).toBe(true)
               await close.click()
-              await expect(page.locator('.right-side-panel')).toHaveCount(0)
+              await expect.poll(() => page.evaluate(() => window.store.rightPanelVisible)).toBe(false)
+              const closedPanel = page.locator('.right-side-panel')
+              await expect(closedPanel).toHaveCount(1)
+              await expect(closedPanel).toBeHidden()
+              await expect(closedPanel).toHaveAttribute('aria-hidden', 'true')
+              await expect(closedPanel).toHaveAttribute('inert', '')
               await page.evaluate(() => {
                 window.store.rightPanelVisible = true
                 window.store.rightPanelAutoExpanded = true
