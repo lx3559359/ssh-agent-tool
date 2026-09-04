@@ -8,9 +8,8 @@ function rectanglesOverlap (first, second, tolerance) {
 }
 
 function classifyDocumentBaseline (snapshot, tolerance = 1) {
-  const overflowingNodes = Object.entries(snapshot.nodes)
-    .filter(([, node]) => node.scrollWidth > node.clientWidth)
-    .map(([name]) => name)
+  const overflowingNodes = snapshot.nodes
+    .filter(node => node.scrollWidth > node.clientWidth)
 
   if (overflowingNodes.length === 0) {
     return { ok: true, reason: 'contained', overflowingNodes: [], checks: {} }
@@ -26,7 +25,7 @@ function classifyDocumentBaseline (snapshot, tolerance = 1) {
     railWithinViewport: railReady &&
       rail.rect.left >= -tolerance &&
       rail.rect.right <= snapshot.viewport.width + tolerance,
-    railActuallyScrolls: Boolean(rail &&
+    railActuallyScrolls: railReady && Boolean(rail &&
       (rail.overflowX === 'auto' || rail.overflowX === 'scroll') &&
       rail.scrollWidth > rail.clientWidth),
     windowControlsClear: railReady &&

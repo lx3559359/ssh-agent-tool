@@ -6,14 +6,19 @@ const { classifyDocumentBaseline } = require('../e2e/common/document-overflow')
 function makeControlledSnapshot () {
   return {
     viewport: { width: 337, height: 228 },
-    nodes: {
-      documentElement: { scrollWidth: 430, clientWidth: 337 },
-      body: { scrollWidth: 430, clientWidth: 337 },
-      root: { scrollWidth: 430, clientWidth: 337 }
-    },
+    nodes: [
+      { name: 'documentElement', found: true, scrollWidth: 430, clientWidth: 337 },
+      { name: 'body', found: true, scrollWidth: 430, clientWidth: 337 },
+      { name: 'root', found: true, scrollWidth: 430, clientWidth: 337 }
+    ],
     offenderCount: 3,
     topbarOffenderCount: 3,
-    offenders: [{ insideTopbarActionRail: true }],
+    offenders: [{
+      tag: 'div',
+      className: 'aigshell-topbar-action',
+      right: 427,
+      insideTopbarActionRail: true
+    }],
     topbarActionRail: {
       found: true,
       visible: true,
@@ -32,7 +37,7 @@ function makeControlledSnapshot () {
 
 test('contained documents return the exact contained result', () => {
   const snapshot = makeControlledSnapshot()
-  for (const node of Object.values(snapshot.nodes)) node.scrollWidth = node.clientWidth
+  for (const node of snapshot.nodes) node.scrollWidth = node.clientWidth
 
   assert.deepEqual(classifyDocumentBaseline(snapshot), {
     ok: true,
@@ -47,7 +52,7 @@ test('controlled topbar overflow passes all safety checks', () => {
 
   assert.equal(result.ok, true)
   assert.equal(result.reason, 'controlled-topbar-scroll')
-  assert.deepEqual(result.overflowingNodes, ['documentElement', 'body', 'root'])
+  assert.deepEqual(result.overflowingNodes.map(node => node.name), ['documentElement', 'body', 'root'])
   assert.deepEqual(result.checks, {
     offendersOnlyInRail: true,
     railReady: true,
@@ -76,6 +81,10 @@ test('rejects a non-scrollable rail', () => {
   snapshot.topbarActionRail.overflowX = 'hidden'
   assert.equal(classifyDocumentBaseline(snapshot).reason, 'document-overflow')
   assert.equal(classifyDocumentBaseline(snapshot).ok, false)
+
+  const invisibleRail = makeControlledSnapshot()
+  invisibleRail.topbarActionRail.visible = false
+  assert.equal(classifyDocumentBaseline(invisibleRail).checks.railActuallyScrolls, false)
 })
 
 test('rejects a rail without actual scrollable content', () => {
