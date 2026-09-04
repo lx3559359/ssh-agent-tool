@@ -18,6 +18,16 @@ function makeControlledSnapshot () {
       className: 'aigshell-topbar-action-label',
       right: 396,
       insideTopbarActionRail: true
+    }, {
+      tag: 'SPAN',
+      className: 'aigshell-topbar-action-label',
+      right: 374,
+      insideTopbarActionRail: true
+    }, {
+      tag: 'SPAN',
+      className: 'aigshell-topbar-action-label',
+      right: 352,
+      insideTopbarActionRail: true
     }],
     topbarActionRail: {
       found: true,
@@ -84,7 +94,21 @@ test('rejects a non-scrollable rail', () => {
 
   const invisibleRail = makeControlledSnapshot()
   invisibleRail.topbarActionRail.visible = false
-  assert.equal(classifyDocumentBaseline(invisibleRail).checks.railActuallyScrolls, false)
+  const invisibleResult = classifyDocumentBaseline(invisibleRail)
+  assert.equal(invisibleResult.checks.railActuallyScrolls, false)
+  assert.deepEqual(
+    { ok: invisibleResult.ok, reason: invisibleResult.reason },
+    { ok: false, reason: 'document-overflow' }
+  )
+
+  const absentRail = makeControlledSnapshot()
+  delete absentRail.topbarActionRail
+  const absentResult = classifyDocumentBaseline(absentRail)
+  assert.equal(absentResult.checks.railActuallyScrolls, false)
+  assert.deepEqual(
+    { ok: absentResult.ok, reason: absentResult.reason },
+    { ok: false, reason: 'document-overflow' }
+  )
 })
 
 test('rejects a rail without actual scrollable content', () => {
@@ -99,4 +123,16 @@ test('rejects rail overlapping window controls', () => {
   snapshot.windowControls.rect.left = 190
   assert.equal(classifyDocumentBaseline(snapshot).reason, 'document-overflow')
   assert.equal(classifyDocumentBaseline(snapshot).ok, false)
+
+  const verticallySeparated = makeControlledSnapshot()
+  verticallySeparated.windowControls.rect = { left: 190, top: 50, right: 337, bottom: 80 }
+  assert.equal(classifyDocumentBaseline(verticallySeparated).reason, 'controlled-topbar-scroll')
+
+  const exactBoundary = makeControlledSnapshot()
+  exactBoundary.windowControls.rect.left = 192
+  assert.equal(classifyDocumentBaseline(exactBoundary).reason, 'controlled-topbar-scroll')
+
+  const fractionalCrossing = makeControlledSnapshot()
+  fractionalCrossing.windowControls.rect.left = 191.5
+  assert.equal(classifyDocumentBaseline(fractionalCrossing).reason, 'document-overflow')
 })
