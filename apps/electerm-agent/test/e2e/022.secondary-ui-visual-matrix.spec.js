@@ -3,6 +3,7 @@ const { tmpdir } = require('os')
 const { resolve, sep } = require('path')
 const { _electron: electron, test, expect } = require('@playwright/test')
 const appOptions = require('./common/app-options')
+const { classifyDocumentBaseline } = require('./common/document-overflow')
 const {
   acquireIsolatedApp,
   cleanupPreservingPrimaryError
@@ -989,6 +990,29 @@ async function makePrimaryActionsReachable (page, selector) {
 
 async function inspectDocumentBaseline (page) {
   return page.evaluate((tolerance) => {
+    const serializeElement = element => {
+      if (!element) {
+        return { found: false, visible: false, rect: null }
+      }
+      const rect = element.getBoundingClientRect()
+      const style = window.getComputedStyle(element)
+      const visible = rect.width > 0 && rect.height > 0 &&
+        style.display !== 'none' && style.visibility !== 'hidden' &&
+        element.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+      return {
+        found: true,
+        visible,
+        rect: {
+          left: Number(rect.left.toFixed(3)),
+          top: Number(rect.top.toFixed(3)),
+          right: Number(rect.right.toFixed(3)),
+          bottom: Number(rect.bottom.toFixed(3))
+        },
+        overflowX: style.overflowX,
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth
+      }
+    }
     const nodes = [
       ['documentElement', document.documentElement],
       ['body', document.body],
@@ -999,7 +1023,7 @@ async function inspectDocumentBaseline (page) {
       scrollWidth: element?.scrollWidth || 0,
       clientWidth: element?.clientWidth || 0
     }))
-    const offenders = [...document.body.querySelectorAll('*')]
+    const allOffenders = [...document.body.querySelectorAll('*')]
       .flatMap(element => {
         const rect = element.getBoundingClientRect()
         const style = window.getComputedStyle(element)
@@ -1007,23 +1031,33 @@ async function inspectDocumentBaseline (page) {
           rect.width <= 0 || rect.height <= 0 ||
           rect.right <= window.innerWidth + tolerance ||
           rect.bottom <= 0 || rect.top >= window.innerHeight ||
-          style.display === 'none' || style.visibility === 'hidden'
+          style.display === 'none' || style.visibility === 'hidden' ||
+          !element.checkVisibility({ opacityProperty: true, visibilityProperty: true })
         ) {
           return []
         }
         return [{
           tag: element.tagName,
           className: String(element.className).slice(0, 160),
-          right: Number(rect.right.toFixed(3))
+          right: Number(rect.right.toFixed(3)),
+          insideTopbarActionRail: Boolean(element.closest('.aigshell-topbar-actions'))
         }]
       })
-      .slice(0, 10)
     return {
       viewport: { width: window.innerWidth, height: window.innerHeight },
       nodes,
-      offenders
+      offenderCount: allOffenders.length,
+      topbarOffenderCount: allOffenders.filter(offender => offender.insideTopbarActionRail).length,
+      offenders: allOffenders.slice(0, 10),
+      topbarActionRail: serializeElement(document.querySelector('.aigshell-topbar-actions')),
+      windowControls: serializeElement(document.querySelector('.window-controls'))
     }
   }, overflowTolerance)
+}
+
+function assertDocumentBaseline (documentBaseline, context) {
+  const classification = classifyDocumentBaseline(documentBaseline, overflowTolerance)
+  expect(classification.ok, JSON.stringify({ context, documentBaseline, classification })).toBe(true)
 }
 
 async function inspectSurface (page, selector, menu, documentBaseline) {
@@ -2092,10 +2126,7 @@ async function runSurfaceCase (page, testInfo, failures, context, surface, stats
     await resetSurface(page, context.language)
     if (surface.prepare) await surface.prepare(page)
     const documentBaseline = await inspectDocumentBaseline(page)
-    for (const node of documentBaseline.nodes) {
-      expect(node.scrollWidth, JSON.stringify({ ...context, surface: surface.name, documentBaseline }))
-        .toBeLessThanOrEqual(node.clientWidth)
-    }
+    assertDocumentBaseline(documentBaseline, { ...context, surface: surface.name })
     console.log(`SECONDARY_MAIN_CHROME_BASELINE=${JSON.stringify({ ...context, surface: surface.name, ...documentBaseline })}`)
     await surface.open(page)
     if (surface.name === 'ai-config') {
@@ -3666,10 +3697,7 @@ test('tool center and batch editor stay reachable in compact real app windows', 
       await resetSurface(page, 'en_us')
       if (size.zoom >= 1.75) {
         const documentWidths = await inspectDocumentBaseline(page)
-        for (const node of documentWidths.nodes) {
-          expect(node.scrollWidth, JSON.stringify({ size, documentWidths }))
-            .toBeLessThanOrEqual(node.clientWidth)
-        }
+        assertDocumentBaseline(documentWidths, { size })
         const originalGeometryState = await captureCompactShellState(page)
         try {
           let splitMetrics
