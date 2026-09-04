@@ -361,6 +361,15 @@ async function openSettings (page) {
   await page.locator('.sp-settings-form').waitFor({ state: 'visible' })
 }
 
+async function collapseSettingsSearch (page) {
+  const search = page.locator('.setting-header-search')
+  const searchInput = search.locator('input')
+  await searchInput.focus()
+  await searchInput.press('Escape')
+  await expect(search).not.toHaveClass(/\bis-expanded\b/)
+  await expect(searchInput).toHaveValue('')
+}
+
 async function inspectSettingsControlStates (page) {
   const form = page.locator('.sp-settings-form')
   let result
@@ -3183,6 +3192,7 @@ test('settings search supports visible results, keyboard navigation, preview lan
     await searchInput.press('Enter')
     expect(await page.evaluate(() => window.store.settingTab)).toBe('terminalThemes')
 
+    await collapseSettingsSearch(page)
     await resetSurface(page, 'en_us')
     await setWindowCase(electronApp, page, { width: 590, height: 400 }, 1)
     await openSettings(page)
@@ -4122,6 +4132,8 @@ test('UI font preview applies cancels persists and leaves terminal unchanged', a
       window.store.previewLanguage = 'en_us'
     })
     await openSettings(page)
+    await page.locator('.sp-setting-section-interface').scrollIntoViewIfNeeded()
+    await expect(page.locator('.sp-ui-font-picker')).toBeVisible()
 
     const options = page.locator('.sp-ui-font-option')
     await expect(options).toHaveCount(20)
@@ -4229,6 +4241,8 @@ test('UI font preview applies cancels persists and leaves terminal unchanged', a
       window.store.previewLanguage = 'en_us'
     })
     await openSettings(page)
+    await page.locator('.sp-setting-section-interface').scrollIntoViewIfNeeded()
+    await expect(page.locator('.sp-ui-font-picker')).toBeVisible()
     await page.locator('[data-font-preset-id="arial"]').click()
     expect(await page.evaluate(() => window.store.previewUiFontPresetId)).toBe('arial')
     await page.locator('.close-setting-wrap').click()

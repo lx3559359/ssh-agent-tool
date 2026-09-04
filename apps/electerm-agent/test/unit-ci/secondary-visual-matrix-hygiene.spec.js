@@ -157,3 +157,57 @@ test('the complete visual matrix runs in a fresh Playwright worker pool', () => 
     /test\('real app covers the secondary UI visual acceptance matrix'/
   )
 })
+
+test('compact settings search clears expanded state before surface reset', () => {
+  const matrix = fs.readFileSync(matrixPath, 'utf8')
+  const helper = matrix.match(
+    /async function collapseSettingsSearch \(page\) \{[\s\S]*?\r?\n}/
+  )
+  const scenario = matrix.match(
+    /test\('settings search supports[\s\S]*?\r?\n}\)/
+  )
+
+  assert.ok(helper)
+  assert.ok(scenario)
+  assert.match(helper[0], /await searchInput\.focus\(\)/)
+  assert.match(helper[0], /await searchInput\.press\('Escape'\)/)
+  assert.match(helper[0], /not\.toHaveClass\(\/\\bis-expanded\\b\/\)/)
+  assert.match(helper[0], /toHaveValue\(''\)/)
+
+  const collapseIndex = scenario[0].indexOf('await collapseSettingsSearch(page)')
+  const resetIndex = scenario[0].indexOf(
+    "await resetSurface(page, 'en_us')",
+    collapseIndex
+  )
+  const compactIndex = scenario[0].indexOf(
+    'await setWindowCase(electronApp, page, { width: 590, height: 400 }, 1)',
+    resetIndex
+  )
+  assert.ok(collapseIndex >= 0)
+  assert.ok(resetIndex > collapseIndex)
+  assert.ok(compactIndex > resetIndex)
+})
+
+test('UI font lifecycle scrolls the deferred interface section before option checks', () => {
+  const matrix = fs.readFileSync(matrixPath, 'utf8')
+  const scenario = matrix.match(
+    /test\('UI font preview applies[\s\S]*?\r?\n}\)/
+  )
+
+  assert.ok(scenario)
+  const openIndex = scenario[0].indexOf('await openSettings(page)')
+  const scrollIndex = scenario[0].indexOf(
+    "await page.locator('.sp-setting-section-interface').scrollIntoViewIfNeeded()"
+  )
+  const visibleIndex = scenario[0].indexOf(
+    "await expect(page.locator('.sp-ui-font-picker')).toBeVisible()"
+  )
+  const countIndex = scenario[0].indexOf('await expect(options).toHaveCount(20)')
+  const setup = scenario[0].slice(openIndex, countIndex)
+
+  assert.ok(openIndex >= 0)
+  assert.ok(scrollIndex > openIndex)
+  assert.ok(visibleIndex > scrollIndex)
+  assert.ok(countIndex > visibleIndex)
+  assert.doesNotMatch(setup, /waitForTimeout/)
+})
