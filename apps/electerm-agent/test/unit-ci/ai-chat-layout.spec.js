@@ -77,7 +77,10 @@ test('loaded AI surfaces stay mounted while the right panel is hidden or switche
   assert.match(panel, /right-side-panel-hidden/)
   assert.match(panel, /inert: !rightPanelVisible/)
   assert.doesNotMatch(panel, /if \(!rightPanelVisible\) \{\s*return null\s*\}/)
-  assert.match(panelStyle, /\.right-side-panel-hidden\s+visibility hidden\s+pointer-events none/)
+  assert.match(
+    panelStyle,
+    /\.right-side-panel-hidden\s+visibility hidden\s+pointer-events none\s+overflow hidden/
+  )
   assert.doesNotMatch(panelStyle, /\.right-side-panel-hidden\s+display none/)
   assert.match(panelStyle, /\.right-side-panel-content[\s\S]*?position static/)
   assert.match(panelStyle, /\.right-side-panel-content-stacked[\s\S]*?display grid/)
